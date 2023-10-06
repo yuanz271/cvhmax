@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
 
-from .cvi import Params, gaussian
+from .cvi import Params, gaussian_estimate
 from .utils import info_repr, real_representation, symm
 from .filtering import bifilter
 
@@ -98,7 +98,7 @@ class CVHM:
             #       m_step()
             #   h_step()
 
-            C, d, R = gaussian(y, m, V)  # m_step
+            C, d, R = gaussian_estimate(y, m, V)  # m_step
             
 
         self.params.C = C

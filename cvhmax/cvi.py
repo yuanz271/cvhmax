@@ -25,13 +25,13 @@ class CVI:
         pass
 
 
-def gaussian(y, m, V):
+def gaussian_estimate(y, m, V):
     """
     OLS
     w = (z'z)^-1 z'y
     """
-    y = jnp.vstack(y)
-    m = jnp.vstack(m)
+    y = jnp.row_stack(y)
+    m = jnp.row_stack(m)
 
     T, y_dim = y.shape
     _, z_dim = m.shape
@@ -72,7 +72,7 @@ class Gaussian(CVI):
         return info_repr(y, H, d, R)
     
     def fit(self, y, m, P):
-        C, d, R = gaussian(y, m, P)
+        C, d, R = gaussian_estimate(y, m, P)
         self.params.C = C
         self.params.d = d
         self.params.R = R
