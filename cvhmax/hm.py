@@ -86,7 +86,7 @@ class HidaMatern:
     rho: float = 1.0
     omega: float = 0.0
     order: int = 0
-    s: float = 1.0
+    s: float = 1e-5
 
     def cov(self, tau=0.0):
         raise NotImplementedError
