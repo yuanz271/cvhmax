@@ -74,7 +74,7 @@ class CVHM:
             Q0 = self.Q0()
             
             Pf = jnp.linalg.inv(Qf)
-            Pb = jnp.linalg.inv(Pf)
+            Pb = jnp.linalg.inv(Qb)
 
             H = C @ M  # effective emission
             
