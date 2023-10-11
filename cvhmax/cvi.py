@@ -25,7 +25,7 @@ class CVI:
         pass
 
 
-def gaussian_estimate(y, m, V):
+def gaussian_estimate(y, m, V, lam=0.1):
     """
     OLS
     w = (z'z)^-1 z'y
@@ -42,7 +42,8 @@ def gaussian_estimate(y, m, V):
 
     zy = m1.T @ y  # (z + 1, t) (t, y) -> (z + 1, y)
     zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)
-    w = jnp.linalg.solve(zz, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
+    eye = jnp.eye(zz.shape[0])
+    w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
     
     r = y - m1 @ w  # (t, y)
     R = r.T @ r / T  # (y, y)
