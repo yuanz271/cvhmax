@@ -4,6 +4,7 @@ from typing import Any, Callable, List
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
+from jaxtyping import Float, Array
 
 from .cvi import Params, gaussian_estimate
 from .utils import info_repr, real_representation, symm
@@ -20,7 +21,7 @@ class CVHM:
     # nat_step: Callable  # natural param
     # m_step: Callable  # M step
     max_iter: int = field(default=10)
-    components_: List[Any] = field(init=False)
+    components_: tuple[List[Float[Array, " time latent"]], List[Float[Array, " time latent latent"]]] = field(init=False)
 
     def __post_init__(self):
         # check
@@ -55,7 +56,7 @@ class CVHM:
 
         return M
 
-    def fit(self, y, max_em_iter=10):
+    def fit(self, y: List[Float[Array, " time obs"]], max_em_iter=10):
         # check y
         if not isinstance(y, list):
             y = [y]
