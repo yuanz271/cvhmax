@@ -28,7 +28,7 @@ def test_CVHM():
 
     y = x @ C.T + d.T + np.random.randn(T, n_obs) * 2
 
-    model = CVHM(n_factors, dt, kernels, params)
+    model = CVHM(n_factors, dt, kernels, params, max_iter=1)
     Af = model.Af()
     Qf = model.Qf()
     Ab = model.Ab()
@@ -36,7 +36,7 @@ def test_CVHM():
     Q0 = model.Q0()
     M = model.mask()
 
-    result = model.fit(y, max_em_iter=1)
+    result = model.fit(y)
     m, V = result.components_
     m = m[0]
     V = V[0]

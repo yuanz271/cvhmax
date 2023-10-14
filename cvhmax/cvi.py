@@ -25,7 +25,7 @@ class CVI:
         pass
 
 
-def gaussian_estimate(y, m, V, lam=0.1):
+def observation_estimate(y, m, V, lam=0.1):
     """
     OLS
     w = (z'z)^-1 z'y
@@ -73,7 +73,7 @@ class Gaussian(CVI):
         return info_repr(y, H, d, R)
     
     def fit(self, y, m, P):
-        C, d, R = gaussian_estimate(y, m, P)
+        C, d, R = observation_estimate(y, m, P)
         self.params.C = C
         self.params.d = d
         self.params.R = R
