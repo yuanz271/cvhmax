@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern
+from tests.test_hp import sample_matern
 
 
 def test_CVHM():
@@ -12,11 +13,15 @@ def test_CVHM():
     n_obs = 20
     n_factors = 2
     dt = 1.
+    sigma = 1.
+    rho = 50.
     
-    kernels = [HidaMatern(.05, .05, 0., 0) for k in range(n_factors)]
+    kernels = [HidaMatern(sigma, rho, 0., 0) for k in range(n_factors)]
     params = Params()
 
-    x = np.sin(np.arange(2 * T) / 100).reshape(T, -1)
+    x = np.column_stack([sample_matern(T, dt, sigma, rho), sample_matern(T, dt, sigma, rho)])
+
+    # x = sample_matern np.sin(np.arange(2 * T) / 100).reshape(T, -1)
     C = params.C = np.random.randn(n_obs, n_factors)
     d = params.d = np.random.randn(n_obs, 1)
     params.R = np.eye(n_obs) * 2
@@ -40,11 +45,11 @@ def test_CVHM():
     assert V.shape == (T, n_factors, n_factors)
 
     fig, ax = plt.subplots(1, 2)
-    ax[0].plot(m[:, 0], label="Inference")
-    ax[0].plot(x[:, 0], label="Ground truth")
+    ax[0].plot(m[:, 0], label="Inference", alpha=0.5)
+    ax[0].plot(x[:, 0], label="Ground truth", alpha=0.5)
 
-    ax[1].plot(m[:, 1])
-    ax[1].plot(x[:, 1])
+    ax[1].plot(m[:, 1], alpha=0.5)
+    ax[1].plot(x[:, 1], alpha=0.5)
     ax[0].legend()
     fig.savefig('cvhm.pdf')
     plt.close(fig)
