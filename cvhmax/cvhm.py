@@ -1,12 +1,11 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, List
 
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
 from jaxtyping import Float, Array
 
-from .cvi import Params, gaussian_estimate
+from .cvi import Params, observation_estimate
 from .utils import info_repr, real_representation, symm
 from .filtering import bifilter
 
@@ -21,9 +20,7 @@ class CVHM:
     # nat_step: Callable  # natural param
     # m_step: Callable  # M step
     max_iter: int = field(default=10)
-    components_: tuple[
-        List[Float[Array, " time latent"]], List[Float[Array, " time latent latent"]]
-    ] = field(init=False)
+    components_: tuple[list[Float[Array, " time latent"]], list[Float[Array, " time latent latent"]]] = field(init=False)
 
     def __post_init__(self):
         # check
@@ -58,7 +55,7 @@ class CVHM:
 
         return M
 
-    def fit(self, y: List[Float[Array, " time obs"]], max_em_iter=10):
+    def fit(self, y: list[Float[Array, " time obs"]]):
         # check y
         if not isinstance(y, list):
             y = [y]
@@ -68,8 +65,8 @@ class CVHM:
         R = self.params.R
 
         M = self.mask()
-
-        for j in range(max_em_iter):
+        
+        for j in range(self.max_iter):
             Af = self.Af()
             Qf = self.Qf()
             Ab = self.Ab()
@@ -108,7 +105,7 @@ class CVHM:
             #       m_step()
             #   h_step()
 
-            C, d, R = gaussian_estimate(y, m, V)  # m_step
+            C, d, R = observation_estimate(y, m, V)  # m_step
 
         self.params.C = C
         self.params.d = d
@@ -116,16 +113,16 @@ class CVHM:
 
         self.components_ = (m, V)
         return self
-
-    def transform(self, y):
+    
+    def transform(self, y: list[Float[Array, " time obs"]]):
         raise NotImplementedError
-
-    def fit_transform(self, y):
+    
+    def fit_transform(self, y: list[Float[Array, " time obs"]]):
         self.fit(y)
         return self.components_
 
     def get_params(self):
         raise NotImplementedError
 
-    def set_params(self, params):
+    def set_params(self, params: Params):
         raise NotImplementedError
