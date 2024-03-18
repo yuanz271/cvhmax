@@ -1,18 +1,29 @@
 from abc import abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-import jax.numpy as jnp
+from jax import numpy as jnp, random as jrandom
 from jax.scipy.optimize import minimize
+from jaxtyping import Array
 
-from .utils import info_repr
+from .utils import info_repr, norm_loading
 
 
 @dataclass
 class Params:
-    C = None
-    d = None
-    R = None
-    M = None
+    C: Array = field(init=False)
+    d: Array = field(init=False)
+    R: Array = field(init=False)
+    M: Array = field(init=False)
+    
+    def initialize(self, n_obs, n_factors, *, random_state):
+        key = jrandom.PRNGKey(random_state)
+        Ckey, dkey = jrandom.split(key)
+        self.C = jrandom.normal(Ckey, shape=(n_obs, n_factors)) / n_obs
+        self.d = jrandom.normal(dkey, shape=(n_obs, 1))
+        self.R = jnp.eye(n_obs)
+
+    def nC(self) -> Array:
+        return norm_loading(self.C)
 
 
 class CVI:
