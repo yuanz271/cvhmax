@@ -1,7 +1,9 @@
-from typing import Dict, List
+from functools import partial
+from typing import Callable, Dict, List, Optional
 
-import jax.numpy as jnp
-import jax.scipy as jsp
+import jax
+from jax import numpy as jnp, scipy as jsp
+from jaxtyping import Array, Scalar
 
 
 def symm(x):
@@ -12,6 +14,7 @@ def real_representation(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
+@jax.jit
 def info_repr(y, C, d, R):
     T = y.shape[0]
     I = C.T @ jnp.linalg.solve(R, C)
@@ -50,3 +53,20 @@ def latent_mask(latent_spec):
     right = jnp.zeros_like(left)  # the rest SSM dimensions are for the imaginary part.
     M = jnp.column_stack([left, right])
     return M
+
+
+@jax.jit
+def norm_loading(w, axis=0):
+    _norm = partial(
+            _norm_except_axis,
+            norm=partial(jnp.linalg.norm, keepdims=True),
+            axis=axis,
+        )
+    return w / _norm(w)
+
+
+def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: Optional[int]):
+    if axis is None:
+        return norm(v)
+    else:
+        return jax.vmap(norm, in_axes=axis, out_axes=axis)(v)

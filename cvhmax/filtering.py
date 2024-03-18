@@ -82,6 +82,7 @@ def information_filter(
     return z
 
 
+@jax.jit
 def bifilter(i, I, z0, Z0, Af, Pf, Ab, Pb):
     """Bidirectional filtering"""
     # Forward
