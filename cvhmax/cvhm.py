@@ -1,9 +1,11 @@
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
 from jaxtyping import Float, Array
+from tqdm import trange
 
 from .cvi import Params, observation_estimate
 from .utils import info_repr, real_representation, symm
@@ -55,18 +57,21 @@ class CVHM:
 
         return M
 
-    def fit(self, y: list[Float[Array, " time obs"]]):
+    def fit(self, y: list[Float[Array, " time obs"]], *, random_state=None):
         # check y
-        if not isinstance(y, list):
+        if not isinstance(y, Iterable):
             y = [y]
         # self.params.populate(y, self.n_factors)
-        C = self.params.C
+        
+        self.params.initialize(y[0].shape[-1], self.n_components, random_state=random_state)
+
+        C = self.params.nC()
         d = self.params.d
         R = self.params.R
 
         M = self.mask()
         
-        for j in range(self.max_iter):
+        for j in trange(self.max_iter):
             Af = self.Af()
             Qf = self.Qf()
             Ab = self.Ab()
