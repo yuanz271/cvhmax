@@ -30,8 +30,8 @@ def observation_estimate(y, m, V, lam=0.1):
     OLS
     w = (z'z)^-1 z'y
     """
-    y = jnp.row_stack(y)
-    m = jnp.row_stack(m)
+    y = jnp.vstack(y)
+    m = jnp.vstack(m)
 
     T, y_dim = y.shape
     _, z_dim = m.shape
