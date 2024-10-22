@@ -28,13 +28,7 @@ def test_CVHM():
 
     y = x @ C.T + d.T + np.random.randn(T, n_obs) * 2
 
-    model = CVHM(n_factors, dt, kernels, params, max_iter=1)
-    Af = model.Af()
-    Qf = model.Qf()
-    Ab = model.Ab()
-    Qb = model.Qb()
-    Q0 = model.Q0()
-    M = model.mask()
+    model = CVHM(n_factors, dt, kernels, params, max_iter=1, likelihood='Poisson')
 
     result = model.fit(y)
     m, V = result.components_

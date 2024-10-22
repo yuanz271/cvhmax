@@ -10,7 +10,7 @@ def symm(x):
     return .5 * (x + x.T)
 
 
-def real_representation(c):
+def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
