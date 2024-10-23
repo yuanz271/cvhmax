@@ -21,7 +21,7 @@ class Params:
         key = jrandom.key(random_state)
         Ckey, dkey = jrandom.split(key)
         self.C = jrandom.normal(Ckey, shape=(n_obs, n_factors)) / n_obs
-        self.d = jrandom.normal(dkey, shape=(n_obs, 1))
+        self.d = jrandom.normal(dkey, shape=(n_obs,))
         self.R = jnp.eye(n_obs)
 
     def nC(self) -> Array:
@@ -99,14 +99,15 @@ class Gaussian(CVI):
 
 def v2w(v, shape):
     w = v.reshape(shape)
-    return jnp.split(w, [1], axis=1)
+    d, C = jnp.split(w, [1], axis=1)
+    return jnp.squeeze(d), C
 
 
 def poisson_nell(w, shape, y, m, V):
     d, C = v2w(w, shape)
     
     def _nell(y_t, m_t, V_t):
-        eta = C @ m_t @ + d
+        eta = C @ m_t + d
         quad = jnp.einsum("ni,in->n", C, V_t @ C.T)  # (Y, Z) (T, Z, Z) (Z, Y) -> (T, Y, Y)
         lam = jnp.exp(eta + .5 * quad)
         return jnp.sum(lam - eta * y_t, axis=-1)
@@ -124,7 +125,7 @@ def poisson_cvi_stats(z, Z, y, H, d):
     """
     Zcho = cho_factor(Z)
     m = -0.5 * cho_solve(Zcho, z)  # Vj
-    eta = m @ H.mT + d
+    eta = H @ m + d
     quad = jnp.einsum("nl, ln -> n", H, -0.5 * cho_solve(Zcho, H.mT))  # CVC'
     lam = jnp.exp(eta + 0.5 * quad)
     grad_m = (y - lam) @ H
@@ -177,17 +178,21 @@ class Poisson(CVI):
         d = params.d
         M = params.M
         R = params.R
-        selected_m = m @ M.T  # (T, Z) (Z, sZ) -> (T, sZ)
-        selected_V = vmap(lambda v: M @ v @ M.T)(V)  # (T, Z, Z) -> (T, sZ, sZ)
+        
+        y = jnp.concatenate(y, axis=0)
+        m = jnp.concatenate(m, axis=0)
+        V = jnp.concatenate(V, axis=0)
+        # selected_m = m @ M.T  # (T, Z) (Z, sZ) -> (T, sZ)
+        # selected_V = vmap(lambda v: M @ v @ M.T)(V)  # (T, Z, Z) -> (T, sZ, sZ)
 
         w = jnp.column_stack([d, C])
-        shape = w.shape
+        w_shape = w.shape
         w = w.flatten()
 
-        opt = minimize(poisson_nell, w, args=(shape, y, selected_m, selected_V), method="BFGS")
+        opt = minimize(poisson_nell, w, args=(w_shape, y, m, V), method="BFGS")
         w_opt = opt.x
 
-        d, C = v2w(w_opt, shape)
+        d, C = v2w(w_opt, w_shape)
         
         params = Params()
         params.C = C
@@ -197,7 +202,7 @@ class Poisson(CVI):
         return params
     
     @classmethod
-    def update_pseudo(cls, params, z, Z, j, J, y, lr):
+    def update_pseudo(cls, params, y, z, Z, j, J, lr):
         """
         :param params: readout
         :param z: 1st posterior natural param of latent

@@ -21,7 +21,7 @@ def test_poisson_cvi_stats():
     poisson_cvi_stats(j, J, y, C, d)
 
 
-def test_Poisson():
+def test_Poisson(capsys):
     T = 20
     N = 10
     L = 5
@@ -44,3 +44,8 @@ def test_Poisson():
     m = jnp.array(rng.normal(size=(T, L)))
     V = jnp.stack([jnp.eye(L)] * T)
     params = Poisson.update_readout(params, y, m, V)
+    
+    z = jnp.zeros((T, L))
+    Z= jnp.stack([jnp.eye(L)] * T)
+    j, J = Poisson.update_pseudo(params, z, Z, j, J, y, 0.1)
+    chex.assert_shape([j, J], [(T, L), (T, L, L)])

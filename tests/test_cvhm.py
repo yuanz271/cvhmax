@@ -1,13 +1,15 @@
+import pytest
 import numpy as np
 import matplotlib.pyplot as plt
+from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern
-from tests.test_hp import sample_matern
+from cvhmax.hm import sample_matern
 
 
-def test_CVHM():
+def test_CVHM(capsys):
     np.random.seed(1234)
     T = 2000
     n_obs = 20
@@ -23,15 +25,16 @@ def test_CVHM():
 
     # x = sample_matern np.sin(np.arange(2 * T) / 100).reshape(T, -1)
     C = params.C = np.random.randn(n_obs, n_factors)
-    d = params.d = np.random.randn(n_obs, 1)
+    d = params.d = np.random.randn(n_obs) - 2
     params.R = np.eye(n_obs) * 2
 
-    y = x @ C.T + d.T + np.random.randn(T, n_obs) * 2
+    y = np.random.poisson(np.exp(x @ C.T + np.expand_dims(d, 0)))
 
-    model = CVHM(n_factors, dt, kernels, params, max_iter=1, likelihood='Poisson')
-
-    result = model.fit(y)
-    m, V = result.components_
+    model = CVHM(n_factors, dt, kernels, params, max_iter=2, likelihood='Poisson')
+    
+    with capsys.disabled():
+        result = model.fit(y)
+    m, V = result.posterior
     m = m[0]
     V = V[0]
 

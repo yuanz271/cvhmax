@@ -63,7 +63,7 @@ class CVHM:
 
     def fit(self, y: list[Float[Array, " time obs"]], *, random_state=None):
         # check y
-        if not isinstance(y, Iterable):
+        if not isinstance(y, list):
             y = [y]
         # self.params.populate(y, self.n_factors)
         
@@ -87,9 +87,9 @@ class CVHM:
         z0 = jnp.zeros(Af.shape[0])
         Z0 = jnp.linalg.inv(Q0)
 
-        jJ = [self.observation.init_info(self.params, yk, Af, Qf) + (z0, Z0) for yk in y]
+        jJ = [self.observation.init_info(self.params, yk, Af, Qf) for yk in y]
         
-        for it in trange(self.max_iter):
+        for em_it in trange(self.max_iter):
 
             # bidirectional filtering
             # info = [
@@ -97,18 +97,18 @@ class CVHM:
             # ]  # Here's the place that optimize the natural parameters
             # TODO: nat_step for CVI per likelihood
 
-            for cv_iter in range(self.max_iter):
+            for cv_it in range(self.max_iter):
                 zZ = [
-                    bifilter(jk, Jk, z0k, Z0k, Af, Pf, Ab, Pb) for jk, Jk, z0k, Z0k in jJ
+                    bifilter(jk, Jk, z0, Z0, Af, Pf, Ab, Pb) for (jk, Jk) in jJ
                 ]
-                jJ = [self.observation.update_pseudo(params, zk, Zk, jk, Jk, yk, self.lr) + (z0, Z0) for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)]
+                jJ = [self.observation.update_pseudo(params, yk, zk, Zk, jk, Jk, self.lr) for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)]
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
-            m_and_V = [
-                (jnp.linalg.solve(Zk, zk) @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
+            mV = [
+                (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
                 for zk, Zk in zZ
             ]
-            m, V = zip(*m_and_V)  # zip(*iterable) is its own inverse
+            m, V = zip(*mV)  # zip(*iterable) is its own inverse
             
             params = self.observation.update_readout(params, y, m, V)
 

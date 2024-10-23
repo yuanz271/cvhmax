@@ -1,22 +1,13 @@
 from functools import partial
 
 import numpy as np
-from jax.config import config
+from jax import config
 from jax import numpy as jnp
 
 config.update("jax_enable_x64", True)
 
 from cvhmax import hm, hp
-
-
-def sample_matern(n, dt, sigma, rho):
-    t = np.arange(n) * dt
-    D = np.abs(t[None, :] - t[:, None])
-    K = sigma ** 2 * np.exp(- D/rho)
-    L = np.linalg.cholesky(K)
-    z = np.random.randn(n)
-    x = L @ z
-    return x
+from cvhmax.hm import sample_matern
 
 
 def test_spectral_loss():

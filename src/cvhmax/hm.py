@@ -15,6 +15,7 @@ import jax
 from jax import nn
 import jax.numpy as jnp
 import jax.scipy as jsp
+import numpy as np
 
 from cvhmax.utils import gamma
 
@@ -256,3 +257,11 @@ def spectral_density(kernel_spec: Dict, freq):
     return s
 
 
+def sample_matern(n, dt, sigma, rho):
+    t = np.arange(n) * dt
+    D = np.abs(t[None, :] - t[:, None])
+    K = sigma ** 2 * np.exp(- D/rho)
+    L = np.linalg.cholesky(K)
+    z = np.random.randn(n)
+    x = L @ z
+    return x
