@@ -93,7 +93,7 @@ class CVHM:
         Z0 = jnp.linalg.inv(Q0)
         # Af = Af + 1e-3 * jnp.eye(Af.shape[0])
 
-        jJ = [self.observation.init_info(self.params, yk, Af, Qf) for yk in y]
+        jJ = [self.observation.init_info(params, yk, Af, Qf) for yk in y]
         
         for em_it in trange(self.max_iter):
 
@@ -102,24 +102,8 @@ class CVHM:
             #     info_repr(yk, H, d, R) + (z0, Z0) for yk in y
             # ]  # Here's the place that optimize the natural parameters
             # TODO: nat_step for CVI per likelihood
-
-            for cv_it in range(self.cvi_iter):
-                # print(f"\n{cv_it=}")
-                zZ = [
-                    bifilter(jk, Jk, z0, Z0, Af, Pf, Ab, Pb) for (jk, Jk) in jJ
-                ]
-
-                # for z, Z in zZ:
-                #     print("zZ")
-                #     print(jnp.mean(z, axis=0))
-                #     print(jnp.mean(Z, axis=0))
-
-                jJ = [self.observation.update_pseudo(params, yk, zk, Zk, jk, Jk, self.lr) for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)]
-
-                # for j, J in jJ:
-                #     print("jJ")
-                #     print(jnp.mean(j, axis=0))
-                #     print(jnp.mean(J, axis=0))
+            
+            zZ, jJ = self.observation.cvi(params, jJ, y, smooth_fun=bifilter, smooth_args=(z0, Z0, Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
             mV = [

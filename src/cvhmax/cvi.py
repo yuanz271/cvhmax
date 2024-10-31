@@ -296,3 +296,25 @@ class Poisson(CVI):
         (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=x, V=V), max_iter=15000)
 
         return Params(C=C, d=d)
+    
+    @classmethod
+    def cvi(cls, params, jJ, y, smooth_fun, smooth_args, cvi_iter, lr):
+        for cv_it in range(cvi_iter):
+            # print(f"\n{cv_it=}")
+            zZ = [
+                smooth_fun(jk, Jk, *smooth_args) for (jk, Jk) in jJ
+            ]
+
+            # for z, Z in zZ:
+            #     print("zZ")
+            #     print(jnp.mean(z, axis=0))
+            #     print(jnp.mean(Z, axis=0))
+
+            jJ = [cls.update_pseudo(params, yk, zk, Zk, jk, Jk, lr) for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)]
+
+            # for j, J in jJ:
+            #     print("jJ")
+            #     print(jnp.mean(j, axis=0))
+            #     print(jnp.mean(J, axis=0))
+        
+        return zZ, jJ
