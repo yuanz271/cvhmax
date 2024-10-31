@@ -32,6 +32,11 @@ class Params:
 class CVI:
     @classmethod
     @abstractmethod    
+    def cvi(cls, *args, **kwargs):
+        pass
+
+    @classmethod
+    @abstractmethod    
     def update_readout(cls, *args, **kwargs):
         pass
 
@@ -86,7 +91,11 @@ def observation_estimate(y, m, V, lam=0.1):
 
 class Gaussian(CVI):
     @staticmethod
-    def update_pseudo(params, y):
+    def update_pseudo(cls, params, y, z, Z, j, J, lr):
+        return j, J
+    
+    @classmethod
+    def init_info(cls, params, y, A, Q):
         C = params.C()
         d = params.d
         R = params.R
@@ -97,11 +106,20 @@ class Gaussian(CVI):
         return info_repr(y, H, d, R)
     
     @staticmethod
-    def update_readout(params, y, m, P):
+    def update_readout(cls, params, y, m, P):
         C, d, R = observation_estimate(y, m, P)
         params = Params(C=C, d=d, R=R, M=params.M)
         return params
-    
+
+    @classmethod
+    def cvi(cls, params, jJ, y, smooth_fun, smooth_args, cvi_iter, lr):
+        # observation updates are state independent
+        zZ = [
+            smooth_fun(jk, Jk, *smooth_args) for (jk, Jk) in jJ
+        ]
+        
+        return zZ, jJ
+
 
 def v2w(v, shape):
     w = v.reshape(shape)
