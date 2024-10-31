@@ -1,7 +1,9 @@
 import pytest
 import numpy as np
 import matplotlib.pyplot as plt
-from jax import numpy as jnp
+from jax import numpy as jnp, config
+from sklearn.linear_model import LinearRegression
+config.update("jax_enable_x64", True)
 
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params
@@ -12,7 +14,7 @@ from cvhmax.hm import sample_matern
 def test_CVHM(capsys):
     np.random.seed(1234)
     T = 2000
-    n_obs = 20
+    n_obs = 50
     n_factors = 2
     dt = 1.
     sigma = 1.
@@ -23,16 +25,15 @@ def test_CVHM(capsys):
 
     x = np.column_stack([sample_matern(T, dt, sigma, rho), sample_matern(T, dt, sigma, rho)])
 
-    # x = sample_matern np.sin(np.arange(2 * T) / 100).reshape(T, -1)
-    C = params.C = np.random.randn(n_obs, n_factors)
-    d = params.d = np.random.randn(n_obs) - 2
-    params.R = np.eye(n_obs) * 2
+    C = params.C = np.random.rand(n_obs, n_factors)
+    d = params.d = np.ones(n_obs) + 1
 
     y = np.random.poisson(np.exp(x @ C.T + np.expand_dims(d, 0)))
-
-    model = CVHM(n_factors, dt, kernels, params, max_iter=2, likelihood='Poisson')
+    y = jnp.array(y, dtype=float)
     
     with capsys.disabled():
+        print(jnp.mean(y, 0))
+        model = CVHM(n_factors, dt, kernels, params, max_iter=10, likelihood='Poisson')
         result = model.fit(y)
     m, V = result.posterior
     m = m[0]
@@ -41,12 +42,16 @@ def test_CVHM(capsys):
     assert m.shape == (T, n_factors)
     assert V.shape == (T, n_factors, n_factors)
 
-    fig, ax = plt.subplots(1, 2)
-    ax[0].plot(m[:, 0], label="Inference", alpha=0.5)
-    ax[0].plot(x[:, 0], label="Ground truth", alpha=0.5)
+    m = LinearRegression().fit(m, x).predict(m)
 
-    ax[1].plot(m[:, 1], alpha=0.5)
-    ax[1].plot(x[:, 1], alpha=0.5)
-    ax[0].legend()
+    fig, axs = plt.subplots(2, 2)
+    axs[0, 0].plot(x[:, 0], label="Ground truth", alpha=0.5)
+    axs[0, 1].plot(m[:, 0], label="Inference", alpha=0.5, color='r')
+    axs[1, 0].plot(x[:, 1], label="Ground truth", alpha=0.5)
+    axs[1, 1].plot(m[:, 1], label="Inference", alpha=0.5, color='r')
+    axs[0, 0].legend()
+    axs[0, 1].legend()
+    axs[1, 0].legend()
+    axs[1, 1].legend()
     fig.savefig('cvhm.pdf')
     plt.close(fig)

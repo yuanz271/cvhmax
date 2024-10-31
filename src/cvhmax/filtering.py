@@ -77,9 +77,9 @@ def information_filter(
     :param P: state noise precision matrix
     """
     step = functools.partial(information_filter_step, F=F, P=P)
-    _, z = jax.lax.scan(step, init=init, xs=measure)
+    _, ret = jax.lax.scan(step, init=init, xs=measure)
 
-    return z
+    return ret
 
 
 @jax.jit

@@ -2,20 +2,21 @@ from abc import abstractmethod
 from dataclasses import dataclass, field
 from functools import partial
 
-from jax import numpy as jnp, random as jrandom, vmap, lax
-from jax.scipy.linalg import cholesky, solve_triangular, cho_factor, cho_solve, inv
-from jax.scipy.optimize import minimize
+from jax import numpy as jnp, random as jrandom, vmap, lax, nn
+from jax.numpy.linalg import inv, solve, multi_dot
+from jax.scipy.linalg import cho_factor, cho_solve
 from jaxtyping import Array
+import chex
 
-from .utils import info_repr, norm_loading
+from .utils import info_repr, norm_loading, lbfgs_solve
 
 
 @dataclass
 class Params:
-    C: Array = field(init=False)
-    d: Array = field(init=False)
-    R: Array = field(init=False, default=None)
-    M: Array = field(init=False)
+    C: Array = field(default=None)
+    d: Array = field(default=None)
+    R: Array = field(default=None)
+    M: Array = field(default=None)
     
     def initialize(self, n_obs, n_factors, *, random_state):
         key = jrandom.key(random_state)
@@ -41,7 +42,12 @@ class CVI:
 
     @classmethod
     @abstractmethod
-    def init_info(cls, params, y, A, Q):
+    def init_info(cls, *args, **kwargs):
+        pass
+
+    @classmethod
+    @abstractmethod
+    def initialize_params(cls, *args, **kwargs):
         pass
 
 
@@ -70,9 +76,9 @@ def observation_estimate(y, m, V, lam=0.1):
 
     d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
     
-    d = d.T
+    d = jnp.squeeze(d)
     C = C.T
-    assert d.shape == (y_dim, 1)
+    assert d.shape == (y_dim,)
     assert C.shape == (y_dim, z_dim)
 
     return C, d, R
@@ -81,7 +87,7 @@ def observation_estimate(y, m, V, lam=0.1):
 class Gaussian(CVI):
     @staticmethod
     def update_pseudo(params, y):
-        C = params.C
+        C = params.C()
         d = params.d
         R = params.R
         M = params.M
@@ -103,16 +109,18 @@ def v2w(v, shape):
     return jnp.squeeze(d), C
 
 
-def poisson_nell(w, shape, y, m, V):
-    d, C = v2w(w, shape)
+def poisson_nell(params, y, m, V, reg=100.):
+    C, d = params
+    n = y.shape[0]
     
     def _nell(y_t, m_t, V_t):
         eta = C @ m_t + d
         quad = jnp.einsum("ni,in->n", C, V_t @ C.T)  # (Y, Z) (T, Z, Z) (Z, Y) -> (T, Y, Y)
-        lam = jnp.exp(eta + .5 * quad)
+        lam = jnp.exp(eta + 0.5 * quad)
         return jnp.sum(lam - eta * y_t, axis=-1)
     
-    return jnp.mean(vmap(_nell)(y, m, V))
+    C_reg = reg * jnp.linalg.norm(C) / n
+    return jnp.mean(vmap(_nell)(y, m, V)) + C_reg
 
 
 def poisson_cvi_stats(z, Z, y, H, d):
@@ -123,16 +131,34 @@ def poisson_cvi_stats(z, Z, y, H, d):
     m = Vz = -0.5 * Z^-1 z
     V = -0.5Z^-1
     """
-    Zcho = cho_factor(Z)
-    m = -0.5 * cho_solve(Zcho, z)  # Vj
-    eta = H @ m + d
-    quad = jnp.einsum("nl, ln -> n", H, -0.5 * cho_solve(Zcho, H.mT))  # CVC'
-    lam = jnp.exp(eta + 0.5 * quad)
+    # chex.assert_tree_all_finite(z)
+    # chex.assert_tree_all_finite(Z)
+    
+    n = jnp.size(z)
+    tau = 1e-3
+    # Zcho = cho_factor(Z + tau * jnp.eye(n))
+    Z = Z + tau * jnp.eye(n)
+    m = -0.5 * solve(Z, z)  # Vj
+    # chex.assert_tree_all_finite(m)
+
+    lin = H @ m + d
+    quad = jnp.einsum("nl, ln -> n", H, -0.5 * solve(Z, H.mT))  # CVC'
+    eta =  jnp.maximum(lin + 0.5 * quad, 5)
+    lam = jnp.exp(eta)
+
+    # chex.assert_tree_all_finite(lam)
+    # chex.assert_tree_all_finite(quad)
+
     grad_m = (y - lam) @ H
     grad_V = -0.5 * jnp.einsum("ni, n, nj -> ij", H, lam, H)
 
+    # chex.assert_tree_all_finite(grad_m)
+    # chex.assert_tree_all_finite(grad_V)
+
     J_update = -2 * grad_V
     j_update = grad_m - 2 * grad_V @ m
+
+    # chex.assert_tree_all_finite(J_update)
     return j_update, J_update
 
 
@@ -146,30 +172,42 @@ class Poisson(CVI):
         H = C @ M
         d = params.d
         
-        z0 = jnp.zeros(Q.shape[0])
-        Z0 = Qinv = inv(Q)
-        Qcho = cho_factor(Q)
-        QiA = cho_solve(Qcho, A)
-        AtQiA = A.mT @ QiA
-        
+        d_z = Q.shape[0]
+        z0 = jnp.zeros(d_z)
+        Z0 = P = inv(Q)
+
+        A = A + 1e-3 * jnp.eye(d_z)  # ill-condition
+
         def forward(carry, yt):
             ztm1, Ztm1 = carry
-            cho = cholesky(Ztm1 + AtQiA)
-            S = solve_triangular(cho, QiA.mT)
-            Zp = Qinv - S.mT @ S
-            zp = QiA @ cho_solve((cho, False), ztm1)
-            Zp = 0.5 * (Zp + Zp.mT)
-                        
+
+            # predict
+            M = solve(A.T, solve(A.T, Ztm1.T).T)
+            C = solve((M + P).T, M.T).T
+            eye = jnp.eye(C.shape[0])
+            L = eye - C
+            Zp = multi_dot((L, M, L.T)) + multi_dot((C, P, C.T))
+            zp = L @ solve(A.T, ztm1)
+
             j, J = poisson_cvi_stats(zp, Zp, yt, H, d)
 
             zt = zp + j
             Zt = Zp + J
             Zt = 0.5 * (Zt + Zt.mT)
-        
+
             return (zt, Zt), (j, J)
         
-        _, (j, J) = lax.scan(forward, (z0, Z0), y)
-
+        ztm1 = z0
+        Ztm1 = Z0
+        j = []
+        J = []
+        for yt in y:
+            (ztm1, Ztm1), (jt, Jt) = forward((ztm1, Ztm1), yt)
+            j.append(jt)
+            J.append(Jt)
+        # _, (j, J) = lax.scan(forward, (z0, Z0), y)
+        j = jnp.stack(j)
+        J = jnp.stack(J)
         return j, J
 
     @classmethod
@@ -185,14 +223,16 @@ class Poisson(CVI):
         # selected_m = m @ M.T  # (T, Z) (Z, sZ) -> (T, sZ)
         # selected_V = vmap(lambda v: M @ v @ M.T)(V)  # (T, Z, Z) -> (T, sZ, sZ)
 
-        w = jnp.column_stack([d, C])
-        w_shape = w.shape
-        w = w.flatten()
+        # w = jnp.column_stack([d, C])
+        # w_shape = w.shape
+        # w = w.flatten()
 
-        opt = minimize(poisson_nell, w, args=(w_shape, y, m, V), method="BFGS")
-        w_opt = opt.x
+        # opt = minimize(poisson_nell, w, args=(w_shape, y, m, V), method="BFGS")
+        # w_opt = opt.x
 
-        d, C = v2w(w_opt, w_shape)
+        # d, C = v2w(w_opt, w_shape)
+
+        (C, d) , _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=m, V=V))
         
         params = Params()
         params.C = C
@@ -229,7 +269,30 @@ class Poisson(CVI):
         
         dj, dJ = vmap(partial(poisson_cvi_stats, H=H, d=d))(z, Z, y)
 
+        chex.assert_tree_all_finite(dj)
+        chex.assert_tree_all_finite(dJ)
+
         j = (1 - lr) * j + lr * dj
         J = (1 - lr) * J + lr * dJ
         
         return j, J
+    
+    @classmethod
+    def initialize_params(cls, y, n_factors, *, random_state):
+        key: Array = jrandom.key(random_state)
+        Ckey, dkey = jrandom.split(key)
+        
+        m = jnp.mean(y, axis=0)
+        d = jnp.log(m)
+        r = y - m[None, ...]
+
+        u, s, vh = jnp.linalg.svd(r, full_matrices=False)
+        x = u[:, :n_factors]
+
+        n, n_obs = y.shape
+        V = jnp.tile(jnp.eye(n_factors), (n, 1, 1))  # dummpy variance
+        C = jrandom.normal(Ckey, shape=(n_obs, n_factors)) / n_obs
+
+        (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=x, V=V), max_iter=15000)
+
+        return Params(C=C, d=d)

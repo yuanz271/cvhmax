@@ -27,6 +27,7 @@ class CVHM:
     # m_step: Callable  # M step
     observation: ClassVar[CVI] = field(init=False)
     max_iter: int = field(default=10)
+    cvi_iter: int = field(default=3)
     posterior: tuple[list[Float[Array, " time latent"]], list[Float[Array, " time latent latent"]]] = field(init=False)
 
     def __post_init__(self):
@@ -69,7 +70,11 @@ class CVHM:
         
         if random_state is None:
             random_state = secrets.randbits(32)
-        self.params.initialize(y[0].shape[-1], self.n_components, random_state=random_state)
+
+        y_cat = jnp.concatenate(y, 0)
+        self.params = self.observation.initialize_params(y_cat, self.n_components, random_state=random_state)
+
+        # print(self.params)
 
         M = self.mask()
         self.params.M = M
@@ -86,6 +91,7 @@ class CVHM:
 
         z0 = jnp.zeros(Af.shape[0])
         Z0 = jnp.linalg.inv(Q0)
+        # Af = Af + 1e-3 * jnp.eye(Af.shape[0])
 
         jJ = [self.observation.init_info(self.params, yk, Af, Qf) for yk in y]
         
@@ -97,11 +103,23 @@ class CVHM:
             # ]  # Here's the place that optimize the natural parameters
             # TODO: nat_step for CVI per likelihood
 
-            for cv_it in range(self.max_iter):
+            for cv_it in range(self.cvi_iter):
+                # print(f"\n{cv_it=}")
                 zZ = [
                     bifilter(jk, Jk, z0, Z0, Af, Pf, Ab, Pb) for (jk, Jk) in jJ
                 ]
+
+                # for z, Z in zZ:
+                #     print("zZ")
+                #     print(jnp.mean(z, axis=0))
+                #     print(jnp.mean(Z, axis=0))
+
                 jJ = [self.observation.update_pseudo(params, yk, zk, Zk, jk, Jk, self.lr) for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)]
+
+                # for j, J in jJ:
+                #     print("jJ")
+                #     print(jnp.mean(j, axis=0))
+                #     print(jnp.mean(J, axis=0))
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
             mV = [
