@@ -11,7 +11,7 @@ from tqdm import trange
 
 from . import cvi
 from .cvi import CVI, Params
-from .utils import info_repr, real_repr, symm
+from .utils import real_repr, symm
 from .filtering import bifilter
 
 
@@ -71,8 +71,7 @@ class CVHM:
         if random_state is None:
             random_state = secrets.randbits(32)
 
-        y_cat = jnp.concatenate(y, 0)
-        self.params = self.observation.initialize_params(y_cat, self.n_components, random_state=random_state)
+        self.params = self.observation.initialize_params(y, self.n_components, random_state=random_state)
 
         # print(self.params)
 
@@ -91,6 +90,8 @@ class CVHM:
 
         z0 = jnp.zeros(Af.shape[0])
         Z0 = jnp.linalg.inv(Q0)
+
+        zZ0s = [(z0, Z0) for _ in y]  # stationary distribution
         # Af = Af + 1e-3 * jnp.eye(Af.shape[0])
 
         jJ = [self.observation.init_info(params, yk, Af, Qf) for yk in y]
@@ -103,7 +104,8 @@ class CVHM:
             # ]  # Here's the place that optimize the natural parameters
             # TODO: nat_step for CVI per likelihood
             
-            zZ, jJ = self.observation.cvi(params, jJ, y, smooth_fun=bifilter, smooth_args=(z0, Z0, Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
+            zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
+            # zZ0s = [(z[0], Z[0]) for z, Z in zZ]
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
             mV = [
