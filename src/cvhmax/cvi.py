@@ -11,6 +11,20 @@ import chex
 from .utils import info_repr, norm_loading, lbfgs_solve
 
 
+TAU = 1e-6
+MAX_LOGRATE = 5.
+
+def fa_init(ys, n_components, random_state):
+    fa = FactorAnalysis(n_components=n_components, random_state=random_state)
+    Y = np.vstack(ys)
+    fa.fit(Y)
+    ms= [jnp.array(fa.transform(y)) for y in ys]
+    C = jnp.array(fa.components_.T)
+    d = jnp.array(fa.mean_)
+    
+    return ms, C, d
+
+
 @dataclass
 class Params:
     C: Array = field(default=None)
