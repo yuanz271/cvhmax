@@ -16,10 +16,10 @@ Z[k|k-1] = L[k] M[k] L[k]' + C[k] Q[k]^-1 C[k]'
 z[k|k-1] = L[k] F[k]^-' z[k-1]
 
 Update:
-I[k] = H[k]' R[k]^-1 H[k]
-i[k] = H[k]' R[k]^-1 y[k]
-Z[k] = Z[k|k-1] + I[k]
-z[k] = z[k|k-1] + i[k]
+J[k] = H[k]' R[k]^-1 H[k]
+j[k] = H[k]' R[k]^-1 y[k]
+Z[k] = Z[k|k-1] + J[k]
+z[k] = z[k|k-1] + j[k]
 
 """
 import functools
@@ -28,6 +28,16 @@ import jax
 import jax.numpy as jnp
 from jax.numpy.linalg import multi_dot, solve
 from jaxtyping import Float, Array
+
+
+def predict(z, Z, F, P):
+    M = solve(F.T, solve(F.T, Z.T).T)
+    C = solve((M + P).T, M.T).T
+    L = jnp.eye(C.shape[0]) - C
+    Zp = multi_dot((L, M, L.T)) + multi_dot((C, P, C.T))
+    zp = L @ solve(F.T, z)
+
+    return zp, Zp
 
 
 def information_filter_step(
@@ -44,22 +54,20 @@ def information_filter_step(
     """
     # carries
     z, Z = state
-    i, I = measure
+    j, J = measure
 
     # predict
-    M = solve(F.T, solve(F.T, Z.T).T)
-    C = solve((M + P).T, M.T).T
-    eye = jnp.eye(C.shape[0])
-    L = eye - C
-    Zp = multi_dot((L, M, L.T)) + multi_dot((C, P, C.T))
-    zp = L @ solve(F.T, z)
+    zp, Zp = predict(z, Z, F, P)
+    # M = solve(F.T, solve(F.T, Z.T).T)
+    # C = solve((M + P).T, M.T).T
+    # eye = jnp.eye(C.shape[0])
+    # L = eye - C
+    # Zp = multi_dot((L, M, L.T)) + multi_dot((C, P, C.T))
+    # zp = L @ solve(F.T, z)
 
     # update
-    # I = multi_dot(H.T, Rinv, H)
-    # i = multi_dot(H.T, Rinv, y)
-
-    Z = Zp + I
-    z = zp + i
+    Z = Zp + J
+    z = zp + j
 
     return (z, Z), (zp, Zp, z, Z)
 
@@ -69,29 +77,33 @@ def information_filter(
     measure: tuple[Float[Array, " time state"], Float[Array, " time state state"]],
     F: Float[Array, " state state"],
     P: Float[Array, " state state"],
+    reverse: bool = False,
 ):
     """Information filter
-    :param init: initial state
-    :param measure: measure time series
+    :param init: initial distribution
+    :param measure: observation information time series
     :param F: transition matrix
     :param P: state noise precision matrix
     """
-    step = functools.partial(information_filter_step, F=F, P=P)
-    _, ret = jax.lax.scan(step, init=init, xs=measure)
+    _, ret = jax.lax.scan(
+        functools.partial(information_filter_step, F=F, P=P),
+        init=init,
+        xs=measure,
+        reverse=reverse,
+    )
 
     return ret
 
 
 @jax.jit
-def bifilter(i, I, z0, Z0, Af, Pf, Ab, Pb):
+def bifilter(j, J, z0, Z0, Af, Pf, Ab, Pb):
     """Bidirectional filtering"""
     # Forward
-    zpf, Zpf, zf, Zf = information_filter((z0, Z0), (i, I), Af, Pf)
+    zpf, Zpf, zf, Zf = information_filter((z0, Z0), (j, J), Af, Pf)
+    # zTp1, ZTp1 = predict(zf[-1], Zf[-1], Af, Pf)
     # Backward
-    zpb, Zpb, zb, Zb = information_filter(
-        (z0, Z0), (jnp.flip(i, axis=0), jnp.flip(I, axis=0)), Ab, Pb
-    )
+    zpb, Zpb, zb, Zb = information_filter((z0, Z0), (j, J), Ab, Pb, reverse=True)
 
-    z = zf + zpb
-    Z = Zf + Zpb - Z0
+    z = zf + zpb  # assume 0 mean
+    Z = Zf + Zpb - Z0  # stationary Q
     return z, Z
