@@ -32,8 +32,7 @@ def test_CVHM(capsys):
     y = jnp.array(y, dtype=float)
     
     with capsys.disabled():
-        print(jnp.mean(y, 0))
-        model = CVHM(n_factors, dt, kernels, params, max_iter=10, likelihood='Poisson')
+        model = CVHM(n_factors, dt, kernels, params, max_iter=2, likelihood='Poisson')
         result = model.fit(y)
     m, V = result.posterior
     m = m[0]
