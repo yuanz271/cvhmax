@@ -1,20 +1,22 @@
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from functools import partial
+from typing import TypedDict
 
 import numpy as np
 from sklearn.decomposition import FactorAnalysis
-from jax import numpy as jnp, random as jrandom, vmap, lax, nn
+from jax import numpy as jnp, random as jrandom, vmap
 from jax.numpy.linalg import inv, solve, multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from jaxtyping import Array
 import chex
+from equinox import Module
 
 from .utils import info_repr, norm_loading, lbfgs_solve
 
 
 TAU = 1e-6
-MAX_LOGRATE = 5.
+MAX_LOGRATE = 7.
 
 def fa_init(ys, n_components, random_state):
     fa = FactorAnalysis(n_components=n_components, random_state=random_state)
@@ -27,22 +29,21 @@ def fa_init(ys, n_components, random_state):
     return ms, C, d
 
 
-@dataclass
-class Params:
-    C: Array = field(default=None)
-    d: Array = field(default=None)
-    R: Array = field(default=None)
-    M: Array = field(default=None)
+class Params(Module):
+    C: Array
+    d: Array
+    R: Array
+    M: Array
     
-    def initialize(self, n_obs, n_factors, *, random_state):
-        key = jrandom.key(random_state)
-        Ckey, dkey = jrandom.split(key)
-        self.C = jrandom.normal(Ckey, shape=(n_obs, n_factors)) / n_obs
-        self.d = jrandom.normal(dkey, shape=(n_obs,))
-        self.R = jnp.eye(n_obs)
+    # def initialize(self, n_obs, n_factors, *, random_state):
+    #     key = jrandom.key(random_state)
+    #     Ckey, dkey = jrandom.split(key)
+    #     self.C = jrandom.normal(Ckey, shape=(n_obs, n_factors)) / n_obs
+    #     self.d = jrandom.normal(dkey, shape=(n_obs,))
+    #     self.R = jnp.eye(n_obs)
 
-    def nC(self) -> Array:
-        return norm_loading(self.C)
+    # def nC(self) -> Array:
+    #     return norm_loading(self.C)
 
 
 class CVI:
@@ -112,7 +113,7 @@ class Gaussian(CVI):
     
     @classmethod
     def init_info(cls, params, y, A, Q):
-        C = params.C()
+        C = params.C
         d = params.d
         R = params.R
         M = params.M
@@ -137,14 +138,14 @@ class Gaussian(CVI):
         return zZ, jJ
 
     @classmethod
-    def initialize_params(cls, ys, n_factors, *, random_state):
+    def initialize_params(cls, ys, n_factors, mask, *, random_state):
         # key: Array = jrandom.key(random_state)
         # Ckey, dkey = jrandom.split(key)
 
         ms, C, d = fa_init(ys, n_factors, random_state)
         # zZ0 = [(m[0], jnp.eye(n_factors)) for m in ms]
 
-        return Params(C=C, d=d)
+        return Params(C=C, d=d, R=None, M=mask)
 
 
 # def v2w(v, shape):
@@ -175,35 +176,24 @@ def poisson_cvi_stats(z, Z, y, H, d):
     <=>
     m = Vz = -0.5 * Z^-1 z
     V = -0.5Z^-1
-    """
-    # chex.assert_tree_all_finite(z)
-    # chex.assert_tree_all_finite(Z)
-        
+    """        
     U, s, V = jnp.linalg.svd(Z)
     Z = multi_dot((U, jnp.diag(s + TAU), U.T))
     
     Zcho = cho_factor(Z)
     m = -0.5 * cho_solve(Zcho, z)  # Vj
-    # chex.assert_tree_all_finite(m)
 
     lin = H @ m + d
     quad = jnp.einsum("nl, ln -> n", H, -0.5 * cho_solve(Zcho, H.mT))  # CVC'
     eta =  jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
     lam = jnp.exp(eta)
 
-    # chex.assert_tree_all_finite(lam)
-    # chex.assert_tree_all_finite(quad)
-
     grad_m = (y - lam) @ H
     grad_V = -0.5 * jnp.einsum("ni, n, nj -> ij", H, lam, H)
-
-    # chex.assert_tree_all_finite(grad_m)
-    # chex.assert_tree_all_finite(grad_V)
 
     J_update = -2 * grad_V
     j_update = grad_m - 2 * grad_V @ m
 
-    # chex.assert_tree_all_finite(J_update)
     return j_update, J_update
 
 
@@ -288,16 +278,13 @@ class Poisson(CVI):
         
         dj, dJ = vmap(partial(poisson_cvi_stats, H=H, d=d))(z, Z, y)
 
-        chex.assert_tree_all_finite(dj)
-        chex.assert_tree_all_finite(dJ)
-
         j = (1 - lr) * j + lr * dj
         J = (1 - lr) * J + lr * dJ
         
         return j, J
     
     @classmethod
-    def initialize_params(cls, ys, n_factors, *, random_state):
+    def initialize_params(cls, ys, n_factors, mask, *, random_state):
         ms, C, d = fa_init(ys, n_factors, random_state)
         Y = jnp.vstack(ys)
         M = jnp.vstack(ms)
@@ -306,7 +293,7 @@ class Poisson(CVI):
 
         (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=Y, m=M, V=V), max_iter=1000)
 
-        return Params(C=C, d=d)
+        return Params(C=C, d=d, R=None, M=mask)
     
     @classmethod
     def cvi(cls, params, jJ, y, zZ0, smooth_fun, smooth_args, cvi_iter, lr):

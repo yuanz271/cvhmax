@@ -21,18 +21,18 @@ def test_CVHM(capsys):
     rho = 50.
     
     kernels = [HidaMatern(sigma, rho, 0., 0) for k in range(n_factors)]
-    params = Params()
+    # params = Params()
 
     x = np.column_stack([sample_matern(T, dt, sigma, rho), sample_matern(T, dt, sigma, rho)])
 
-    C = params.C = np.random.rand(n_obs, n_factors)
-    d = params.d = np.ones(n_obs) + 1
+    C = np.random.rand(n_obs, n_factors)
+    d = np.ones(n_obs) + 1
 
     y = np.random.poisson(np.exp(x @ C.T + np.expand_dims(d, 0)))
     y = jnp.array(y, dtype=float)
     
     with capsys.disabled():
-        model = CVHM(n_factors, dt, kernels, params, max_iter=2, likelihood='Poisson')
+        model = CVHM(n_factors, dt, kernels, max_iter=2, likelihood='Poisson')
         result = model.fit(y)
     m, V = result.posterior
     m = m[0]

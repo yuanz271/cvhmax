@@ -20,7 +20,7 @@ class CVHM:
     n_components: int
     dt: float
     kernels: None
-    params: Params = None
+    params: Params = field(default=None)
     likelihood: str = field(default="Gaussian")
     lr: float = field(default=0.1)
     # nat_step: Callable  # natural param
@@ -71,12 +71,8 @@ class CVHM:
         if random_state is None:
             random_state = secrets.randbits(32)
 
-        self.params = self.observation.initialize_params(y, self.n_components, random_state=random_state)
+        self.params = self.observation.initialize_params(y, self.n_components, self.mask(), random_state=random_state)
 
-        # print(self.params)
-
-        M = self.mask()
-        self.params.M = M
         params = self.params
 
         Af = self.Af()
@@ -95,17 +91,12 @@ class CVHM:
         # Af = Af + 1e-3 * jnp.eye(Af.shape[0])
 
         jJ = [self.observation.init_info(params, yk, Af, Qf) for yk in y]
-        
-        for em_it in trange(self.max_iter):
 
-            # bidirectional filtering
-            # info = [
-            #     info_repr(yk, H, d, R) + (z0, Z0) for yk in y
-            # ]  # Here's the place that optimize the natural parameters
-            # TODO: nat_step for CVI per likelihood
-            
+        def em_step(iter, carry):
+            params, jJ, *_ = carry
+            M = params.M
+
             zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
-            # zZ0s = [(z[0], Z[0]) for z, Z in zZ]
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
             mV = [
@@ -115,6 +106,31 @@ class CVHM:
             m, V = zip(*mV)  # zip(*iterable) is its own inverse
             
             params = self.observation.update_readout(params, y, m, V)
+
+            return params, jJ, m, V
+        
+        init_val = em_step(0, (params, jJ, None, None))
+        params, jJ, m, V = jax.lax.fori_loop(1, self.max_iter, em_step, init_val)
+        
+        # for em_it in trange(self.max_iter):
+
+        #     # bidirectional filtering
+        #     # info = [
+        #     #     info_repr(yk, H, d, R) + (z0, Z0) for yk in y
+        #     # ]  # Here's the place that optimize the natural parameters
+        #     # TODO: nat_step for CVI per likelihood
+            
+        #     zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
+        #     # zZ0s = [(z[0], Z[0]) for z, Z in zZ]
+
+        #     # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
+        #     mV = [
+        #         (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
+        #         for zk, Zk in zZ
+        #     ]
+        #     m, V = zip(*mV)  # zip(*iterable) is its own inverse
+            
+        #     params = self.observation.update_readout(params, y, m, V)
 
         self.params = params
         self.posterior = (m, V)
