@@ -1,6 +1,6 @@
 from jax import numpy as jnp
 from jax import tree_util
-import equinox as eqx
+# import equinox as eqx
 import numpy as np
 import matplotlib.pyplot as plt
 import pytest
@@ -23,24 +23,24 @@ def test_HidaMatern():
     Qb = kernel.Qb(dt)
 
 
-def test_composite():
-    # 2 latents
-    # L1: 1 kernel
-    # L2: 2 kernels
-    hyperparams = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
-    hyperspec = [[{'sigma': True, 'rho': True, 'omega': True, 'order': False}], [{'sigma': True, 'rho': True, 'omega': True, 'order': False}, {'sigma': True, 'rho': True, 'omega': True, 'order': False}]]
-    # print(tree_util.tree_structure(hyperparams))
-    hyperdef, hyperflat = tree_util.tree_flatten(hyperparams)
-    # print(hyperflat)
-    # https://docs.kidger.site/equinox/all-of-equinox/
-    # eqx.partition
+# def test_composite():
+#     # 2 latents
+#     # L1: 1 kernel
+#     # L2: 2 kernels
+#     hyperparams = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
+#     hyperspec = [[{'sigma': True, 'rho': True, 'omega': True, 'order': False}], [{'sigma': True, 'rho': True, 'omega': True, 'order': False}, {'sigma': True, 'rho': True, 'omega': True, 'order': False}]]
+#     # print(tree_util.tree_structure(hyperparams))
+#     hyperdef, hyperflat = tree_util.tree_flatten(hyperparams)
+#     # print(hyperflat)
+#     # https://docs.kidger.site/equinox/all-of-equinox/
+#     # eqx.partition
 
-    params, static = eqx.partition(hyperparams, hyperspec)
-    # eqx.tree_pprint(params)
-    # eqx.tree_pprint(static)
-    paramflat, paramdef = tree_util.tree_flatten(params)
-    # print(paramdef)
-    # print(paramflat)
+#     params, static = eqx.partition(hyperparams, hyperspec)
+#     # eqx.tree_pprint(params)
+#     # eqx.tree_pprint(static)
+#     paramflat, paramdef = tree_util.tree_flatten(params)
+#     # print(paramdef)
+#     # print(paramflat)
 
 
 def test_Ks():

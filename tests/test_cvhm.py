@@ -1,55 +1,56 @@
+import pytest
 import numpy as np
 import matplotlib.pyplot as plt
+from jax import numpy as jnp, config
+from sklearn.linear_model import LinearRegression
+config.update("jax_enable_x64", True)
 
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern
-from tests.test_hp import sample_matern
+from cvhmax.hm import sample_matern
 
 
-def test_CVHM():
+def test_CVHM(capsys):
     np.random.seed(1234)
     T = 2000
-    n_obs = 20
+    n_obs = 50
     n_factors = 2
     dt = 1.
     sigma = 1.
     rho = 50.
     
     kernels = [HidaMatern(sigma, rho, 0., 0) for k in range(n_factors)]
-    params = Params()
+    # params = Params()
 
     x = np.column_stack([sample_matern(T, dt, sigma, rho), sample_matern(T, dt, sigma, rho)])
 
-    # x = sample_matern np.sin(np.arange(2 * T) / 100).reshape(T, -1)
-    C = params.C = np.random.randn(n_obs, n_factors)
-    d = params.d = np.random.randn(n_obs, 1)
-    params.R = np.eye(n_obs) * 2
+    C = np.random.rand(n_obs, n_factors)
+    d = np.ones(n_obs) + 1
 
-    y = x @ C.T + d.T + np.random.randn(T, n_obs) * 2
-
-    model = CVHM(n_factors, dt, kernels, params, max_iter=1)
-    Af = model.Af()
-    Qf = model.Qf()
-    Ab = model.Ab()
-    Qb = model.Qb()
-    Q0 = model.Q0()
-    M = model.mask()
-
-    result = model.fit(y)
-    m, V = result.components_
+    y = np.random.poisson(np.exp(x @ C.T + np.expand_dims(d, 0)))
+    y = jnp.array(y, dtype=float)
+    
+    with capsys.disabled():
+        model = CVHM(n_factors, dt, kernels, max_iter=2, likelihood='Poisson')
+        result = model.fit(y)
+    m, V = result.posterior
     m = m[0]
     V = V[0]
 
     assert m.shape == (T, n_factors)
     assert V.shape == (T, n_factors, n_factors)
 
-    fig, ax = plt.subplots(1, 2)
-    ax[0].plot(m[:, 0], label="Inference", alpha=0.5)
-    ax[0].plot(x[:, 0], label="Ground truth", alpha=0.5)
+    m = LinearRegression().fit(m, x).predict(m)
 
-    ax[1].plot(m[:, 1], alpha=0.5)
-    ax[1].plot(x[:, 1], alpha=0.5)
-    ax[0].legend()
+    fig, axs = plt.subplots(2, 2)
+    axs[0, 0].plot(x[:, 0], label="Ground truth", alpha=0.5)
+    axs[0, 1].plot(m[:, 0], label="Inference", alpha=0.5, color='r')
+    axs[1, 0].plot(x[:, 1], label="Ground truth", alpha=0.5)
+    axs[1, 1].plot(m[:, 1], label="Inference", alpha=0.5, color='r')
+    axs[0, 0].legend()
+    axs[0, 1].legend()
+    axs[1, 0].legend()
+    axs[1, 1].legend()
     fig.savefig('cvhm.pdf')
     plt.close(fig)

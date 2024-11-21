@@ -4,13 +4,43 @@ from typing import Callable, Dict, List, Optional
 import jax
 from jax import numpy as jnp, scipy as jsp
 from jaxtyping import Array, Scalar
+import optax
+import optax.tree_utils as otu
+
+
+def lbfgs_solve(init_params, fun, max_iter=15000, factr=1e12):
+    # argument default values copied from scipy.optimize.fmin_l_bfgs_b
+    tol = factr * jnp.finfo(float).eps
+
+    # opt = optax.lbfgs(linesearch=optax.scale_by_backtracking_linesearch(max_backtracking_steps=15))
+    opt = optax.lbfgs(linesearch=optax.scale_by_zoom_linesearch(max_linesearch_steps=15))
+    value_and_grad_fun = optax.value_and_grad_from_state(fun)
+
+    def step(carry):
+        params, state = carry
+        value, grad = value_and_grad_fun(params, state=state)
+        updates, state = opt.update(grad, state, params, value=value, grad=grad, value_fn=fun)
+        params = optax.apply_updates(params, updates)
+        return params, state
+    
+    def continuing_criterion(carry):
+        _, state =  carry
+        iter_num = otu.tree_get(state, 'count')
+        grad = otu.tree_get(state, 'grad')
+        err = otu.tree_l2_norm(grad)
+        return (iter_num == 0) | ((iter_num < max_iter) & (err > tol))
+    
+    init_carry = (init_params, opt.init(init_params))
+    final_params, final_state = jax.lax.while_loop(continuing_criterion, step, init_carry)
+
+    return final_params, final_params
 
 
 def symm(x):
     return .5 * (x + x.T)
 
 
-def real_representation(c):
+def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 

@@ -11,8 +11,12 @@ dependencies = [
     "numpy>=1.24.4",
     "scipy>=1.10.1",
     "click>=8.1.7",
-    "equinox>=0.10.4",
+    "equinox>=0.11.8",
     "jaxtyping>=0.2.19",
+    "tqdm>=4.66.5",
+    "matplotlib>=3.9.2",
+    "optax>=0.2.3",
+    "scikit-learn>=1.5.2",
 ]
 readme = "README.md"
 requires-python = ">= 3.8"
@@ -24,9 +28,9 @@ build-backend = "hatchling.build"
 [tool.rye]
 managed = true
 dev-dependencies = [
-    "black>=23.9.1",
     "pytest>=7.4.2",
     "ruff>=0.1.2",
+    "chex>=0.1.87",
 ]
 
 [tool.hatch.metadata]
