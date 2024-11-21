@@ -13,7 +13,7 @@
 ## Installation
 
 ```console
-pip install cvhmax
+pip install git+https://github.com/yuanz271/cvhmax
 ```
 
 ## License
