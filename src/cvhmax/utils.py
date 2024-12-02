@@ -8,7 +8,10 @@ import optax
 import optax.tree_utils as otu
 
 
-def lbfgs_solve(init_params, fun, max_iter=15000, factr=1e12):
+EPS = 1e-6
+
+
+def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
     # argument default values copied from scipy.optimize.fmin_l_bfgs_b
     tol = factr * jnp.finfo(float).eps
 
@@ -47,11 +50,11 @@ def real_repr(c):
 @jax.jit
 def info_repr(y, C, d, R):
     T = y.shape[0]
-    I = C.T @ jnp.linalg.solve(R, C)
-    i = C.T @ jnp.linalg.solve(R, y.T - d)
-    i = i.T
-    I = jnp.tile(I, (T, 1, 1))
-    return i, I
+    J = C.T @ jnp.linalg.solve(R, C)
+    j = C.T @ jnp.linalg.solve(R, y.T - d)
+    j = j.T
+    J = jnp.tile(J, (T, 1, 1))
+    return j, J
 
 
 def conjtrans(x):
@@ -92,7 +95,7 @@ def norm_loading(w, axis=0):
             norm=partial(jnp.linalg.norm, keepdims=True),
             axis=axis,
         )
-    return w / _norm(w)
+    return w / (_norm(w) + EPS)
 
 
 def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: Optional[int]):
