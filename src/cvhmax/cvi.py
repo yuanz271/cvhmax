@@ -1,15 +1,13 @@
 from abc import abstractmethod
-from dataclasses import dataclass, field
 from functools import partial
-from typing import TypedDict
 
 import numpy as np
 from sklearn.decomposition import FactorAnalysis
-from jax import numpy as jnp, random as jrandom, vmap
+import jax
+from jax import numpy as jnp, vmap
 from jax.numpy.linalg import inv, solve, multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from jaxtyping import Array
-import chex
 from equinox import Module
 
 from .utils import info_repr, norm_loading, lbfgs_solve
@@ -42,8 +40,8 @@ class Params(Module):
     #     self.d = jrandom.normal(dkey, shape=(n_obs,))
     #     self.R = jnp.eye(n_obs)
 
-    # def nC(self) -> Array:
-    #     return norm_loading(self.C)
+    def nC(self) -> Array:
+        return norm_loading(self.C)
 
 
 class CVI:
@@ -73,6 +71,7 @@ class CVI:
         pass
 
 
+@jax.jit
 def ridge_estimate(y, m, V, lam=0.1):
     """
     Ridge regression
@@ -113,7 +112,7 @@ class Gaussian(CVI):
     
     @classmethod
     def init_info(cls, params, y, A, Q):
-        C = params.C
+        C = params.nC()
         d = params.d
         R = params.R
         M = params.M
@@ -148,12 +147,7 @@ class Gaussian(CVI):
         return Params(C=C, d=d, R=None, M=mask)
 
 
-# def v2w(v, shape):
-#     w = v.reshape(shape)
-#     d, C = jnp.split(w, [1], axis=1)
-#     return jnp.squeeze(d), C
-
-
+@jax.jit
 def poisson_nell(params, y, m, V, reg=10.):
     C, d = params
     n = y.shape[0]
@@ -169,6 +163,7 @@ def poisson_nell(params, y, m, V, reg=10.):
     return jnp.mean(vmap(_nell)(y, m, V)) + C_reg
 
 
+@jax.jit
 def poisson_cvi_stats(z, Z, y, H, d):
     """
     z = V^-1 m
@@ -202,7 +197,7 @@ class Poisson(CVI):
     def init_info(cls, params, y, A, Q):
         """Initialize pseudo observation
         """
-        C = params.C
+        C = params.nC()
         M = params.M
         H = C @ M
         d = params.d
@@ -218,10 +213,10 @@ class Poisson(CVI):
 
             # predict
             M = solve(A.T, solve(A.T, Ztm1.T).T)
-            C = solve((M + P).T, M.T).T
-            eye = jnp.eye(C.shape[0])
-            L = eye - C
-            Zp = multi_dot((L, M, L.T)) + multi_dot((C, P, C.T))
+            G = solve((M + P).T, M.T).T
+            eye = jnp.eye(G.shape[0])
+            L = eye - G
+            Zp = multi_dot((L, M, L.T)) + multi_dot((G, P, G.T))
             zp = L @ solve(A.T, ztm1)
 
             j, J = poisson_cvi_stats(zp, Zp, yt, H, d)
@@ -247,7 +242,7 @@ class Poisson(CVI):
 
     @classmethod
     def update_readout(cls, params, y, m, V):
-        C = params.C
+        C = params.nC()
         d = params.d
         M = params.M
         R = params.R
@@ -258,7 +253,8 @@ class Poisson(CVI):
 
         (C, d) , _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=m, V=V))
         
-        return Params(C=C, d=d, R=R, M=M)
+        nell = poisson_nell((C, d), y=y, m=m, V=V, reg=0.)
+        return Params(C=C, d=d, R=R, M=M), nell
     
     @classmethod
     def update_pseudo(cls, params, y, z, Z, j, J, lr):
@@ -271,7 +267,7 @@ class Poisson(CVI):
         :param y: observation
         :param lr: learning rate
         """
-        C = params.C
+        C = params.nC()
         M = params.M
         H = C @ M
         d = params.d
@@ -291,7 +287,7 @@ class Poisson(CVI):
         n, n_obs = Y.shape
         V = jnp.tile(jnp.zeros((n_factors, n_factors)), (n, 1, 1))  # dummpy variance
 
-        (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=Y, m=M, V=V), max_iter=1000)
+        (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=Y, m=M, V=V))
 
         return Params(C=C, d=d, R=None, M=mask)
     

@@ -99,46 +99,36 @@ class CVHM:
             zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
-            mV = [
-                (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
-                for zk, Zk in zZ
-            ]
-            m, V = zip(*mV)  # zip(*iterable) is its own inverse
+            m, V = sde2gp(zZ, M)
             
-            params = self.observation.update_readout(params, y, m, V)
-
-            return params, jJ, m, V
+            params, nell = self.observation.update_readout(params, y, m, V)
+            
+            return params, jJ, zZ, m, V, nell
         
-        init_val = em_step(0, (params, jJ, None, None))
-        params, jJ, m, V = jax.lax.fori_loop(1, self.max_iter, em_step, init_val)
-        
-        # for em_it in trange(self.max_iter):
+        carry = (params, jJ, None, None)
+        with trange(self.max_iter) as pbar:
+            for em_it in pbar:
+                carry = em_step(em_it, carry)
+                _, _, _, _, nell = carry
+                pbar.set_postfix({'NELL': f"{nell:.3f}"})
 
-        #     # bidirectional filtering
-        #     # info = [
-        #     #     info_repr(yk, H, d, R) + (z0, Z0) for yk in y
-        #     # ]  # Here's the place that optimize the natural parameters
-        #     # TODO: nat_step for CVI per likelihood
-            
-        #     zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
-        #     # zZ0s = [(z[0], Z[0]) for z, Z in zZ]
-
-        #     # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
-        #     mV = [
-        #         (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
-        #         for zk, Zk in zZ
-        #     ]
-        #     m, V = zip(*mV)  # zip(*iterable) is its own inverse
-            
-        #     params = self.observation.update_readout(params, y, m, V)
-
+        params, jJ, zZ, m, V, _ = carry
         self.params = params
+        self.latent = zZ
         self.posterior = (m, V)
         return self
-    
+        
     def transform(self, y: list[Float[Array, " time obs"]]):
         raise NotImplementedError
     
     def fit_transform(self, y: list[Float[Array, " time obs"]]):
         self.fit(y)
         return self.posterior[0]
+
+
+def sde2gp(zZ, M) -> tuple:
+    mV = [
+        (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
+        for zk, Zk in zZ
+    ]
+    return zip(*mV)  # zip(*iterable) is its own inverse
