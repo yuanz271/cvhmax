@@ -109,7 +109,7 @@ class CVHM:
         with trange(self.max_iter) as pbar:
             for em_it in pbar:
                 carry = em_step(em_it, carry)
-                _, _, _, _, nell = carry
+                _, _, _, _, _, nell = carry
                 pbar.set_postfix({'NELL': f"{nell:.3f}"})
 
         params, jJ, zZ, m, V, _ = carry
