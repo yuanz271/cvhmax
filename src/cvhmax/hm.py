@@ -226,7 +226,7 @@ def ssm_repr(kernelparams, tau):
         kernelparams = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
     """
     # The big K matrix is a block matrix of all the primitive kernels
-    tree_map = partial(jax.tree_map, is_leaf=lambda x: isinstance(x, dict))
+    tree_map = partial(jax.tree.map, is_leaf=lambda x: isinstance(x, dict))
     Afm = tree_map(partial(Af, tau=tau), kernelparams)
     Qfm = tree_map(partial(Qf, tau=tau), kernelparams)
     Abm = tree_map(partial(Ab, tau=tau), kernelparams)
