@@ -36,7 +36,7 @@ def hm(tau: float, *, sigma: float, rho: float, order: int, omega: float):
     return (
         sigma**2
         * jnp.cos(omega * tau)
-        * matern(tau, sigma=sigma, rho=rho, order=order)
+        * matern(tau, rho=rho, order=order)
     )
 
 
