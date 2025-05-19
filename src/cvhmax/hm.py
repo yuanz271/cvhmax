@@ -8,7 +8,7 @@ Hida-Matern Kernel
 # etc.
 from operator import itemgetter
 from dataclasses import dataclass
-from functools import cache, cached_property, partial
+from functools import cached_property, partial
 from typing import Dict
 
 import jax
