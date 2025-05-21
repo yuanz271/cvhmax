@@ -14,25 +14,26 @@ from .utils import info_repr, norm_loading, lbfgs_solve
 
 
 TAU = 1e-6
-MAX_LOGRATE = 7.
+MAX_LOGRATE = 7.0
+
 
 def fa_init(ys, n_components, random_state):
     fa = FactorAnalysis(n_components=n_components, random_state=random_state)
     Y = np.vstack(ys)
     fa.fit(Y)
-    ms= [jnp.array(fa.transform(y)) for y in ys]
+    ms = [jnp.array(fa.transform(y)) for y in ys]
     C = jnp.array(fa.components_.T)
     d = jnp.array(fa.mean_)
-    
+
     return ms, C, d
 
 
 class Params(Module):
     C: Array
     d: Array
-    R: Array
+    R: Array | None
     M: Array
-    
+
     # def initialize(self, n_obs, n_factors, *, random_state):
     #     key = jrandom.key(random_state)
     #     Ckey, dkey = jrandom.split(key)
@@ -46,12 +47,12 @@ class Params(Module):
 
 class CVI:
     @classmethod
-    @abstractmethod    
+    @abstractmethod
     def cvi(cls, *args, **kwargs):
         pass
 
     @classmethod
-    @abstractmethod    
+    @abstractmethod
     def update_readout(cls, *args, **kwargs):
         pass
 
@@ -91,12 +92,12 @@ def ridge_estimate(y, m, V, lam=0.1):
     zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)
     eye = jnp.eye(zz.shape[0])
     w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
-    
+
     r = y - m1 @ w  # (t, y)
     R = r.T @ r / T  # (y, y)
 
     d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
-    
+
     d = jnp.squeeze(d)
     C = C.T
     assert d.shape == (y_dim,)
@@ -109,7 +110,7 @@ class Gaussian(CVI):
     @staticmethod
     def update_pseudo(cls, params, y, z, Z, j, J, lr):
         return j, J
-    
+
     @classmethod
     def init_info(cls, params, y, A, Q):
         C = params.nC()
@@ -120,7 +121,7 @@ class Gaussian(CVI):
         H = C @ M
 
         return info_repr(y, H, d, R)
-    
+
     @staticmethod
     def update_readout(cls, params, y, m, P):
         C, d, R = ridge_estimate(y, m, P)
@@ -131,9 +132,10 @@ class Gaussian(CVI):
     def cvi(cls, params, jJ, y, zZ0, smooth_fun, smooth_args, cvi_iter, lr):
         # observation updates are state independent
         zZ = [
-            smooth_fun(jk, Jk, z0, Z0, *smooth_args) for (jk, Jk), (z0, Z0) in zip(jJ, zZ0)
+            smooth_fun(jk, Jk, z0, Z0, *smooth_args)
+            for (jk, Jk), (z0, Z0) in zip(jJ, zZ0)
         ]
-        
+
         return zZ, jJ
 
     @classmethod
@@ -148,17 +150,19 @@ class Gaussian(CVI):
 
 
 @jax.jit
-def poisson_nell(params, y, m, V, reg=10.):
+def poisson_nell(params, y, m, V, reg=10.0):
     C, d = params
     n = y.shape[0]
-    
+
     def _nell(y_t, m_t, V_t):
         lin = C @ m_t + d
-        quad = jnp.einsum("ni,in->n", C, V_t @ C.T)  # (Y, Z) (T, Z, Z) (Z, Y) -> (T, Y, Y)
+        quad = jnp.einsum(
+            "ni,in->n", C, V_t @ C.T
+        )  # (Y, Z) (T, Z, Z) (Z, Y) -> (T, Y, Y)
         eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
         lam = jnp.exp(eta)
         return jnp.sum(lam - eta * y_t, axis=-1)
-    
+
     C_reg = reg * jnp.linalg.norm(C) / n
     return jnp.mean(vmap(_nell)(y, m, V)) + C_reg
 
@@ -171,16 +175,16 @@ def poisson_cvi_stats(z, Z, y, H, d):
     <=>
     m = Vz = -0.5 * Z^-1 z
     V = -0.5Z^-1
-    """        
+    """
     U, s, V = jnp.linalg.svd(Z)
     Z = multi_dot((U, jnp.diag(s + TAU), U.T))
-    
+
     Zcho = cho_factor(Z)
     m = -0.5 * cho_solve(Zcho, z)  # Vj
 
     lin = H @ m + d
     quad = jnp.einsum("nl, ln -> n", H, -0.5 * cho_solve(Zcho, H.mT))  # CVC'
-    eta =  jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
+    eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
     lam = jnp.exp(eta)
 
     grad_m = (y - lam) @ H
@@ -195,13 +199,12 @@ def poisson_cvi_stats(z, Z, y, H, d):
 class Poisson(CVI):
     @classmethod
     def init_info(cls, params, y, A, Q):
-        """Initialize pseudo observation
-        """
+        """Initialize pseudo observation"""
         C = params.nC()
         M = params.M
         H = C @ M
         d = params.d
-        
+
         d_z = Q.shape[0]
         z0 = jnp.zeros(d_z)
         Z0 = P = inv(Q)
@@ -226,7 +229,7 @@ class Poisson(CVI):
             Zt = 0.5 * (Zt + Zt.mT)
 
             return (zt, Zt), (j, J)
-        
+
         ztm1 = z0
         Ztm1 = Z0
         j = []
@@ -246,16 +249,16 @@ class Poisson(CVI):
         d = params.d
         M = params.M
         R = params.R
-        
+
         y = jnp.concatenate(y, axis=0)
         m = jnp.concatenate(m, axis=0)
         V = jnp.concatenate(V, axis=0)
 
-        (C, d) , _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=m, V=V))
-        
-        nell = poisson_nell((C, d), y=y, m=m, V=V, reg=0.)
-        return Params(C=C, d=d, R=R, M=M), nell
-    
+        (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=m, V=V))  # type: ignore
+
+        nell = poisson_nell((C, d), y=y, m=m, V=V, reg=0.0)
+        return Params(C=C, d=d, R=R, M=M), nell  # type: ignore
+
     @classmethod
     def update_pseudo(cls, params, y, z, Z, j, J, lr):
         """
@@ -271,14 +274,14 @@ class Poisson(CVI):
         M = params.M
         H = C @ M
         d = params.d
-        
+
         dj, dJ = vmap(partial(poisson_cvi_stats, H=H, d=d))(z, Z, y)
 
         j = (1 - lr) * j + lr * dj
         J = (1 - lr) * J + lr * dJ
-        
+
         return j, J
-    
+
     @classmethod
     def initialize_params(cls, ys, n_factors, mask, *, random_state):
         ms, C, d = fa_init(ys, n_factors, random_state)
@@ -287,18 +290,22 @@ class Poisson(CVI):
         n, n_obs = Y.shape
         V = jnp.tile(jnp.zeros((n_factors, n_factors)), (n, 1, 1))  # dummpy variance
 
-        (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=Y, m=M, V=V))
+        (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=Y, m=M, V=V))  # type: ignore
 
-        return Params(C=C, d=d, R=None, M=mask)
-    
+        return Params(C=C, d=d, R=None, M=mask)  # type: ignore
+
     @classmethod
     def cvi(cls, params, jJ, y, zZ0, smooth_fun, smooth_args, cvi_iter, lr):
         for cv_it in range(cvi_iter):
             # print(f"\n{cv_it=}")
             zZ = [
-                smooth_fun(jk, Jk, z0, Z0, *smooth_args) for (jk, Jk), (z0, Z0) in zip(jJ, zZ0)
+                smooth_fun(jk, Jk, z0, Z0, *smooth_args)
+                for (jk, Jk), (z0, Z0) in zip(jJ, zZ0)
             ]
 
-            jJ = [cls.update_pseudo(params, yk, zk, Zk, jk, Jk, lr) for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)]
-        
+            jJ = [
+                cls.update_pseudo(params, yk, zk, Zk, jk, Jk, lr)
+                for (zk, Zk), yk, (jk, Jk) in zip(zZ, y, jJ)
+            ]
+
         return zZ, jJ

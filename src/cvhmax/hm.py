@@ -1,6 +1,7 @@
 """
 Hida-Matern Kernel
 """
+
 # Only polynomial of integer order p for Matern kernels
 # 1/2 -> p=0
 # 3/2 -> p=1
@@ -12,9 +13,7 @@ from functools import cached_property, partial
 from typing import Dict
 
 import jax
-from jax import nn
 import jax.numpy as jnp
-import jax.scipy as jsp
 import numpy as np
 
 from cvhmax.utils import gamma
@@ -33,11 +32,7 @@ def matern(tau: float, *, rho: float, order: int):
 def hm(tau: float, *, sigma: float, rho: float, order: int, omega: float):
     """General HM kernel"""
     # cos(t) == cos(-t)
-    return (
-        sigma**2
-        * jnp.cos(omega * tau)
-        * matern(tau, rho=rho, order=order)
-    )
+    return sigma**2 * jnp.cos(omega * tau) * matern(tau, rho=rho, order=order)
 
 
 def Ks0(tau, sigma, rho, omega):
@@ -167,7 +162,7 @@ class HidaMatern:
 
 
 def Ks(kernelparam, tau):
-    sigma, rho, omega, order = itemgetter('sigma', 'rho', 'omega', 'order')(kernelparam)
+    sigma, rho, omega, order = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
     if order == 0:
         return Ks0(tau, sigma, rho, omega)
     elif order == 1:
@@ -178,7 +173,7 @@ def Ks(kernelparam, tau):
 
 def Af(kernelparam, tau):
     Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.)
+    K0 = Ks(kernelparam, 0.0)
     A = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))  # K(t)K(0)^-1
     return A
 
@@ -188,7 +183,7 @@ def Qf(kernelparam, tau):
     Forward dynamics state noise covariance
     """
     Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.)
+    K0 = Ks(kernelparam, 0.0)
     Q = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))  # K(0) - K(t) K(0)^-1 K(t)'
     return Q
 
@@ -198,7 +193,7 @@ def Ab(kernelparam, tau):
     Backward dynamics transition
     """
     Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.)
+    K0 = Ks(kernelparam, 0.0)
     A = conjtrans(jnp.linalg.solve(conjtrans(K0), Kt))  # K(t)'K(0)^-1
     return A
 
@@ -208,7 +203,7 @@ def Qb(kernelparam, tau):
     Backward dynamics state noise covariance
     """
     Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.)
+    K0 = Ks(kernelparam, 0.0)
     Q = K0 - conjtrans(Kt) @ jnp.linalg.solve(K0, Kt)  # K(0) - K(t)' K(0)^-1 K(t)
     return Q
 
@@ -231,7 +226,7 @@ def ssm_repr(kernelparams, tau):
     Qfm = tree_map(partial(Qf, tau=tau), kernelparams)
     Abm = tree_map(partial(Ab, tau=tau), kernelparams)
     Qbm = tree_map(partial(Qb, tau=tau), kernelparams)
-    
+
     return Afm, Qfm, Abm, Qbm
 
 
@@ -241,17 +236,19 @@ def spectral_density(kernel_spec: Dict, freq):
     param kernel_spec: kernel specification
     param freq: frequencies that are calculated at
     """
-    sigma, rho, omega, p = itemgetter('sigma', 'rho', 'omega', 'order')(kernel_spec)
+    sigma, rho, omega, p = itemgetter("sigma", "rho", "omega", "order")(kernel_spec)
 
     # spectral density on R^1
     f_b = omega / (2 * jnp.pi)  # 2*pi*f = omega
     nu = p + 0.5
-    num_c = sigma**2 * 2 * jnp.sqrt(jnp.pi) * gamma(nu + 0.5) * (2*nu)**nu
-    den_c = gamma(nu) * rho**(2*nu)
+    num_c = sigma**2 * 2 * jnp.sqrt(jnp.pi) * gamma(nu + 0.5) * (2 * nu) ** nu
+    den_c = gamma(nu) * rho ** (2 * nu)
     c = num_c / den_c
 
-    s_pos_f = (2 * nu / rho ** 2 + 4 * jnp.pi**2 * (freq - f_b) ** 2) ** (-(nu + 0.5))
-    s_pos_f_neg = (2 * nu / rho ** 2 + 4 * jnp.pi**2 * (-freq - f_b) ** 2) ** (-(nu + 0.5))
+    s_pos_f = (2 * nu / rho**2 + 4 * jnp.pi**2 * (freq - f_b) ** 2) ** (-(nu + 0.5))
+    s_pos_f_neg = (2 * nu / rho**2 + 4 * jnp.pi**2 * (-freq - f_b) ** 2) ** (
+        -(nu + 0.5)
+    )
     s = c * (s_pos_f + s_pos_f_neg)
 
     return s
@@ -260,7 +257,7 @@ def spectral_density(kernel_spec: Dict, freq):
 def sample_matern(n, dt, sigma, rho):
     t = np.arange(n) * dt
     D = np.abs(t[None, :] - t[:, None])
-    K = sigma ** 2 * np.exp(- D/rho)
+    K = sigma**2 * np.exp(-D / rho)
     L = np.linalg.cholesky(K)
     z = np.random.randn(n)
     x = L @ z

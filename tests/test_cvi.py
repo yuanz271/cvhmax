@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 from jax import numpy as jnp
 from cvhmax.cvi import Params, poisson_cvi_stats, Poisson
@@ -10,10 +9,10 @@ def dimensions():
 
 
 def test_poisson_cvi_stats():
-    N, L= dimensions()
+    N, L = dimensions()
 
     j = jnp.zeros(L)
-    J = - jnp.eye(L)
+    J = -jnp.eye(L)
     y = jnp.zeros(N)
     C = jnp.ones((N, L))
     d = jnp.ones(N)
@@ -29,7 +28,7 @@ def test_Poisson(capsys):
     y = jnp.array(rng.poisson(5, size=(T, N)))
     C = jnp.ones((N, L))
     d = jnp.ones(N)
-    
+
     A = jnp.eye(L)
     Q = jnp.eye(L)
 
@@ -40,12 +39,12 @@ def test_Poisson(capsys):
 
     j, J = Poisson.init_info(params, y, A, Q)
     chex.assert_shape([j, J], [(T, L), (T, L, L)])
-    
+
     m = jnp.array(rng.normal(size=(T, L)))
     V = jnp.stack([jnp.eye(L)] * T)
     params = Poisson.update_readout(params, y, m, V)
-    
+
     z = jnp.zeros((T, L))
-    Z= jnp.stack([jnp.eye(L)] * T)
+    Z = jnp.stack([jnp.eye(L)] * T)
     j, J = Poisson.update_pseudo(params, z, Z, j, J, y, 0.1)
     chex.assert_shape([j, J], [(T, L), (T, L, L)])

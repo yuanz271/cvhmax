@@ -22,6 +22,7 @@ Z[k] = Z[k|k-1] + J[k]
 z[k] = z[k|k-1] + j[k]
 
 """
+
 import functools
 
 import jax
