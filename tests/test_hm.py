@@ -1,26 +1,24 @@
-from jax import numpy as jnp
 from jax import tree_util
+
 # import equinox as eqx
 import numpy as np
-import matplotlib.pyplot as plt
 import pytest
 
 from cvhmax import hm
-from cvhmax.utils import conjtrans
 
 
 def test_HidaMatern():
-    kernel = hm.HidaMatern(1., 1., 0., 0)
+    kernel = hm.HidaMatern(1.0, 1.0, 0.0, 0)
 
-    K0 = kernel.K(0.)
+    K0 = kernel.K(0.0)
     assert K0.shape == (1, 1)
 
-    dt = 1.
-    
-    A = kernel.Af(dt)
-    Q = kernel.Qf(dt)
-    Ab = kernel.Ab(dt)
-    Qb = kernel.Qb(dt)
+    dt = 1.0
+
+    kernel.Af(dt)
+    kernel.Qf(dt)
+    kernel.Ab(dt)
+    kernel.Qb(dt)
 
 
 # def test_composite():
@@ -44,20 +42,26 @@ def test_HidaMatern():
 
 
 def test_Ks():
-    kernelparam = {'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}
-    hm.Ks(kernelparam, 1.)
+    kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0}
+    hm.Ks(kernelparam, 1.0)
 
-    kernelparam = {'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}
-    hm.Ks(kernelparam, 1.)
+    kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}
+    hm.Ks(kernelparam, 1.0)
 
-    kernelparam = {'sigma': 1., 'rho': 1., 'omega': 0., 'order': 2}
+    kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 2}
     with pytest.raises(NotImplementedError):
-        hm.Ks(kernelparam, 1.)
+        hm.Ks(kernelparam, 1.0)
 
 
 def test_ssm_repr():
-    dt = 1.
-    kernelparams = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
+    dt = 1.0
+    kernelparams = [
+        [{"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}],
+        [
+            {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0},
+            {"sigma": 1.0, "rho": 1.0, "omega": 1.0, "order": 1},
+        ],
+    ]
     Af, Qf, Ab, Qb = hm.ssm_repr(kernelparams, dt)
     # eqx.tree_pprint(Af)
     paramflat, paramdef = tree_util.tree_flatten(Af)
@@ -65,7 +69,13 @@ def test_ssm_repr():
 
 
 def test_mask():
-    kernelparams = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
+    kernelparams = [
+        [{"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}],
+        [
+            {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0},
+            {"sigma": 1.0, "rho": 1.0, "omega": 1.0, "order": 1},
+        ],
+    ]
     M = hm.latent_mask(kernelparams)
     print(M)
 
@@ -76,7 +86,7 @@ def make_mask():
     lat_dim = len(gp_dimensions)
     ssm_order = sum(sum(gp_dimensions, []))
     H = np.zeros((lat_dim, 2 * ssm_order))
-    
+
     for i, ldims in enumerate(gp_dimensions):
         for j, gp_dim in enumerate(ldims):
             H[i, dx] = 1

@@ -1,17 +1,15 @@
-from collections.abc import Iterable
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 import secrets
-from typing import ClassVar
 
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
 from jaxtyping import Float, Array
-from tqdm import trange
 
 from . import cvi
 from .cvi import CVI, Params
-from .utils import real_repr, symm
+from .utils import real_repr, symm, training_progress
 from .filtering import bifilter
 
 
@@ -19,16 +17,18 @@ from .filtering import bifilter
 class CVHM:
     n_components: int
     dt: float
-    kernels: None
-    params: Params = field(default=None)
+    kernels: Sequence
+    params: Params | None = field(default=None)
     likelihood: str = field(default="Gaussian")
     lr: float = field(default=0.1)
     # nat_step: Callable  # natural param
     # m_step: Callable  # M step
-    observation: ClassVar[CVI] = field(init=False)
+    observation: type[CVI] = field(init=False)
     max_iter: int = field(default=10)
     cvi_iter: int = field(default=3)
-    posterior: tuple[list[Float[Array, " time latent"]], list[Float[Array, " time latent latent"]]] = field(init=False)
+    posterior: tuple[
+        list[Float[Array, " time latent"]], list[Float[Array, " time latent latent"]]
+    ] = field(init=False)
 
     def __post_init__(self):
         self.observation = getattr(cvi, self.likelihood)
@@ -67,11 +67,13 @@ class CVHM:
         if not isinstance(y, list):
             y = [y]
         # self.params.populate(y, self.n_factors)
-        
+
         if random_state is None:
             random_state = secrets.randbits(32)
 
-        self.params = self.observation.initialize_params(y, self.n_components, self.mask(), random_state=random_state)
+        self.params = self.observation.initialize_params(
+            y, self.n_components, self.mask(), random_state=random_state
+        )
 
         params = self.params
 
@@ -96,49 +98,55 @@ class CVHM:
             params, jJ, *_ = carry
             M = params.M
 
-            zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
+            zZ, jJ = self.observation.cvi(
+                params,
+                jJ,
+                y,
+                zZ0s,
+                smooth_fun=bifilter,
+                smooth_args=(Af, Pf, Ab, Pb),
+                cvi_iter=self.cvi_iter,
+                lr=self.lr,
+            )  # type: ignore
 
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
-            mV = [
-                (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
-                for zk, Zk in zZ
-            ]
-            m, V = zip(*mV)  # zip(*iterable) is its own inverse
-            
-            params = self.observation.update_readout(params, y, m, V)
+            m, V = sde2gp(zZ, M)
 
-            return params, jJ, m, V
-        
-        init_val = em_step(0, (params, jJ, None, None))
-        params, jJ, m, V = jax.lax.fori_loop(1, self.max_iter, em_step, init_val)
-        
-        # for em_it in trange(self.max_iter):
+            params, nell = self.observation.update_readout(params, y, m, V)  # type: ignore
 
-        #     # bidirectional filtering
-        #     # info = [
-        #     #     info_repr(yk, H, d, R) + (z0, Z0) for yk in y
-        #     # ]  # Here's the place that optimize the natural parameters
-        #     # TODO: nat_step for CVI per likelihood
-            
-        #     zZ, jJ = self.observation.cvi(params, jJ, y, zZ0s, smooth_fun=bifilter, smooth_args=(Af, Pf, Ab, Pb), cvi_iter=self.cvi_iter, lr=self.lr)
-        #     # zZ0s = [(z[0], Z[0]) for z, Z in zZ]
+            return params, jJ, zZ, m, V, nell
 
-        #     # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
-        #     mV = [
-        #         (jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T, M @ jnp.linalg.inv(Zk) @ M.T)
-        #         for zk, Zk in zZ
-        #     ]
-        #     m, V = zip(*mV)  # zip(*iterable) is its own inverse
-            
-        #     params = self.observation.update_readout(params, y, m, V)
+        carry = (params, jJ, None, None)
+        # with trange(self.max_iter) as pbar:
+        with training_progress() as pbar:
+            task_id = pbar.add_task("Training", total=self.max_iter, nell=jnp.nan)
+            for em_it in range(self.max_iter):
+                carry = em_step(em_it, carry)
+                _, _, _, _, _, nell = carry
+                jax.debug.callback(
+                    lambda x: pbar.update(task_id, advance=1, nell=x), nell
+                )
 
+        params, jJ, zZ, m, V, _ = carry  # type: ignore
         self.params = params
-        self.posterior = (m, V)
+        self.latent = zZ
+        self.posterior = (m, V)  # type: ignore
         return self
-    
+
     def transform(self, y: list[Float[Array, " time obs"]]):
         raise NotImplementedError
-    
+
     def fit_transform(self, y: list[Float[Array, " time obs"]]):
         self.fit(y)
         return self.posterior[0]
+
+
+def sde2gp(zZ, M) -> tuple[list[Array], list[Array]]:
+    mV = [
+        (
+            jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T,
+            M @ jnp.linalg.inv(Zk) @ M.T,
+        )
+        for zk, Zk in zZ
+    ]
+    return zip(*mV)  # type: ignore # zip(*iterable) is its own inverse
