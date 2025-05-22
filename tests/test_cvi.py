@@ -32,19 +32,20 @@ def test_Poisson(capsys):
     A = jnp.eye(L)
     Q = jnp.eye(L)
 
-    params = Params()
-    params.C = C
-    params.d = d
-    params.M = jnp.eye(L)
+    params = Params(C=C, d=d, R=None, M=jnp.eye(L))
 
     j, J = Poisson.init_info(params, y, A, Q)
     chex.assert_shape([j, J], [(T, L), (T, L, L)])
 
     m = jnp.array(rng.normal(size=(T, L)))
     V = jnp.stack([jnp.eye(L)] * T)
-    params = Poisson.update_readout(params, y, m, V)
+
+    chex.assert_equal_shape((y, m, V), dims=0)
+    params, nell = Poisson.update_readout(params, y, m, V)
 
     z = jnp.zeros((T, L))
     Z = jnp.stack([jnp.eye(L)] * T)
-    j, J = Poisson.update_pseudo(params, z, Z, j, J, y, 0.1)
+    chex.assert_equal_shape((z, Z, j, J, y), dims=0)
+    chex.assert_shape((z, Z), ((T, L), (T, L, L)))
+    j, J = Poisson.update_pseudo(params, y, z, Z, j, J, 0.1)
     chex.assert_shape([j, J], [(T, L), (T, L, L)])
