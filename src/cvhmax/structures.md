@@ -1,6 +1,0 @@
-- observation: List[trial]
-    - trial: Array(T, obs)
-- latent: List[trial]
-    - trial: Tuple(m, V)
-    - m: Array(T, lat)  # posterior mean
-    - V: Array(T, lat, lat)  # posterior covariance
