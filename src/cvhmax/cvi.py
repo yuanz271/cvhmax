@@ -8,7 +8,7 @@ from jax import numpy as jnp, vmap
 from jax.numpy.linalg import inv, solve, multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from jaxtyping import Array
-from equinox import Module, field
+from equinox import Module, field, filter_jit
 
 from .utils import info_repr, norm_loading, lbfgs_solve
 
@@ -148,6 +148,7 @@ class Gaussian(CVI):
         return Params(C=C, d=d, R=None, M=mask)
 
 
+@filter_jit
 def poisson_nell(params, y, m, V, gamma=10.0):
     """
     :param gamma: regularization
@@ -168,6 +169,7 @@ def poisson_nell(params, y, m, V, gamma=10.0):
     return jnp.mean(vmap(_nell)(y, m, V)) + C_reg
 
 
+@filter_jit
 def poisson_cvi_stats(z, Z, y, H, d):
     """
     z = V^-1 m
@@ -249,6 +251,10 @@ class Poisson(CVI):
         d = params.d
         M = params.M
         R = params.R
+
+        y = jnp.vstack(y)
+        m = jnp.vstack(m)
+        V = jnp.vstack(V)
         
         (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=m, V=V))  # type: ignore
 

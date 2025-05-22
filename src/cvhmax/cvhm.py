@@ -62,7 +62,7 @@ class CVHM:
 
         return M
 
-    def fit(self, y: list[Float[Array, " time obs"]], *, random_state=None):
+    def fit(self, y: Float[Array, " time obs"] | list[Float[Array, " time obs"]], *, random_state=None):
         # check y
         if not isinstance(y, list):
             y = [y]
@@ -89,7 +89,7 @@ class CVHM:
         z0 = jnp.zeros(Af.shape[0])
         Z0 = jnp.linalg.inv(Q0)
 
-        zZ0s = [(z0, Z0) for _ in y]  # stationary distribution
+        zZ0 = [(z0, Z0) for _ in y]  # stationary distribution
         # Af = Af + 1e-3 * jnp.eye(Af.shape[0])
 
         jJ = [self.observation.init_info(params, yk, Af, Qf) for yk in y]
@@ -102,7 +102,7 @@ class CVHM:
                 params,
                 jJ,
                 y,
-                zZ0s,
+                zZ0,
                 smooth_fun=bifilter,
                 smooth_args=(Af, Pf, Ab, Pb),
                 cvi_iter=self.cvi_iter,

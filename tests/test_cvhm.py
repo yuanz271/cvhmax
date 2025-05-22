@@ -41,7 +41,8 @@ def test_CVHM(capsys):
 
     assert m.shape == (T, n_factors)
     assert V.shape == (T, n_factors, n_factors)
-
+    
+    m = np.asarray(m)
     m = LinearRegression().fit(m, x).predict(m)
 
     fig, axs = plt.subplots(2, 2)
