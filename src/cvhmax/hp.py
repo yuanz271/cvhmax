@@ -70,7 +70,7 @@ def spectral_loss(paramflat, paramdef, static, spectral_density, m, V, dt, clip=
 
     freq = jnp.fft.rfftfreq(T, d=dt)  # DFT sample frequencies
 
-    log_p_s = jax.tree_map(
+    log_p_s = jax.tree.map(
         partial(kernel_loss, freq=freq),
         latent_spec,
         is_leaf=lambda x: isinstance(x, dict),
