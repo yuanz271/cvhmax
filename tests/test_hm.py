@@ -4,7 +4,7 @@ from jax import tree_util
 import numpy as np
 import pytest
 
-from cvhmax import hm
+from cvhmax import hm, utils
 
 
 def test_HidaMatern():
@@ -76,7 +76,7 @@ def test_mask():
             {"sigma": 1.0, "rho": 1.0, "omega": 1.0, "order": 1},
         ],
     ]
-    M = hm.latent_mask(kernelparams)
+    M = utils.latent_mask(kernelparams)
     print(M)
 
 
