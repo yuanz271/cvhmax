@@ -39,13 +39,15 @@ def test_Poisson(capsys):
 
     m = jnp.array(rng.normal(size=(T, L)))
     V = jnp.stack([jnp.eye(L)] * T)
+    
+    with capsys.disabled():
+        chex.assert_equal_shape((y, m, V), dims=0)
+        print(f"{y.shape=} {m.shape=}, {V.shape=}")
+        params, nell = Poisson.update_readout(params, [y], [m], [V])
 
-    chex.assert_equal_shape((y, m, V), dims=0)
-    params, nell = Poisson.update_readout(params, y, m, V)
-
-    z = jnp.zeros((T, L))
-    Z = jnp.stack([jnp.eye(L)] * T)
-    chex.assert_equal_shape((z, Z, j, J, y), dims=0)
-    chex.assert_shape((z, Z), ((T, L), (T, L, L)))
-    j, J = Poisson.update_pseudo(params, y, z, Z, j, J, 0.1)
-    chex.assert_shape([j, J], [(T, L), (T, L, L)])
+        z = jnp.zeros((T, L))
+        Z = jnp.stack([jnp.eye(L)] * T)
+        chex.assert_equal_shape((z, Z, j, J, y), dims=0)
+        chex.assert_shape((z, Z), ((T, L), (T, L, L)))
+        j, J = Poisson.update_pseudo(params, y, z, Z, j, J, 0.1)
+        chex.assert_shape([j, J], [(T, L), (T, L, L)])
