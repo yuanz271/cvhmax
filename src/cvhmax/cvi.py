@@ -4,11 +4,11 @@ from functools import partial
 import numpy as np
 from sklearn.decomposition import FactorAnalysis
 
-from jax import numpy as jnp, vmap
+from jax import lax, numpy as jnp, vmap
 from jax.numpy.linalg import inv, solve, multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from jaxtyping import Array
-from equinox import Module, field, filter_jit
+from equinox import Module, filter_jit
 
 from .utils import info_repr, norm_loading, lbfgs_solve
 
@@ -32,7 +32,7 @@ class Params(Module):
     C: Array
     d: Array
     R: Array | None
-    M: Array = field(static=True)
+    M: Array
 
     # def initialize(self, n_obs, n_factors, *, random_state):
     #     key = jrandom.key(random_state)
@@ -43,6 +43,9 @@ class Params(Module):
 
     def nC(self) -> Array:
         return norm_loading(self.C)
+    
+    def lmask(self) -> Array:
+        return lax.stop_gradient(self.M)
 
 
 class CVI:
@@ -115,7 +118,7 @@ class Gaussian(CVI):
         C = params.nC()
         d = params.d
         R = params.R
-        M = params.M
+        M = params.lmask()
 
         H = C @ M
 
@@ -148,7 +151,7 @@ class Gaussian(CVI):
         return Params(C=C, d=d, R=None, M=mask)
 
 
-@filter_jit
+# @filter_jit
 def poisson_nell(params, y, m, V, gamma=10.0):
     """
     :param gamma: regularization
@@ -156,7 +159,7 @@ def poisson_nell(params, y, m, V, gamma=10.0):
     C, d = params
     n = y.shape[0]
 
-    def _nell(y_t, m_t, V_t):
+    def bin_nell(y_t, m_t, V_t):
         lin = C @ m_t + d
         quad = jnp.einsum(
             "ni,in->n", C, V_t @ C.T
@@ -166,10 +169,10 @@ def poisson_nell(params, y, m, V, gamma=10.0):
         return jnp.sum(lam - eta * y_t, axis=-1)
 
     C_reg = gamma * jnp.linalg.norm(C) / n
-    return jnp.mean(vmap(_nell)(y, m, V)) + C_reg
+    return jnp.mean(vmap(bin_nell)(y, m, V)) + C_reg
 
 
-@filter_jit
+# @filter_jit
 def poisson_cvi_stats(z, Z, y, H, d):
     """
     z = V^-1 m
@@ -203,7 +206,7 @@ class Poisson(CVI):
     def init_info(cls, params: Params, y, A, Q):
         """Initialize pseudo observation"""
         C = params.nC()
-        M = params.M
+        M = params.lmask()
         H = C @ M
         d = params.d
 
@@ -249,17 +252,18 @@ class Poisson(CVI):
     def update_readout(cls, params: Params, y, m, V):
         C = params.nC()
         d = params.d
-        M = params.M
         R = params.R
 
         y = jnp.vstack(y)
         m = jnp.vstack(m)
         V = jnp.vstack(V)
+
+        print(f"{y.shape=} {m.shape=}, {V.shape=}")
         
         (C, d), _ = lbfgs_solve((C, d), partial(poisson_nell, y=y, m=m, V=V))  # type: ignore
 
         nell = poisson_nell((C, d), y=y, m=m, V=V, gamma=0.0)
-        return Params(C=C, d=d, R=R, M=M), nell  # type: ignore
+        return Params(C=C, d=d, R=R, M=params.M), nell  # type: ignore
 
     @classmethod
     def update_pseudo(cls, params: Params, y, z, Z, j, J, lr):
@@ -273,7 +277,7 @@ class Poisson(CVI):
         :param lr: learning rate
         """
         C = params.nC()
-        M = params.M
+        M = params.lmask()
         H = C @ M
         d = params.d
         k, K = vmap(partial(poisson_cvi_stats, H=H, d=d))(z, Z, y)

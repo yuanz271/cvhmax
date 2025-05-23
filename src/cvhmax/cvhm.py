@@ -96,7 +96,7 @@ class CVHM:
 
         def em_step(iter, carry):
             params, jJ, *_ = carry
-            M = params.M
+            M = params.lmask()
 
             zZ, jJ = self.observation.cvi(
                 params,
