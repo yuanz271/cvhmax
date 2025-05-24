@@ -31,6 +31,7 @@ def test_CVHM(capsys):
 
     y = np.random.poisson(np.exp(x @ C.T + np.expand_dims(d, 0)))
     y = jnp.array(y, dtype=float)
+    y = jnp.expand_dims(y, 0)
 
     with capsys.disabled():
         model = CVHM(n_factors, dt, kernels, max_iter=2, likelihood="Poisson")

@@ -49,7 +49,7 @@ def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
         continuing_criterion, step, init_carry
     )
 
-    return final_params, final_params
+    return final_params
 
 
 def symm(x):
@@ -60,13 +60,17 @@ def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
-@jax.jit
-def info_repr(y, C, d, R):
+def trial_info_repr(y: Array, ymask: Array, C: Array, d: Array, R: Array) -> tuple[Array, Array]:
     T = y.shape[0]
+
     J = C.T @ jnp.linalg.solve(R, C)
     j = C.T @ jnp.linalg.solve(R, y.T - d)
     j = j.T
     J = jnp.tile(J, (T, 1, 1))
+
+    j: Array = jnp.where(jnp.expand_dims(ymask, -1), j, 0)  # broadcastable mask
+    # J: Array = jnp.where(jnp.expand_dims(ymask, (-2, -1)), J, 0)
+
     return j, J
 
 
@@ -135,3 +139,41 @@ def training_progress():
         "Negative ELL",
         TextColumn("{task.fields[nell]:.3f}"),
     )
+
+
+def ridge_estimate(y, m, V, lam=0.1):
+    """
+    Ridge regression
+    w = (z'z + lamI)^-1 z'y
+    """
+    y = jnp.vstack(y)
+    m = jnp.vstack(m)
+
+    T, y_dim = y.shape
+    _, z_dim = m.shape
+
+    m1 = jnp.column_stack([jnp.ones((T, 1)), m])
+
+    assert m1.shape == (T, z_dim + 1)
+
+    zy = m1.T @ y  # (z + 1, t) (t, y) -> (z + 1, y)
+    zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)
+    eye = jnp.eye(zz.shape[0])
+    w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
+
+    r = y - m1 @ w  # (t, y)
+    R = r.T @ r / T  # (y, y)
+
+    d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
+
+    d = jnp.squeeze(d)
+    C = C.T
+    assert d.shape == (y_dim,)
+    assert C.shape == (y_dim, z_dim)
+
+    return C, d, R
+
+
+def filter_array(arr: Array, mask: Array) -> Array:
+    """Filter array leading axes by a less-or-equal rank mask array"""
+    return arr[mask > 0]
