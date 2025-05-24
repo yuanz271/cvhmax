@@ -1,7 +1,10 @@
 from functools import partial
+
 import numpy as np
-from jax import vmap
+from jax import random as jrnd, vmap
 import jax.numpy as jnp
+import chex
+
 from cvhmax import utils
 
 
@@ -32,8 +35,20 @@ def test_lbfgs(capsys):
 
     with capsys.disabled():
         params = (jnp.array(rng.normal(size=(N, L)) / N), jnp.zeros(N))
-        params, _ = utils.lbfgs_solve(
+        params = utils.lbfgs_solve(
             params, partial(poisson_nell, y=y, m=x), max_iter=15000
         )
         print(params)
         print(C, d)
+
+
+def test_filter_array(capsys):
+    S = 10
+    T = 50
+    D = 5
+    y = jrnd.normal(jrnd.key(0), shape=(S, T, D))
+    ymask = jrnd.bernoulli(jrnd.key(1), shape=(S, T))
+
+    filtered = utils.filter_array(y, ymask)
+    chex.assert_shape(filtered, (ymask.sum(), D))
+

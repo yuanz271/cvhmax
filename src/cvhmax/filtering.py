@@ -23,10 +23,9 @@ z[k] = z[k|k-1] + j[k]
 
 """
 
-import functools
+from functools import partial
 
-import jax
-import jax.numpy as jnp
+from jax import lax, numpy as jnp
 from jax.numpy.linalg import multi_dot, solve
 from jaxtyping import Float, Array
 
@@ -86,8 +85,8 @@ def information_filter(
     :param F: transition matrix
     :param P: state noise precision matrix
     """
-    _, ret = jax.lax.scan(
-        functools.partial(information_filter_step, F=F, P=P),
+    _, ret = lax.scan(
+        partial(information_filter_step, F=F, P=P),
         init=init,
         xs=measure,
         reverse=reverse,
@@ -96,8 +95,7 @@ def information_filter(
     return ret
 
 
-@jax.jit
-def bifilter(j, J, z0, Z0, Af, Pf, Ab, Pb):
+def bifilter(j, J, z0, Z0, Af, Pf, Ab, Pb) -> tuple[Array, Array]:
     """Bidirectional filtering"""
     # Forward
     zpf, Zpf, zf, Zf = information_filter((z0, Z0), (j, J), Af, Pf)

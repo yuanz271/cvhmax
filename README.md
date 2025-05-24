@@ -7,23 +7,26 @@
 
 **Table of Contents**
 
-- [Data structure](#data-structure)
 - [Installation](#installation)
+- [Data structure](#data-structure)
 - [License](#license)
-
-## Data structure
-- observation: List[trial]
-    - trial: Array(T, obs)
-- latent: List[trial]
-    - trial: Tuple(m, V)
-    - m: Array(T, lat)  # posterior mean
-    - V: Array(T, lat, lat)  # posterior covariance
 
 ## Installation
 
 ```console
 pip install git+https://github.com/yuanz271/cvhmax
 ```
+
+## Data structure
+
+- observation
+    - y: observation, Array(trial, bin, obs dim)
+    - ymask: missing value mask, Array(trial, bin, obs dim)
+        - 0: missing, 1: normal
+        - pad unequal trials with missing values
+- latent
+    - m: posterior mean, Array(trial, bin, lat dim)
+    - V: posterior covariance, Array(trial, bin, lat dim)
 
 ## License
 
