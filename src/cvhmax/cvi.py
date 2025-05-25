@@ -243,10 +243,10 @@ class Poisson(CVI):
         :param params: readout
         :param y: observation
         :param ymask: missing mask (0: missing, 1: normal)
-        :param z: 1st posterior natural param of latent
-        :param Z: 2nd posterior natural param of latent
-        :param j: 1st natural param of posterior pseudo observation
-        :param J: 2nd natural param of posterior pseudo observation
+        :param z: latent's 1st posterior natural param
+        :param Z: latent's 2nd posterior natural param
+        :param j: update to 1st natural param
+        :param J: update to 2nd natural param 
         :param lr: learning rate
         """
         C = params.loading()
