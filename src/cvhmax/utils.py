@@ -18,9 +18,9 @@ from rich.progress import (
 EPS = 1e-6
 
 
-def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
+def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
     # argument default values copied from scipy.optimize.fmin_l_bfgs_b
-    tol = factr * jnp.finfo(float).eps
+    tol = tfactor * jnp.finfo(float).eps
 
     # opt = optax.lbfgs(linesearch=optax.scale_by_backtracking_linesearch(max_backtracking_steps=15))
     opt = optax.lbfgs(
@@ -60,7 +60,9 @@ def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
-def trial_info_repr(y: Array, ymask: Array, C: Array, d: Array, R: Array) -> tuple[Array, Array]:
+def trial_info_repr(
+    y: Array, ymask: Array, C: Array, d: Array, R: Array
+) -> tuple[Array, Array]:
     T = y.shape[0]
 
     J = C.T @ jnp.linalg.solve(R, C)
@@ -141,13 +143,11 @@ def training_progress():
     )
 
 
-def ridge_estimate(y, m, V, lam=0.1):
+def ridge_estimate(y, ymask, m, V, lam=0.1):
     """
     Ridge regression
     w = (z'z + lamI)^-1 z'y
     """
-    y = jnp.vstack(y)
-    m = jnp.vstack(m)
 
     T, y_dim = y.shape
     _, z_dim = m.shape
@@ -155,6 +155,10 @@ def ridge_estimate(y, m, V, lam=0.1):
     m1 = jnp.column_stack([jnp.ones((T, 1)), m])
 
     assert m1.shape == (T, z_dim + 1)
+
+    ymask = jnp.expand_dims(ymask, -1)  # (T, 1)
+    y = jnp.where(ymask, y, 0)  # apply mask to y
+    m1 = jnp.where(ymask, m1, 0)  # apply mask to m1
 
     zy = m1.T @ y  # (z + 1, t) (t, y) -> (z + 1, y)
     zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)

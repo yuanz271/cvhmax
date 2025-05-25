@@ -34,7 +34,7 @@ def test_CVHM(capsys):
     y = jnp.expand_dims(y, 0)
 
     with capsys.disabled():
-        model = CVHM(n_factors, dt, kernels, max_iter=2, likelihood="Poisson")
+        model = CVHM(n_factors, dt, kernels, max_iter=20, likelihood="Poisson")
         result = model.fit(y)
     m, V = result.posterior
     m = m[0]
@@ -42,7 +42,7 @@ def test_CVHM(capsys):
 
     assert m.shape == (T, n_factors)
     assert V.shape == (T, n_factors, n_factors)
-    
+
     m = np.asarray(m)
     m = LinearRegression().fit(m, x).predict(m)
 

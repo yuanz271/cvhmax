@@ -36,12 +36,14 @@ def test_Poisson(capsys):
 
     params = Params(C=C, d=d, R=jnp.zeros((N, N)), M=jnp.eye(L))
 
-    j, J = vmap(Poisson.initialize_info, in_axes=(None, 0, 0, None, None))(params, y, ymask, A, Q)
-    chex.assert_shape([j, J], [(1, T, L), (1,T, L, L)])
+    j, J = vmap(Poisson.initialize_info, in_axes=(None, 0, 0, None, None))(
+        params, y, ymask, A, Q
+    )
+    chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
 
     m = jnp.array(rng.normal(size=(1, T, L)))
     V = jnp.expand_dims(jnp.tile(jnp.eye(L), (T, 1, 1)), 0)
-    
+
     with capsys.disabled():
         chex.assert_equal_shape((y, m, V), dims=0)
         print(f"{y.shape=} {m.shape=}, {V.shape=}")

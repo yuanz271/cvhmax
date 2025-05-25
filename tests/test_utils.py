@@ -51,4 +51,3 @@ def test_filter_array(capsys):
 
     filtered = utils.filter_array(y, ymask)
     chex.assert_shape(filtered, (ymask.sum(), D))
-
