@@ -181,3 +181,7 @@ def ridge_estimate(y, ymask, m, V, lam=0.1):
 def filter_array(arr: Array, mask: Array) -> Array:
     """Filter array leading axes by a less-or-equal rank mask array"""
     return arr[mask > 0]
+
+
+def to_device(arrays, sharding=None) -> tuple[Array, ...]:
+    return tuple(jax.device_put(arr, sharding) for arr in arrays)

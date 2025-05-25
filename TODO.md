@@ -1,2 +1,2 @@
 - ~~modify `filter_array` and `update_readout` to enable jit~~
-- add sharding
+- ~~add sharding~~
