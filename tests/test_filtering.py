@@ -1,6 +1,5 @@
 from jax import numpy as jnp
 import numpy as np
-import matplotlib.pyplot as plt
 
 from cvhmax import filtering
 
@@ -40,8 +39,3 @@ def test_information_filter():
 
     assert z.shape == (n, x_ndim)
     assert Z.shape == (n, x_ndim, x_ndim)
-
-    fig, ax = plt.subplots()
-    ax.plot(z)
-    fig.savefig("information_filter.pdf")
-    plt.close(fig)

@@ -1,7 +1,6 @@
 from jax import tree_util
 
 # import equinox as eqx
-import numpy as np
 import pytest
 
 from cvhmax import hm, utils
@@ -78,18 +77,3 @@ def test_mask():
     ]
     M = utils.latent_mask(kernelparams)
     print(M)
-
-
-def make_mask():
-    gp_dimensions = [[1, 2], [3, 4, 5]]
-    dx = 0
-    lat_dim = len(gp_dimensions)
-    ssm_order = sum(sum(gp_dimensions, []))
-    H = np.zeros((lat_dim, 2 * ssm_order))
-
-    for i, ldims in enumerate(gp_dimensions):
-        for j, gp_dim in enumerate(ldims):
-            H[i, dx] = 1
-            dx += gp_dim
-
-    print(H)
