@@ -3,13 +3,14 @@ from dataclasses import dataclass, field
 import secrets
 
 import jax
-from jax import numpy as jnp, vmap
+from jax import NamedSharding, numpy as jnp, vmap
+from jax.sharding import PartitionSpec as P
 from jax.scipy.linalg import block_diag
 from jaxtyping import Array
 import chex
 
 from .cvi import CVI, Gaussian, Params
-from .utils import real_repr, symm, training_progress
+from .utils import real_repr, symm, training_progress, to_device
 from .filtering import bifilter
 
 
@@ -23,7 +24,7 @@ class CVHM:
     lr: float = 0.1
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 10
-    cvi_iter: int = 3
+    cvi_iter: int = 5
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
@@ -99,6 +100,11 @@ class CVHM:
         m = jnp.zeros((n_trials, n_bins, self.n_components))
         V = jnp.zeros((n_trials, n_bins, self.n_components, self.n_components))
         # <<<
+
+        n_devices = len(jax.devices())
+        mesh = jax.make_mesh((n_devices,), ("batch",))
+        sharding = NamedSharding(mesh, P("batch"))
+        y, ymask, z, Z, m, V = to_device((y, ymask, z, Z, m, V), sharding)
 
         # Initialize information update
         j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
