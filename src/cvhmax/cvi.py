@@ -53,12 +53,19 @@ class CVI:
 
     @classmethod
     def infer(cls, params: Params, j: Array, J: Array, y: Array, ymask: Array, z0: Array, Z0: Array, smooth_fun: Callable, smooth_args: tuple, cvi_iter: int, lr: Float) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
-        for cv_it in range(cvi_iter):
-            z, Z = vmap(lambda jk, Jk, zk0, Zk0: smooth_fun(jk, Jk, zk0, Zk0, *smooth_args))(j, J, z0, Z0)
+        smooth_batch = vmap(lambda jk, Jk, zk0, Zk0: smooth_fun(jk, Jk, zk0, Zk0, *smooth_args))
+        
+        def step(i, carry) -> tuple[Array, Array]:
+            j, J = carry
+            z, Z = smooth_batch(j, J, z0, Z0)
             j, J = cls.update_pseudo(params, y, ymask, z, Z, j, J, lr)
+            return j, J
+        
+        j, J = lax.fori_loop(0, cvi_iter, step, (j, J))
+        z, Z = vmap(lambda jk, Jk, zk0, Zk0: smooth_fun(jk, Jk, zk0, Zk0, *smooth_args))(j, J, z0, Z0)
 
         return (z, Z), (j, J)
-
+    
     @classmethod
     @abstractmethod
     def update_readout(cls, *args, **kwargs) -> tuple[Params, Float]:
@@ -209,17 +216,8 @@ class Poisson(CVI):
 
             return (zt, Zt), (j, J)
 
-        # ztm1 = z0
-        # Ztm1 = Z0
-        # j = []
-        # J = []
-        # for yt, ytmask in zip(y, ymask):
-        #     (ztm1, Ztm1), (jt, Jt) = forward((ztm1, Ztm1), (yt, ytmask))
-        #     j.append(jt)
-        #     J.append(Jt)
         _, (j, J) = lax.scan(forward, (z0, Z0), (y, ymask))
-        # j = jnp.stack(j)
-        # J = jnp.stack(J)
+
         return j, J
 
     @classmethod

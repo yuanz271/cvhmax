@@ -129,17 +129,23 @@ class CVHM:
             params, nell = self.cvi.update_readout(params, y, ymask, m, V)
 
             return params, z, Z, j, J, m, V, nell
-
-        carry = (params, z, Z, j, J, m, V, jnp.nan)
-
+            
         with training_progress() as pbar:
             task_id = pbar.add_task("Training", total=self.max_iter, nell=jnp.nan)
-            for em_it in range(self.max_iter):
-                carry = em_step(em_it, carry)
+            
+            def step(i, carry):
+                carry = em_step(i, carry)
                 *_, nell = carry
                 jax.debug.callback(
                     lambda x: pbar.update(task_id, advance=1, nell=x), nell
                 )
+                return carry
+            
+            carry = (params, z, Z, j, J, m, V, jnp.nan)
+
+            for em_it in range(self.max_iter):
+                carry = step(em_it, carry)
+            # carry = jax.lax.fori_loop(0, self.max_iter, step, carry)
 
         params, z, Z, j, J, m, V, _ = carry  # type: ignore
         self.params = params
