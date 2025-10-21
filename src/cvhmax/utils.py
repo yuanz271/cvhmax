@@ -2,8 +2,7 @@ from collections.abc import Callable
 from functools import partial
 
 import jax
-from jax import numpy as jnp, scipy as jsp
-from jaxtyping import Array, Scalar
+from jax import Array, numpy as jnp, scipy as jsp
 import optax
 import optax.tree_utils as otu
 from rich.progress import (
@@ -60,7 +59,9 @@ def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
-def trial_info_repr(y: Array, ymask: Array, C: Array, d: Array, R: Array) -> tuple[Array, Array]:
+def trial_info_repr(
+    y: Array, ymask: Array, C: Array, d: Array, R: Array
+) -> tuple[Array, Array]:
     T = y.shape[0]
 
     J = C.T @ jnp.linalg.solve(R, C)
@@ -117,7 +118,7 @@ def norm_loading(w, axis=0):
     return w / (_norm(w) + EPS)
 
 
-def _norm_except_axis(v: Array, norm: Callable[[Array], Scalar], axis: int | None):
+def _norm_except_axis(v: Array, norm: Callable[[Array], float], axis: int | None):
     if axis is None:
         return norm(v)
     else:

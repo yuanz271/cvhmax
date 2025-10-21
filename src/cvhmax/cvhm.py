@@ -3,9 +3,8 @@ from dataclasses import dataclass, field
 import secrets
 
 import jax
-from jax import numpy as jnp, vmap
+from jax import Array, numpy as jnp, vmap
 from jax.scipy.linalg import block_diag
-from jaxtyping import Float, Array
 import chex
 
 from .cvi import CVI, Gaussian, Params
@@ -57,7 +56,7 @@ class CVHM:
 
         return M
 
-    def fit(self, y: Array, ymask: Array|None =None, *, random_state=None):
+    def fit(self, y: Array, ymask: Array | None = None, *, random_state=None):
         if ymask is None:
             ymask = jnp.ones(y.shape[:-1], dtype=jnp.uint)
 
@@ -129,10 +128,10 @@ class CVHM:
             params, nell = self.cvi.update_readout(params, y, ymask, m, V)
 
             return params, z, Z, j, J, m, V, nell
-            
+
         with training_progress() as pbar:
             task_id = pbar.add_task("Training", total=self.max_iter, nell=jnp.nan)
-            
+
             def step(i, carry):
                 carry = em_step(i, carry)
                 *_, nell = carry
@@ -140,7 +139,7 @@ class CVHM:
                     lambda x: pbar.update(task_id, advance=1, nell=x), nell
                 )
                 return carry
-            
+
             carry = (params, z, Z, j, J, m, V, jnp.nan)
 
             for em_it in range(self.max_iter):

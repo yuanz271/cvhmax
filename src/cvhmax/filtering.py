@@ -25,9 +25,8 @@ z[k] = z[k|k-1] + j[k]
 
 from functools import partial
 
-from jax import lax, numpy as jnp
+from jax import Array, lax, numpy as jnp
 from jax.numpy.linalg import multi_dot, solve
-from jaxtyping import Float, Array
 
 
 def predict(z, Z, F, P):
@@ -41,10 +40,10 @@ def predict(z, Z, F, P):
 
 
 def information_filter_step(
-    state: tuple[Float[Array, " state"], Float[Array, " state state"]],
-    measure: tuple[Float[Array, " state"], Float[Array, " state state"]],
-    F: Float[Array, " state state"],
-    P: Float[Array, " state state"],
+    state: tuple[Array, Array],
+    measure: tuple[Array, Array],
+    F: Array,
+    P: Array,
 ):
     """Single information filtering step
     :param state: previous state, tuple (z, Z)
@@ -73,10 +72,10 @@ def information_filter_step(
 
 
 def information_filter(
-    init: tuple[Float[Array, " state"], Float[Array, " state state"]],
-    measure: tuple[Float[Array, " time state"], Float[Array, " time state state"]],
-    F: Float[Array, " state state"],
-    P: Float[Array, " state state"],
+    init: tuple[Array, Array],
+    measure: tuple[Array, Array],
+    F: Array,
+    P: Array,
     reverse: bool = False,
 ):
     """Information filter
