@@ -1,5 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 import secrets
 
 import jax
@@ -16,7 +17,7 @@ from .filtering import bifilter
 class CVHM:
     n_components: int
     dt: float
-    kernels: Sequence
+    kernels: Sequence[Any]
     params: Params | None = None
     likelihood: str = "Gaussian"
     lr: float = 0.1
