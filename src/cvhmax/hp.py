@@ -41,7 +41,7 @@ def vec2spec(paramflat, paramdef, static):
 def spectral_loss(paramflat, paramdef, static, spectral_density, m, V, dt, clip=1e-5):
     def kernel_loss(kernel_spec, freq):
         Sw = spectral_density(kernel_spec, freq)
-        Sw = jnp.clip(Sw, a_min=clip)
+        Sw = jnp.clip(Sw, min=clip)
         Sw = jnp.expand_dims(Sw, 1)
 
         return -0.5 * jnp.sum(jnp.log(Sw) + Zw / Sw)
@@ -64,7 +64,7 @@ def spectral_loss(paramflat, paramdef, static, spectral_density, m, V, dt, clip=
     Zw = 2 * dt * Zw
     Zw = (8 / 3) * Zw
 
-    Zw = jnp.clip(Zw, a_min=clip)
+    Zw = jnp.clip(Zw, min=clip)
 
     # l2_sums = self._get_hyperparameter_l2_sum()
 
