@@ -14,10 +14,36 @@ bound = nn.softplus  # ln(1 + e^x)
 
 
 def unbound(x):
+    """Map a softplus-bounded parameter back to the real line.
+
+    Parameters
+    ----------
+    x : Array
+        Positive parameter produced by `bound`.
+
+    Returns
+    -------
+    Array
+        Real-valued unconstrained representation.
+    """
     return jnp.log(jnp.expm1(x))  # ln(e^x - 1)
 
 
 def spec2vec(spec, filter):
+    """Flatten a nested spectral specification into a trainable vector.
+
+    Parameters
+    ----------
+    spec : PyTree
+        Spectral hyperparameters organised per latent component.
+    filter : PyTree
+        Boolean mask indicating which entries are trainable.
+
+    Returns
+    -------
+    tuple[Array, Any, PyTree]
+        Flat parameter array, tree definition, and static structure.
+    """
     # https://docs.kidger.site/equinox/all-of-equinox/
     # spec = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
     # filter = [[{'sigma': True, 'rho': True, 'omega': True, 'order': False}], [{'sigma': True, 'rho': True, 'omega': True, 'order': False}, {'sigma': True, 'rho': True, 'omega': True, 'order': False}]]
@@ -32,6 +58,22 @@ def spec2vec(spec, filter):
 
 
 def vec2spec(paramflat, paramdef, static):
+    """Reconstruct the spectral specification PyTree from a flat vector.
+
+    Parameters
+    ----------
+    paramflat : Array
+        Flat parameter vector.
+    paramdef : Any
+        Tree definition returned by :func:`spec2vec`.
+    static : PyTree
+        Non-trainable structure paired with the trainable entries.
+
+    Returns
+    -------
+    PyTree
+        Spectral hyperparameters restored to their nested layout.
+    """
     # paramflat = paramflat.tolist()
     params_tree = jax.tree_util.tree_unflatten(paramdef, paramflat)
     spec = eqx.combine(params_tree, static)
@@ -39,6 +81,33 @@ def vec2spec(paramflat, paramdef, static):
 
 
 def spectral_loss(paramflat, paramdef, static, spectral_density, m, V, dt, clip=1e-5):
+    """Negative Whittle objective evaluated in the frequency domain.
+
+    Parameters
+    ----------
+    paramflat : Array
+        Flat vector of (potentially unbounded) spectral parameters.
+    paramdef : Any
+        Tree definition returned by :func:`spec2vec`.
+    static : PyTree
+        Static portion of the spectral specification.
+    spectral_density : Callable
+        Function mapping kernel specs to their power spectral density.
+    m : Array
+        Posterior means with shape `(time, latent_dim)`.
+    V : Array
+        Posterior covariances with shape `(time, latent_dim, latent_dim)`.
+    dt : float
+        Discretisation step of the time axis.
+    clip : float, default=1e-5
+        Floor applied to spectra and periodogram terms for stability.
+
+    Returns
+    -------
+    float
+        Aggregated Whittle loss over all latent components.
+    """
+
     def kernel_loss(kernel_spec, freq):
         Sw = spectral_density(kernel_spec, freq)
         Sw = jnp.clip(Sw, min=clip)
@@ -88,11 +157,27 @@ def spectral_loss(paramflat, paramdef, static, spectral_density, m, V, dt, clip=
 
 
 def whittle(latent_spec, filter, m, V, dt, clip=1e-5):
-    """
-    param hyperparams: pytree?
-    param m: posterior mean, Array(T, lat)
-    param V: posterior cov, Array(T, lat, lat)
-    param dt: binwidth
+    """Fit spectral hyperparameters by minimising the Whittle loss.
+
+    Parameters
+    ----------
+    latent_spec : PyTree
+        Initial spectral specification.
+    filter : PyTree
+        Boolean mask indicating trainable entries.
+    m : Array
+        Posterior means with shape `(time, latent_dim)`.
+    V : Array
+        Posterior covariances with shape `(time, latent_dim, latent_dim)`.
+    dt : float
+        Discretisation step of the time axis.
+    clip : float, default=1e-5
+        Floor applied to spectra and periodogram terms for stability.
+
+    Returns
+    -------
+    PyTree
+        Optimised spectral specification.
     """
     # flatten hyperparams
     paramflat, paramdef, static = spec2vec(latent_spec, filter)

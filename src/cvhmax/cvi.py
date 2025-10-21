@@ -2,7 +2,6 @@ from abc import abstractmethod
 from collections.abc import Callable
 from functools import partial
 from typing import ClassVar, override
-import numpy as np
 from sklearn.decomposition import FactorAnalysis
 
 from jax import Array, lax, numpy as jnp, vmap
@@ -20,6 +19,22 @@ MAX_LOGRATE = 7.0
 
 
 def fa_init(ys, n_components, random_state):
+    """Run a Factor Analysis warm start for CVI parameters.
+
+    Parameters
+    ----------
+    ys : Array
+        Observations flattened to `(time * trials, features)`.
+    n_components : int
+        Number of latent factors to extract.
+    random_state : int
+        Seed forwarded to `sklearn` initialisation.
+
+    Returns
+    -------
+    tuple[Array, Array, Array]
+        Mean trajectories, loading matrix, and bias vector from FA.
+    """
     fa = FactorAnalysis(n_components=n_components, random_state=random_state)
     fa.fit(ys)
     ms = jnp.array(fa.transform(ys))
@@ -30,22 +45,41 @@ def fa_init(ys, n_components, random_state):
 
 
 class Params(Module):
+    """Container of CVI readout parameters."""
+
     C: Array
     d: Array
     R: Array
     M: Array
 
     def loading(self) -> Array:
+        """Column-normalised loading matrix.
+
+        Returns
+        -------
+        Array
+            Loading matrix with unit-norm columns.
+        """
         return norm_loading(self.C)
 
     def lmask(self) -> Array:
+        """Latent mask treated as a constant during differentiation.
+
+        Returns
+        -------
+        Array
+            Mask with gradients stopped.
+        """
         return lax.stop_gradient(self.M)
 
 
 class CVI:
+    """Base class for conjugate variational inference readouts."""
+
     registry: ClassVar[dict] = dict()
 
     def __init_subclass__(cls, *args, **kwargs):
+        """Register subclasses for lookup by likelihood name."""
         super().__init_subclass__(*args, **kwargs)
         CVI.registry[cls.__name__] = cls
 
@@ -64,6 +98,34 @@ class CVI:
         cvi_iter: int,
         lr: float,
     ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
+        """Run CVI smoothing iterations for the given pseudo-observations.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        j, J : Array
+            Initial pseudo-observation natural parameters.
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        z0, Z0 : Array
+            Initial latent information parameters.
+        smooth_fun : Callable
+            Filtering routine returning smoothed information tuples.
+        smooth_args : tuple
+            Additional arguments forwarded to `smooth_fun`.
+        cvi_iter : int
+            Number of CVI iterations to perform.
+        lr : float
+            Pseudo-observation learning rate.
+
+        Returns
+        -------
+        tuple[tuple[Array, Array], tuple[Array, Array]]
+            Smoothed latent information along with the updated pseudo-observations.
+        """
         smooth_batch = vmap(
             lambda jk, Jk, zk0, Zk0: smooth_fun(jk, Jk, zk0, Zk0, *smooth_args)
         )
@@ -83,7 +145,8 @@ class CVI:
 
     @classmethod
     @abstractmethod
-    def update_readout(cls, *args, **kwargs) -> tuple[Params, float]: ...
+    def update_readout(cls, *args, **kwargs) -> tuple[Params, float]:
+        """Update readout parameters given latent statistics."""
 
     @classmethod
     @abstractmethod
@@ -97,20 +160,25 @@ class CVI:
         j: Array,
         J: Array,
         lr: float,
-    ) -> tuple[Array, Array]: ...
+    ) -> tuple[Array, Array]:
+        """Produce new pseudo-observations conditioned on the latest latents."""
 
     @classmethod
     @abstractmethod
     def initialize_info(
         cls, params: Params, y: Array, ymask: Array, A: Array, Q: Array
-    ) -> tuple[Array, Array]: ...
+    ) -> tuple[Array, Array]:
+        """Initialise pseudo-observation natural parameters."""
 
     @classmethod
     @abstractmethod
-    def initialize_params(cls, *args, **kwargs) -> Params: ...
+    def initialize_params(cls, *args, **kwargs) -> Params:
+        """Create the initial readout parameter state."""
 
 
 class Gaussian(CVI):
+    """Linear-Gaussian readout with closed-form updates."""
+
     @classmethod
     @override
     def infer(
@@ -127,6 +195,13 @@ class Gaussian(CVI):
         cvi_iter: int,
         lr: float,
     ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
+        """Use a single CVI iteration thanks to conjugacy.
+
+        Returns
+        -------
+        tuple[tuple[Array, Array], tuple[Array, Array]]
+            Smoothed latents and pseudo-observations.
+        """
         return CVI.infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr)
 
     @classmethod
@@ -142,6 +217,13 @@ class Gaussian(CVI):
         J: Array,
         lr: float,
     ) -> tuple[Array, Array]:
+        """Return unmodified pseudo-observations for Gaussian readouts.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Same pseudo-observation parameters `(j, J)`.
+        """
         return j, J
 
     @classmethod
@@ -149,6 +231,26 @@ class Gaussian(CVI):
     def initialize_info(
         cls, params: Params, y: Array, ymask: Array, A: Array, Q: Array
     ) -> tuple[Array, Array]:
+        """Compute Gaussian observation information from the readout.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        A : Array
+            Forward transition matrix (unused, keeps API symmetry).
+        Q : Array
+            Forward process noise covariance (unused, keeps API symmetry).
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Observation information vectors and matrices.
+        """
         C = params.loading()
         d = params.d
         R: Array = params.R
@@ -163,6 +265,26 @@ class Gaussian(CVI):
     def update_readout(
         cls, params: Params, y: Array, ymask: Array, m: Array, P: Array
     ) -> tuple[Params, float]:
+        """Perform a ridge regression update of the Gaussian readout.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        m : Array
+            Posterior means.
+        P : Array
+            Posterior covariances.
+
+        Returns
+        -------
+        tuple[Params, float]
+            Updated parameters and the (unused) negative log-likelihood proxy.
+        """
         y = filter_array(y, ymask)
         m = filter_array(m, ymask)
         C, d, R = ridge_estimate(y, m, P)
@@ -180,6 +302,26 @@ class Gaussian(CVI):
         *,
         random_state: int,
     ) -> Params:
+        """Initialise Gaussian readout via FA.
+
+        Parameters
+        ----------
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        n_factors : int
+            Number of latent factors.
+        lmask : Array
+            Latent mask mapping latent components to outputs.
+        random_state : int
+            Seed used for factor analysis.
+
+        Returns
+        -------
+        Params
+            Initial Gaussian readout parameters.
+        """
         y = filter_array(y, ymask)
         _, C, d = fa_init(y, n_factors, random_state)
 
@@ -193,8 +335,25 @@ def poisson_trial_nell(
     V: Array,
     gamma: float = 10.0,
 ) -> float:
-    """
-    :param gamma: regularization
+    """Average negative expected log-likelihood across trials.
+
+    Parameters
+    ----------
+    params : tuple[Array, Array]
+        Loading matrix and bias vector `(C, d)`.
+    y : Array
+        Observed counts with shape `(trial, time, obs_dim)`.
+    m : Array
+        Posterior means with matching leading dimensions.
+    V : Array
+        Posterior covariances.
+    gamma : float, default=10.0
+        Strength of loading matrix L2 regularisation.
+
+    Returns
+    -------
+    float
+        Trial-averaged negative expected log-likelihood.
     """
     C, d = params
 
@@ -221,13 +380,32 @@ def poisson_cvi_bin_stats(
     H: Array,
     d: Array,
 ) -> tuple[Array, Array]:
-    """
-    H = CM
-    z = V^-1 m
-    Z = -0.5 V^-1
-    <=>
-    m = Vz = -0.5 * Z^-1 z
-    V = -0.5Z^-1
+    """Poisson CVI gradients for a single bin.
+
+    Parameters
+    ----------
+    z : Array
+        Information vector.
+    Z : Array
+        Information matrix.
+    y : Array
+        Observed counts for the bin.
+    ymask : Array
+        Boolean mask marking valid observations.
+    H : Array
+        Effective observation matrix.
+    d : Array
+        Bias term for the exponential link.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        Gradients of the first and second natural parameters.
+
+    Notes
+    -----
+    The natural parameters `(z, Z)` correspond to Gaussian statistics via
+    `m = -0.5 * Z^{-1} z` and `V = -0.5 * Z^{-1}`.
     """
     U, s, V = jnp.linalg.svd(Z)
     Z = multi_dot((U, jnp.diag(s + TAU), U.T))
@@ -253,6 +431,8 @@ def poisson_cvi_bin_stats(
 
 
 class Poisson(CVI):
+    """CVI readout for Poisson observations with exponential link."""
+
     @classmethod
     def initialize_info(
         cls,
@@ -262,7 +442,26 @@ class Poisson(CVI):
         A: Array,
         Q: Array,
     ) -> tuple[Array, Array]:
-        """Initialize pseudo observation"""
+        """Initialise Poisson pseudo-observations by filtering forward.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        A : Array
+            Forward transition matrix.
+        Q : Array
+            Forward process noise covariance.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Pseudo-observation vectors and matrices per time bin.
+        """
         C = params.loading()
         M = params.lmask()
         H = C @ M
@@ -309,6 +508,26 @@ class Poisson(CVI):
         m: Array,
         V: Array,
     ) -> tuple[Params, float]:
+        """Optimise Poisson readout parameters via LBFGS.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        m : Array
+            Posterior means.
+        V : Array
+            Posterior covariances.
+
+        Returns
+        -------
+        tuple[Params, float]
+            Updated parameters and the negative expected log-likelihood.
+        """
         C = params.loading()
         d = params.d
         R = params.R
@@ -334,15 +553,31 @@ class Poisson(CVI):
         J: Array,
         lr: float,
     ) -> tuple[Array, Array]:
-        """
-        :param params: readout
-        :param y: observation
-        :param ymask: missing mask (0: missing, 1: normal)
-        :param z: latent's 1st posterior natural param
-        :param Z: latent's 2nd posterior natural param
-        :param j: update to 1st natural param
-        :param J: update to 2nd natural param
-        :param lr: learning rate
+        """Update pseudo-observations using Poisson CVI gradients.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        z : Array
+            Posterior information vectors.
+        Z : Array
+            Posterior information matrices.
+        j : Array
+            Current pseudo-observation vectors.
+        J : Array
+            Current pseudo-observation matrices.
+        lr : float
+            Learning rate for the convex combination.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Updated pseudo-observation vectors and matrices.
         """
         C = params.loading()
         M = params.lmask()
@@ -368,6 +603,26 @@ class Poisson(CVI):
         *,
         random_state: int,
     ) -> Params:
+        """Initialise Poisson readout via FA followed by Whittle optimisation.
+
+        Parameters
+        ----------
+        y : Array
+            Observation tensor.
+        ymask : Array
+            Observation mask aligned with `y`.
+        n_factors : int
+            Number of latent factors.
+        lmask : Array
+            Latent mask mapping latent components to outputs.
+        random_state : int
+            Seed used for factor analysis.
+
+        Returns
+        -------
+        Params
+            Initial Poisson readout parameters.
+        """
         y = filter_array(y, ymask)
         m, C, d = fa_init(y, n_factors, random_state)
 

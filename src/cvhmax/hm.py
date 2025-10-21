@@ -25,25 +25,93 @@ from .utils import conjtrans
 
 
 def matern(tau: float, *, rho: float, order: int):
-    """General Matern kernel"""
-    pass
+    """Evaluate the Matérn kernel with the requested smoothness.
+
+    Parameters
+    ----------
+    tau : float
+        Time lag at which the kernel is evaluated.
+    rho : float
+        Length scale of the kernel.
+    order : int
+        Smoothness order corresponding to the Matérn parameter.
+
+    Raises
+    ------
+    NotImplementedError
+        Raised while the general Matérn evaluator is pending implementation.
+    """
+    raise NotImplementedError("General Matérn kernel evaluation is not implemented.")
 
 
 def hm(tau: float, *, sigma: float, rho: float, order: int, omega: float):
-    """General HM kernel"""
+    """Return the Hida–Matérn covariance at lag ``tau``.
+
+    Parameters
+    ----------
+    tau : float
+        Time lag at which the covariance is evaluated.
+    sigma : float
+        Kernel amplitude.
+    rho : float
+        Length scale parameter.
+    order : int
+        Matérn smoothness order.
+    omega : float
+        Oscillation frequency in radians per unit time.
+
+    Returns
+    -------
+    Array
+        Complex-valued covariance for the requested lag.
+    """
     # cos(t) == cos(-t)
     return sigma**2 * jnp.cos(omega * tau) * matern(tau, rho=rho, order=order)
 
 
 def Ks0(tau, sigma, rho, omega):
-    """SSM K matrix for HM 1/2"""
+    """State-space kernel matrix for the 1/2-order HM kernel.
+
+    Parameters
+    ----------
+    tau : float
+        Time lag at which the kernel block is evaluated.
+    sigma : float
+        Kernel amplitude.
+    rho : float
+        Length scale parameter.
+    omega : float
+        Oscillation frequency in radians per unit time.
+
+    Returns
+    -------
+    Array
+        Complex state covariance block for the specified lag.
+    """
     # Not confused with the kernel matrix
     d = jnp.abs(tau)
     return sigma**2 * jnp.array([[jnp.exp(d * (1.0j * omega - 1 / rho))]])
 
 
 def Ks1(tau, sigma, rho, omega):
-    """SSM K matrix for HM 3/2"""
+    """State-space kernel matrix for the 3/2-order HM kernel.
+
+    Parameters
+    ----------
+    tau : float
+        Time lag at which the kernel block is evaluated.
+    sigma : float
+        Kernel amplitude.
+    rho : float
+        Length scale parameter.
+    omega : float
+        Oscillation frequency in radians per unit time.
+
+    Returns
+    -------
+    Array
+        Complex state covariance block for the specified lag.
+    """
     # Not confused with the kernel matrix
     d = jnp.abs(tau)
     sqrt3 = jnp.sqrt(3)
@@ -78,6 +146,21 @@ def Ks1(tau, sigma, rho, omega):
 
 @dataclass
 class HidaMatern:
+    """Hida–Matérn kernel parameterised as a linear Gaussian SSM.
+
+    Parameters
+    ----------
+    sigma : float, default=1.0
+        Kernel amplitude.
+    rho : float, default=1.0
+        Length scale controlling temporal decay.
+    omega : float, default=0.0
+        Oscillation frequency in radians per unit time.
+    order : int, default=0
+        Smoothness order of the Matérn kernel.
+    s : float, default=1e-5
+        Jitter added to the stationary covariance for numerical stability.
+    """
     sigma: float = 1.0
     rho: float = 1.0
     omega: float = 0.0
@@ -88,6 +171,23 @@ class HidaMatern:
         raise NotImplementedError
 
     def K(self, tau=0.0):
+        """Return the state-space covariance block at lag ``tau``.
+
+        Parameters
+        ----------
+        tau : float, default=0.0
+            Time lag at which the block is evaluated.
+
+        Returns
+        -------
+        Array
+            Complex state covariance for the requested lag.
+
+        Raises
+        ------
+        NotImplementedError
+            Raised when the requested order lacks a closed-form implementation.
+        """
         # TODO: confusing with covariance matrix
         # somehow not decorable by cache or cached_property
         if self.order == 0:
@@ -102,8 +202,17 @@ class HidaMatern:
         return self.order + 1
 
     def Af(self, tau):
-        """
-        Forward dynamics transition
+        """Forward dynamics transition.
+
+        Parameters
+        ----------
+        tau : float
+            Time step for the state transition.
+
+        Returns
+        -------
+        Array
+            Real-valued transition matrix.
         """
         Kt = self.K(tau)
         K0 = self.K()
@@ -111,8 +220,17 @@ class HidaMatern:
         return A
 
     def Qf(self, tau):
-        """
-        Forward dynamics state noise covariance
+        """Forward dynamics state noise covariance.
+
+        Parameters
+        ----------
+        tau : float
+            Time step for the state transition.
+
+        Returns
+        -------
+        Array
+            Real-valued process noise covariance.
         """
         Kt = self.K(tau)
         K0 = self.K()
@@ -120,8 +238,17 @@ class HidaMatern:
         return Q
 
     def Ab(self, tau):
-        """
-        Backward dynamics transition
+        """Backward dynamics transition.
+
+        Parameters
+        ----------
+        tau : float
+            Time step for the state transition.
+
+        Returns
+        -------
+        Array
+            Real-valued transition matrix for the reverse-time model.
         """
         Kt = self.K(tau)
         K0 = self.K()
@@ -129,8 +256,17 @@ class HidaMatern:
         return A
 
     def Qb(self, tau):
-        """
-        Backward dynamics state noise covariance
+        """Backward dynamics state noise covariance.
+
+        Parameters
+        ----------
+        tau : float
+            Time step for the state transition.
+
+        Returns
+        -------
+        Array
+            Real-valued process noise covariance for the reverse-time model.
         """
         Kt = self.K(tau)
         K0 = self.K()
@@ -162,6 +298,25 @@ class HidaMatern:
 
 
 def Ks(kernelparam, tau):
+    """Look up the complex-valued HM state covariance block.
+
+    Parameters
+    ----------
+    kernelparam : dict
+        Kernel hyperparameters containing `sigma`, `rho`, `omega`, and `order`.
+    tau : float
+        Time lag at which the block is evaluated.
+
+    Returns
+    -------
+    Array
+        Complex state covariance block.
+
+    Raises
+    ------
+    NotImplementedError
+        Raised for unsupported Matérn orders.
+    """
     sigma, rho, omega, order = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
     if order == 0:
         return Ks0(tau, sigma, rho, omega)
@@ -172,6 +327,20 @@ def Ks(kernelparam, tau):
 
 
 def Af(kernelparam, tau):
+    """Forward dynamics transition for a kernel dictionary.
+
+    Parameters
+    ----------
+    kernelparam : dict
+        Kernel hyperparameters containing `sigma`, `rho`, `omega`, and `order`.
+    tau : float
+        Time step for the state transition.
+
+    Returns
+    -------
+    Array
+        Real-valued transition matrix.
+    """
     Kt = Ks(kernelparam, tau)
     K0 = Ks(kernelparam, 0.0)
     A = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))  # K(t)K(0)^-1
@@ -179,8 +348,19 @@ def Af(kernelparam, tau):
 
 
 def Qf(kernelparam, tau):
-    """
-    Forward dynamics state noise covariance
+    """Forward dynamics state noise covariance.
+
+    Parameters
+    ----------
+    kernelparam : dict
+        Kernel hyperparameters containing `sigma`, `rho`, `omega`, and `order`.
+    tau : float
+        Time step for the state transition.
+
+    Returns
+    -------
+    Array
+        Real-valued process noise covariance.
     """
     Kt = Ks(kernelparam, tau)
     K0 = Ks(kernelparam, 0.0)
@@ -189,8 +369,19 @@ def Qf(kernelparam, tau):
 
 
 def Ab(kernelparam, tau):
-    """
-    Backward dynamics transition
+    """Backward dynamics transition.
+
+    Parameters
+    ----------
+    kernelparam : dict
+        Kernel hyperparameters containing `sigma`, `rho`, `omega`, and `order`.
+    tau : float
+        Time step for the state transition.
+
+    Returns
+    -------
+    Array
+        Real-valued transition matrix for the reverse-time model.
     """
     Kt = Ks(kernelparam, tau)
     K0 = Ks(kernelparam, 0.0)

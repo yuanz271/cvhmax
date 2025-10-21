@@ -15,6 +15,28 @@ from .filtering import bifilter
 
 @dataclass
 class CVHM:
+    """Variational CVHM model wrapper for latent state inference and smoothing.
+
+    Parameters
+    ----------
+    n_components : int
+        Number of latent components to infer.
+    dt : float
+        Time step used to discretize the latent SDE.
+    kernels : Sequence[Any]
+        Sequence of kernel objects providing SSM parameters.
+    params : Params | None, optional
+        Initial CVI parameter state. Defaults to `None`.
+    likelihood : str, default="Gaussian"
+        Name of the CVI likelihood registered in `CVI.registry`.
+    lr : float, default=0.1
+        Learning rate for pseudo-observation updates.
+    max_iter : int, default=10
+        Maximum number of outer EM iterations.
+    cvi_iter : int, default=3
+        Number of inner CVI smoothing iterations per EM step.
+    """
+
     n_components: int
     dt: float
     kernels: Sequence[Any]
@@ -27,29 +49,72 @@ class CVHM:
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
+        """Resolve the CVI subclass for the requested likelihood."""
         self.cvi = CVI.registry.get(self.likelihood, Gaussian)
 
     def Af(self):
+        """Forward transition matrix for the latent SSM.
+
+        Returns
+        -------
+        Array
+            Block-diagonal real-valued transition matrix.
+        """
         C = block_diag(*[kernel.Af(self.dt) for kernel in self.kernels])
         return real_repr(C)
 
     def Qf(self):
+        """Forward process noise covariance for the latent SSM.
+
+        Returns
+        -------
+        Array
+            Block-diagonal process noise covariance.
+        """
         C = block_diag(*[kernel.Qf(self.dt) for kernel in self.kernels])
         return symm(real_repr(C))
 
     def Ab(self):
+        """Backward transition matrix for the latent SSM.
+
+        Returns
+        -------
+        Array
+            Block-diagonal real-valued transition matrix.
+        """
         C = block_diag(*[kernel.Ab(self.dt) for kernel in self.kernels])
         return real_repr(C)
 
     def Qb(self):
+        """Backward process noise covariance for the latent SSM.
+
+        Returns
+        -------
+        Array
+            Block-diagonal process noise covariance.
+        """
         C = block_diag(*[kernel.Qb(self.dt) for kernel in self.kernels])
         return symm(real_repr(C))
 
     def Q0(self):
+        """Stationary prior covariance of the latent process.
+
+        Returns
+        -------
+        Array
+            Block-diagonal stationary covariance.
+        """
         C = block_diag(*[kernel.K(0.0) for kernel in self.kernels])
         return symm(real_repr(C))
 
     def latent_mask(self):
+        """Construct the block-diagonal latent-to-SSM selection matrix.
+
+        Returns
+        -------
+        Array
+            Mask mapping latent components to real-valued SSM coordinates.
+        """
         ssm_dim = sum([kernel.nple for kernel in self.kernels])
         M = jnp.zeros((self.n_components, 2 * ssm_dim))
         for i in range(self.n_components):
@@ -58,6 +123,23 @@ class CVHM:
         return M
 
     def fit(self, y: Array, ymask: Array | None = None, *, random_state=None):
+        """Fit the CVHM model to observations using CVI-EM.
+
+        Parameters
+        ----------
+        y : Array
+            Observations shaped `(trials, time, features)` or `(time, features)`.
+        ymask : Array, optional
+            Binary mask matching `y` that flags observed entries. Missing values
+            default to all ones when omitted.
+        random_state : int | None, optional
+            Seed used for initialization. Drawn from `secrets` when absent.
+
+        Returns
+        -------
+        CVHM
+            Fitted instance for chaining.
+        """
         if ymask is None:
             ymask = jnp.ones(y.shape[:-1], dtype=jnp.uint)
 
@@ -154,14 +236,58 @@ class CVHM:
         return self
 
     def transform(self, y: Array, ymask: Array):
+        """Infer latent trajectories for new data.
+
+        Parameters
+        ----------
+        y : Array
+            Observations to transform.
+        ymask : Array
+            Observation mask aligned with `y`.
+
+        Raises
+        ------
+        NotImplementedError
+            Raised until an out-of-sample transform implementation is provided.
+        """
         raise NotImplementedError
 
     def fit_transform(self, y: Array, ymask: Array) -> Array:
+        """Fit the model and return the posterior mean in one call.
+
+        Parameters
+        ----------
+        y : Array
+            Observations to fit.
+        ymask : Array
+            Observation mask aligned with `y`.
+
+        Returns
+        -------
+        Array
+            Posterior mean of the latent trajectories.
+        """
         self.fit(y, ymask)
         return self.posterior[0]
 
 
 def sde2gp(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:
+    """Convert information-form latents into GP mean and covariance.
+
+    Parameters
+    ----------
+    z : Array
+        Information vectors shaped `(trials, time, state_dim)`.
+    Z : Array
+        Information matrices shaped `(trials, time, state_dim, state_dim)`.
+    M : Array
+        Latent-to-output mask applied to recover GP marginals.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        Posterior means and covariances induced by the mask `M`.
+    """
     m = vmap(lambda zk, Zk: jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T)(z, Z)
     V = vmap(lambda Zk: M @ jnp.linalg.inv(Zk) @ M.T)(Z)
     return m, V

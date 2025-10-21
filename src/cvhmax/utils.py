@@ -18,6 +18,24 @@ EPS = 1e-6
 
 
 def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
+    """Approximate bounded LBFGS solver mirroring SciPy defaults.
+
+    Parameters
+    ----------
+    init_params : PyTree
+        Initial parameter values.
+    fun : Callable
+        Objective function accepting the parameter PyTree.
+    max_iter : int, default=100
+        Maximum number of optimisation steps.
+    factr : float, default=1e12
+        Factor controlling the gradient tolerance `factr * eps`.
+
+    Returns
+    -------
+    PyTree
+        Optimised parameter values.
+    """
     # argument default values copied from scipy.optimize.fmin_l_bfgs_b
     tol = factr * jnp.finfo(float).eps
 
@@ -52,16 +70,60 @@ def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
 
 
 def symm(x):
+    """Symmetrise a matrix.
+
+    Parameters
+    ----------
+    x : Array
+        Input matrix.
+
+    Returns
+    -------
+    Array
+        Symmetric part `(x + x.T) / 2`.
+    """
     return 0.5 * (x + x.T)
 
 
 def real_repr(c):
+    """Convert a complex matrix to its real-valued block representation.
+
+    Parameters
+    ----------
+    c : Array
+        Complex-valued matrix.
+
+    Returns
+    -------
+    Array
+        Real block matrix embedding the complex values.
+    """
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
 def trial_info_repr(
     y: Array, ymask: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
+    """Compute Gaussian observation information per time bin.
+
+    Parameters
+    ----------
+    y : Array
+        Observation tensor.
+    ymask : Array
+        Observation mask aligned with `y`.
+    C : Array
+        Observation matrix.
+    d : Array
+        Bias term.
+    R : Array
+        Observation covariance.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        Observation information vectors and matrices.
+    """
     T = y.shape[0]
 
     J = C.T @ jnp.linalg.solve(R, C)
@@ -76,19 +138,50 @@ def trial_info_repr(
 
 
 def conjtrans(x):
-    """
-    Conjugate transpose
+    """Return the conjugate transpose of a matrix.
+
+    Parameters
+    ----------
+    x : Array
+        Complex-valued matrix.
+
+    Returns
+    -------
+    Array
+        Conjugate-transposed matrix.
     """
     return jnp.conjugate(x.T)
 
 
 def gamma(x):
-    """JAX gamma function"""
+    """Evaluate the gamma function using JAX.
+
+    Parameters
+    ----------
+    x : Array
+        Input values.
+
+    Returns
+    -------
+    Array
+        Result of the gamma function applied element-wise.
+    """
     return jnp.exp(jsp.special.gammaln(x))
 
 
 def kernel_mask(kernel_spec: dict):
-    """mask for a single kernel"""
+    """Mask for a single kernel.
+
+    Parameters
+    ----------
+    kernel_spec : dict
+        Kernel hyperparameters containing an `order` entry.
+
+    Returns
+    -------
+    Array
+        One-hot mask selecting the real component.
+    """
     size = kernel_spec["order"] + 1
     M = jnp.zeros(size)  # vector
     M = M.at[0].set(1.0)
@@ -96,10 +189,34 @@ def kernel_mask(kernel_spec: dict):
 
 
 def mixture_mask(mixture_spec: list[dict]):
+    """Concatenate kernel masks for a latent mixture.
+
+    Parameters
+    ----------
+    mixture_spec : list[dict]
+        Sequence of kernel specifications.
+
+    Returns
+    -------
+    Array
+        Concatenated mask covering all kernels in the mixture.
+    """
     return jnp.concatenate([kernel_mask(kernel_spec) for kernel_spec in mixture_spec])
 
 
 def latent_mask(latent_spec):
+    """Construct a block-diagonal mask across latent mixtures.
+
+    Parameters
+    ----------
+    latent_spec : list[list[dict]]
+        Per-latent lists of kernel specifications.
+
+    Returns
+    -------
+    Array
+        Block-diagonal mask mapping latents to state-space coordinates.
+    """
     left = jsp.linalg.block_diag(
         *[mixture_mask(mixture_spec) for mixture_spec in latent_spec]
     )
@@ -110,6 +227,20 @@ def latent_mask(latent_spec):
 
 @jax.jit
 def norm_loading(w, axis=0):
+    """Normalise loadings along the requested axis.
+
+    Parameters
+    ----------
+    w : Array
+        Loading matrix.
+    axis : int, default=0
+        Axis along which to compute norms.
+
+    Returns
+    -------
+    Array
+        Normalised loadings.
+    """
     _norm = partial(
         _norm_except_axis,
         norm=partial(jnp.linalg.norm, keepdims=True),
@@ -119,6 +250,22 @@ def norm_loading(w, axis=0):
 
 
 def _norm_except_axis(v: Array, norm: Callable[[Array], float], axis: int | None):
+    """Apply a norm across all axes except the specified one.
+
+    Parameters
+    ----------
+    v : Array
+        Input tensor.
+    norm : Callable[[Array], float]
+        Norm function applied to slices.
+    axis : int | None
+        Axis exempt from the norm operation.
+
+    Returns
+    -------
+    Array
+        Tensor of norms broadcast across the exempt axis.
+    """
     if axis is None:
         return norm(v)
     else:
@@ -126,6 +273,13 @@ def _norm_except_axis(v: Array, norm: Callable[[Array], float], axis: int | None
 
 
 def training_progress():
+    """Create a rich progress bar configured for CVI training.
+
+    Returns
+    -------
+    Progress
+        Rich progress instance with CVI-specific columns.
+    """
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -143,9 +297,23 @@ def training_progress():
 
 
 def ridge_estimate(y, m, V, lam=0.1):
-    """
-    Ridge regression
-    w = (z'z + lamI)^-1 z'y
+    """Solve a ridge regression for the observation model.
+
+    Parameters
+    ----------
+    y : Array
+        Observations.
+    m : Array
+        Posterior means.
+    V : Array
+        Posterior covariances (unused but kept for API parity).
+    lam : float, default=0.1
+        Ridge penalty scaling.
+
+    Returns
+    -------
+    tuple[Array, Array, Array]
+        Loading matrix, bias vector, and observation covariance.
     """
     y = jnp.vstack(y)
     m = jnp.vstack(m)
@@ -176,5 +344,18 @@ def ridge_estimate(y, m, V, lam=0.1):
 
 
 def filter_array(arr: Array, mask: Array) -> Array:
-    """Filter array leading axes by a less-or-equal rank mask array"""
+    """Filter array leading axes by a less-or-equal rank mask array.
+
+    Parameters
+    ----------
+    arr : Array
+        Input array.
+    mask : Array
+        Boolean or integer mask with compatible leading shape.
+
+    Returns
+    -------
+    Array
+        Filtered array containing only entries where the mask is positive.
+    """
     return arr[mask > 0]
