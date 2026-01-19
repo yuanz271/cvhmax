@@ -1,21 +1,103 @@
-# Repository Guidelines
+# cvhmax Knowledge Base
 
-## Project Structure & Module Organization
-Core code lives in `src/cvhmax`, with inference routines in `cvhm.py`, `cvi.py`, filtering helpers in `filtering.py`, kernel definitions in `hm.py` and `hp.py`, and shared utilities in `utils.py`. Add new public APIs under `src/cvhmax` so they can be exported from `__init__.py`. Tests mirror the module layout inside `tests/` (`test_cvhm.py`, `test_cvi.py`, etc.); place new suites beside the logic they cover. Dependency pins and tooling live in `pyproject.toml`, with `requirements*.lock` and `uv.lock` supporting reproducible environments.
+**Generated:** 2026-01-19  
+**Commit:** 9a6489d  
+**Branch:** main
 
-## Build, Test, and Development Commands
-- `uv sync --group dev` installs runtime and development dependencies; if `uv` is unavailable, run `python -m pip install -e . -r requirements-dev.lock`.
-- `pytest` (or `pytest tests/test_hp.py` for a focused run) executes the regression tests; expect artifacts like `cvhm.pdf` in the working directory.
-- `ruff check src tests` lints the project; add `--fix` to apply safe patches.
+## Overview
 
-## Coding Style & Naming Conventions
-Follow Python 3.12 style with four-space indentation, type hints, and `jaxtyping` annotations for array shapes. Export classes in PascalCase (`CVHM`, `HidaMatern`) and helper functions in lower_snake_case. Keep functions pure and JAX-jittable, and cluster shared constants (for example, `EPS`) near their consumers. Document public APIs with NumPy-style docstrings (`Parameters`, `Returns`, `Raises`) to align examples and autodoc output. `ruff` is configured to ignore `E501` and `F722`; lean on expressive naming and add docstrings where they clarify math.
+Variational latent-state inference with Hida-Matern kernels in JAX. Couples information-form Kalman filtering with CVI-EM for smooth latent trajectory recovery from high-dimensional Gaussian/Poisson observations.
 
-## Testing Guidelines
-Seed stochastic tests (`np.random.seed`, `jax.random.PRNGKey`) to keep runs reproducible. Name files `test_<module>.py`, assert on shapes or summary metrics, and document any long-running paths. Enable 64-bit precision when needed via `export JAX_ENABLE_X64=1`, matching the existing tests’ `config.update("jax_enable_x64", True)`. If a test writes artifacts, clean them up in a fixture or direct them to a temporary path.
+## Structure
 
-## Commit & Pull Request Guidelines
-Write short, imperative commit messages (for example, `replace E-step loop with fori_loop`) and group related work together. Pull requests should include a brief summary, linked issues, notes on numerical impacts, and confirmation that `pytest` and `ruff check` succeeded. Attach diagnostic plots when they help reviewers reason about latent factor behaviour.
+```
+cvhmax/
+├── src/cvhmax/       # Core library
+│   ├── cvhm.py       # CVHM wrapper orchestrating CVI-EM loop
+│   ├── cvi.py        # CVI base + Gaussian/Poisson readouts (635 lines, largest)
+│   ├── filtering.py  # Forward/backward information filters (bifilter)
+│   ├── hm.py         # HidaMatern kernel class, state-space covariance blocks
+│   ├── hp.py         # Whittle spectral hyperparameter fitting
+│   └── utils.py      # LBFGS solver, ridge regression, progress bars
+├── tests/            # Mirrors src/ layout (test_<module>.py)
+└── pyproject.toml    # hatchling build, ruff config, dev deps
+```
 
-## JAX Configuration Tips
-Set `XLA_FLAGS=--xla_force_host_platform_device_count=1` when debugging on CPU-only machines to mirror CI. Enable 64-bit precision early via `jax.config.update("jax_enable_x64", True)` or the `JAX_ENABLE_X64` environment variable. Profile long optimisations with `jax.debug.print` or the shared `rich` progress utilities in `utils.py`.
+## Where to Look
+
+| Task | Location | Notes |
+|------|----------|-------|
+| Add new likelihood | `cvi.py` | Subclass `CVI`, register via `__init_subclass__` |
+| Modify SSM dynamics | `hm.py` | `Af/Qf/Ab/Qb` methods on `HidaMatern` |
+| Change filtering algo | `filtering.py` | `bifilter`, `information_filter_step` |
+| Tune hyperparameters | `hp.py` | `whittle()` for spectral fitting |
+| Adjust training loop | `cvhm.py` | `CVHM.fit()`, `em_step` inner function |
+| Add utility functions | `utils.py` | Keep JAX-jittable, pure |
+
+## Code Map
+
+| Symbol | Type | Location | Role |
+|--------|------|----------|------|
+| `CVHM` | class | cvhm.py:17 | Main API entry point |
+| `CVI` | class | cvi.py:76 | Base class with registry pattern |
+| `Gaussian` | class | cvi.py:179 | Linear-Gaussian readout |
+| `Poisson` | class | cvi.py:433 | Exponential-link Poisson readout |
+| `Params` | class | cvi.py:47 | Equinox Module for readout params |
+| `HidaMatern` | class | hm.py:148 | Kernel as linear Gaussian SSM |
+| `bifilter` | func | filtering.py:140 | Forward+backward info filter merge |
+| `whittle` | func | hp.py:159 | Spectral hyperparameter optimizer |
+| `lbfgs_solve` | func | utils.py:20 | Optax LBFGS wrapper |
+
+## Conventions
+
+- **Type hints**: Use `jaxtyping` for array shapes
+- **Docstrings**: NumPy-style (`Parameters`, `Returns`, `Raises`)
+- **Naming**: Classes PascalCase, functions lower_snake_case
+- **Constants**: Cluster near consumers (e.g., `EPS = 1e-6`, `TAU = 1e-6`, `MAX_LOGRATE = 7.0`)
+- **Functions**: Keep pure and JAX-jittable
+- **Exports**: Add public APIs to `src/cvhmax/__init__.py`
+- **ruff**: Ignores `E501` (line length), `F722` (forward refs)
+
+## Anti-Patterns
+
+- **No `as any` / `# type: ignore`** except where unavoidable (2 instances in cvi.py for LBFGS return types)
+- **No empty `__init__.py`**: Current state is empty - add exports when ready
+- **Avoid breaking jit**: No Python side-effects in jittable functions
+- **No `fori_loop` with callbacks**: Training loop uses Python for-loop to support `jax.debug.callback`
+
+## Technical Debt (TODOs)
+
+| Location | Issue |
+|----------|-------|
+| hp.py:56 | Convert trainable scalar to 0-dim JAX array |
+| hp.py:151 | Add L2 regularization to Whittle loss |
+| hm.py:23 | Evaluate sympy2jax/equinox for symbolic kernels |
+| hm.py:280-282 | Composite kernel support (linear combinations, pytree params) |
+
+## Commands
+
+```bash
+# Install (dev)
+uv sync --group dev
+# or: python -m pip install -e . -r requirements-dev.lock
+
+# Test
+pytest                          # full suite
+pytest tests/test_hp.py         # single module
+
+# Lint
+ruff check src tests            # check
+ruff check src tests --fix      # auto-fix
+
+# JAX config
+export JAX_ENABLE_X64=1         # 64-bit precision (required for tests)
+export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU debugging
+```
+
+## Notes
+
+- Tests generate artifacts (e.g., `cvhm.pdf`) - clean up manually or use tmpdir
+- Some tests commented out (`test_whittle`) - work in progress
+- Seed stochastic tests with `np.random.seed` / `jax.random.PRNGKey` for reproducibility
+- `chex` used for shape assertions in tests
+- No CI/CD configured - run `pytest` and `ruff check` before PRs
