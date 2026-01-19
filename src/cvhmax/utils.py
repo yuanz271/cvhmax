@@ -288,7 +288,7 @@ def training_progress():
         "Elapsed",
         TimeElapsedColumn(),
         TextColumn("•"),
-        "Remainning",
+        "Remaining",
         TimeRemainingColumn(),
         TextColumn("•"),
         "Negative ELL",
