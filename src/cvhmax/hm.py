@@ -161,6 +161,7 @@ class HidaMatern:
     s : float, default=1e-5
         Jitter added to the stationary covariance for numerical stability.
     """
+
     sigma: float = 1.0
     rho: float = 1.0
     omega: float = 0.0
@@ -445,10 +446,30 @@ def spectral_density(kernel_spec: Dict, freq):
     return s
 
 
-def sample_matern(n, dt, sigma, rho):
+def sample_matern(n, dt, sigma, rho, jitter=1e-6):
+    """Sample a trajectory from a Matérn-1/2 Gaussian process.
+
+    Parameters
+    ----------
+    n : int
+        Number of time points to sample.
+    dt : float
+        Time step between samples.
+    sigma : float
+        Kernel amplitude.
+    rho : float
+        Length scale parameter.
+    jitter : float, default=1e-6
+        Diagonal regularization for numerical stability.
+
+    Returns
+    -------
+    ndarray
+        Sampled trajectory of length `n`.
+    """
     t = np.arange(n) * dt
     D = np.abs(t[None, :] - t[:, None])
-    K = sigma**2 * np.exp(-D / rho)
+    K = sigma**2 * np.exp(-D / rho) + jitter * np.eye(n)
     L = np.linalg.cholesky(K)
     z = np.random.randn(n)
     x = L @ z
