@@ -55,7 +55,7 @@ cvhmax/
 
 ## Conventions
 
-- **Type hints**: Use `jaxtyping` for array shapes
+- **Type hints**: Use `jax.Array` for arrays, standard Python types (`float`, `int`) for scalars
 - **Docstrings**: NumPy-style (`Parameters`, `Returns`, `Raises`)
 - **Naming**: Classes PascalCase, functions lower_snake_case
 - **Constants**: Cluster near consumers (e.g., `EPS = 1e-6`, `TAU = 1e-6`, `MAX_LOGRATE = 7.0`)
