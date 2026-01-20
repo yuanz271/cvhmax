@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine == 'x86_64'",
@@ -97,7 +97,6 @@ dependencies = [
     { name = "jax", version = "0.6.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64'" },
     { name = "jaxlib", version = "0.4.38", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64'" },
     { name = "jaxlib", version = "0.6.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine != 'x86_64'" },
-    { name = "jaxtyping" },
     { name = "numpy" },
     { name = "optax" },
     { name = "rich" },
@@ -115,10 +114,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "equinox", specifier = ">=0.11.8" },
-    { name = "jax", specifier = ">=0.4.13" },
+    { name = "jax", specifier = ">=0.4.38" },
     { name = "jax", marker = "platform_machine == 'x86_64'", specifier = "==0.4.38" },
     { name = "jaxlib", specifier = ">=0.4.13" },
-    { name = "jaxtyping", specifier = ">=0.2.19" },
     { name = "numpy", specifier = ">=1.24.4" },
     { name = "optax", specifier = ">=0.2.3" },
     { name = "rich", specifier = ">=14.0.0" },
