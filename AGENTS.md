@@ -4,6 +4,11 @@
 **Commit:** 9a6489d  
 **Branch:** main
 
+## Agent Instructions
+
+- **Never commit without explicit user approval.** Always ask before running `git commit` or `git push`.
+- **Never push without explicit user approval.** Confirm with the user before pushing changes to remote.
+
 ## Overview
 
 Variational latent-state inference with Hida-Matern kernels in JAX. Couples information-form Kalman filtering with CVI-EM for smooth latent trajectory recovery from high-dimensional Gaussian/Poisson observations.
