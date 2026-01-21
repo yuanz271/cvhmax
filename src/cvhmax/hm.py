@@ -198,7 +198,6 @@ class HidaMatern:
 
         return K
 
-    @cached_property
     def nple(self):
         return self.order + 1
 
