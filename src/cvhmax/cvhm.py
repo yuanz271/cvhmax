@@ -36,6 +36,13 @@ class CVHM:
         Maximum number of outer EM iterations.
     cvi_iter : int, default=3
         Number of inner CVI smoothing iterations per EM step.
+
+    Attributes
+    ----------
+    posterior : tuple[Array, Array]
+        Posterior mean and covariance. Shapes are
+        `(trials, time, latent_dim)` and `(trials, time, latent_dim, latent_dim)`
+        after calling :meth:`fit`.
     """
 
     n_components: int
@@ -140,6 +147,17 @@ class CVHM:
         -------
         CVHM
             Fitted instance for chaining.
+
+        Examples
+        --------
+        >>> import jax.numpy as jnp
+        >>> from cvhmax.cvhm import CVHM
+        >>> from cvhmax.hm import HidaMatern
+        >>> y = jnp.asarray(...)  # (trials, time, features)
+        >>> ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+        >>> kernels = [HidaMatern(order=0) for _ in range(2)]
+        >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels, likelihood="Gaussian")
+        >>> model.fit(y, ymask=ymask, random_state=0)
         """
         if ymask is None:
             ymask = jnp.ones(y.shape[:-1], dtype=jnp.uint)
@@ -272,6 +290,17 @@ class CVHM:
         -------
         Array
             Posterior mean of the latent trajectories.
+
+        Examples
+        --------
+        >>> import jax.numpy as jnp
+        >>> from cvhmax.cvhm import CVHM
+        >>> from cvhmax.hm import HidaMatern
+        >>> y = jnp.asarray(...)
+        >>> ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+        >>> kernels = [HidaMatern(order=0) for _ in range(2)]
+        >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels)
+        >>> m = model.fit_transform(y, ymask)
         """
         self.fit(y, ymask)
         return self.posterior[0]

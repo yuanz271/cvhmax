@@ -9,7 +9,7 @@ Hida-Matern Kernel
 # etc.
 from operator import itemgetter
 from dataclasses import dataclass
-from functools import cached_property, partial
+from functools import partial
 from typing import Dict
 
 import jax
@@ -146,7 +146,7 @@ def Ks1(tau, sigma, rho, omega):
 
 @dataclass
 class HidaMatern:
-    """Hida–Matérn kernel parameterised as a linear Gaussian SSM.
+    """Hida-Matern kernel parameterised as a linear Gaussian SSM.
 
     Parameters
     ----------
@@ -160,6 +160,11 @@ class HidaMatern:
         Smoothness order of the Matérn kernel.
     s : float, default=1e-5
         Jitter added to the stationary covariance for numerical stability.
+
+    Notes
+    -----
+    Only select orders are implemented. The current `K(tau)` implementation
+    supports order 0; other orders raise `NotImplementedError`.
     """
 
     sigma: float = 1.0
@@ -198,7 +203,8 @@ class HidaMatern:
 
         return K
 
-    def nple(self):
+    @property
+    def nple(self) -> int:
         return self.order + 1
 
     def Af(self, tau):

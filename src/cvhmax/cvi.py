@@ -50,7 +50,21 @@ def fa_init(ys, n_components, random_state):
 
 
 class Params(Module):
-    """Container of CVI readout parameters."""
+    """Container of CVI readout parameters.
+
+    Attributes
+    ----------
+    C : Array
+        Loading matrix with shape `(obs_dim, latent_dim)`.
+    d : Array
+        Bias vector with shape `(obs_dim,)`.
+    R : Array
+        Observation covariance. Typically `(obs_dim, obs_dim)`; some
+        initializers may use a vector of variances.
+    M : Array
+        Latent mask mapping latent components to state-space coordinates,
+        shape `(latent_dim, state_dim)`.
+    """
 
     C: Array
     d: Array
@@ -79,7 +93,10 @@ class Params(Module):
 
 
 class CVI:
-    """Base class for conjugate variational inference readouts."""
+    """Base class for conjugate variational inference readouts.
+
+    Subclasses register by name in `CVI.registry` for lookup via `likelihood`.
+    """
 
     registry: ClassVar[dict] = dict()
 
@@ -110,13 +127,15 @@ class CVI:
         params : Params
             Current readout parameter state.
         j, J : Array
-            Initial pseudo-observation natural parameters.
+            Initial pseudo-observation natural parameters with shapes
+            `(trials, time, state_dim)` and `(trials, time, state_dim, state_dim)`.
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
-            Observation mask aligned with `y`.
+            Observation mask aligned with `y`, typically `(trials, time)`.
         z0, Z0 : Array
-            Initial latent information parameters.
+            Initial latent information parameters shaped `(trials, state_dim)`
+            and `(trials, state_dim, state_dim)`.
         smooth_fun : Callable
             Filtering routine returning smoothed information tuples.
         smooth_args : tuple
@@ -151,7 +170,26 @@ class CVI:
     @classmethod
     @abstractmethod
     def update_readout(cls, *args, **kwargs) -> tuple[Params, float]:
-        """Update readout parameters given latent statistics."""
+        """Update readout parameters given latent statistics.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observations shaped `(trials, time, obs_dim)`.
+        ymask : Array
+            Observation mask aligned with `y`.
+        m : Array
+            Posterior means shaped `(trials, time, latent_dim)`.
+        V : Array
+            Posterior covariances shaped `(trials, time, latent_dim, latent_dim)`.
+
+        Returns
+        -------
+        tuple[Params, float]
+            Updated parameter state and an objective value.
+        """
 
     @classmethod
     @abstractmethod
@@ -166,19 +204,81 @@ class CVI:
         J: Array,
         lr: float,
     ) -> tuple[Array, Array]:
-        """Produce new pseudo-observations conditioned on the latest latents."""
+        """Produce new pseudo-observations conditioned on the latest latents.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observations shaped `(trials, time, obs_dim)`.
+        ymask : Array
+            Observation mask aligned with `y`.
+        z : Array
+            Posterior information vectors shaped `(trials, time, state_dim)`.
+        Z : Array
+            Posterior information matrices shaped `(trials, time, state_dim, state_dim)`.
+        j : Array
+            Pseudo-observation vectors shaped `(trials, time, state_dim)`.
+        J : Array
+            Pseudo-observation matrices shaped `(trials, time, state_dim, state_dim)`.
+        lr : float
+            Learning rate for pseudo-observation updates.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Updated pseudo-observation parameters `(j, J)`.
+        """
 
     @classmethod
     @abstractmethod
     def initialize_info(
         cls, params: Params, y: Array, ymask: Array, A: Array, Q: Array
     ) -> tuple[Array, Array]:
-        """Initialise pseudo-observation natural parameters."""
+        """Initialise pseudo-observation natural parameters.
+
+        Parameters
+        ----------
+        params : Params
+            Current readout parameter state.
+        y : Array
+            Observations shaped `(trials, time, obs_dim)`.
+        ymask : Array
+            Observation mask aligned with `y`.
+        A : Array
+            Forward transition matrix shaped `(state_dim, state_dim)`.
+        Q : Array
+            Forward process noise covariance shaped `(state_dim, state_dim)`.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Pseudo-observation vectors and matrices with shapes
+            `(trials, time, state_dim)` and `(trials, time, state_dim, state_dim)`.
+        """
 
     @classmethod
     @abstractmethod
     def initialize_params(cls, *args, **kwargs) -> Params:
-        """Create the initial readout parameter state."""
+        """Create the initial readout parameter state.
+
+        Parameters
+        ----------
+        y : Array
+            Observations shaped `(trials, time, obs_dim)`.
+        ymask : Array
+            Observation mask aligned with `y`.
+        n_factors : int
+            Number of latent factors to initialize.
+        lmask : Array
+            Latent mask mapping components to state-space coordinates.
+
+        Returns
+        -------
+        Params
+            Initial readout parameter state.
+        """
 
 
 class Gaussian(CVI):
@@ -243,9 +343,9 @@ class Gaussian(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
-            Observation mask aligned with `y`.
+            Observation mask aligned with `y`, typically `(trials, time)`.
         A : Array
             Forward transition matrix (unused, keeps API symmetry).
         Q : Array
@@ -277,13 +377,13 @@ class Gaussian(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means.
+            Posterior means shaped `(trials, time, latent_dim)`.
         P : Array
-            Posterior covariances.
+            Posterior covariances shaped `(trials, time, latent_dim, latent_dim)`.
 
         Returns
         -------
@@ -313,7 +413,7 @@ class Gaussian(CVI):
         Parameters
         ----------
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         n_factors : int
@@ -460,13 +560,13 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         A : Array
-            Forward transition matrix.
+            Forward transition matrix shaped `(state_dim, state_dim)`.
         Q : Array
-            Forward process noise covariance.
+            Forward process noise covariance shaped `(state_dim, state_dim)`.
 
         Returns
         -------
@@ -526,13 +626,13 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means.
+            Posterior means shaped `(trials, time, latent_dim)`.
         V : Array
-            Posterior covariances.
+            Posterior covariances shaped `(trials, time, latent_dim, latent_dim)`.
 
         Returns
         -------
@@ -578,17 +678,17 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         z : Array
-            Posterior information vectors.
+            Posterior information vectors shaped `(trials, time, state_dim)`.
         Z : Array
-            Posterior information matrices.
+            Posterior information matrices shaped `(trials, time, state_dim, state_dim)`.
         j : Array
-            Current pseudo-observation vectors.
+            Current pseudo-observation vectors shaped `(trials, time, state_dim)`.
         J : Array
-            Current pseudo-observation matrices.
+            Current pseudo-observation matrices shaped `(trials, time, state_dim, state_dim)`.
         lr : float
             Learning rate for the convex combination.
 
@@ -626,7 +726,7 @@ class Poisson(CVI):
         Parameters
         ----------
         y : Array
-            Observation tensor.
+            Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         n_factors : int

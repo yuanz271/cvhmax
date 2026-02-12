@@ -1,0 +1,64 @@
+# Quickstart
+
+This guide shows the minimum workflow to fit a CVHM model and retrieve the posterior.
+
+## Gaussian Likelihood Example
+
+```python
+import jax.numpy as jnp
+
+from cvhmax.cvhm import CVHM
+from cvhmax.hm import HidaMatern
+
+# Observations shaped (trials, time, features)
+y = jnp.asarray(...)  # your data
+ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+
+n_latents = 2
+dt = 1.0
+kernels = [
+    HidaMatern(sigma=1.0, rho=50.0, omega=0.0, order=0)
+    for _ in range(n_latents)
+]
+
+model = CVHM(
+    n_components=n_latents,
+    dt=dt,
+    kernels=kernels,
+    likelihood="Gaussian",
+    max_iter=5,
+)
+model.fit(y, ymask=ymask, random_state=0)
+
+m, V = model.posterior
+```
+
+## Poisson Likelihood Example
+
+```python
+import jax.numpy as jnp
+
+from cvhmax.cvhm import CVHM
+from cvhmax.hm import HidaMatern
+
+y = jnp.asarray(...)
+ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+
+model = CVHM(
+    n_components=2,
+    dt=1.0,
+    kernels=[HidaMatern(order=0) for _ in range(2)],
+    likelihood="Poisson",
+    max_iter=5,
+)
+model.fit(y, ymask=ymask, random_state=0)
+
+m, V = model.posterior
+```
+
+## What You Get Back
+
+- `m`: posterior means shaped `(trials, time, latent_dim)`
+- `V`: posterior covariances shaped `(trials, time, latent_dim, latent_dim)`
+
+Next: `data-model.md` for full shape and mask conventions.

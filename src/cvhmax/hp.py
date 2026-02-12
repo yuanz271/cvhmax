@@ -162,7 +162,8 @@ def whittle(latent_spec, filter, m, V, dt, clip=1e-5):
     Parameters
     ----------
     latent_spec : PyTree
-        Initial spectral specification.
+        Initial spectral specification. Each latent component is represented
+        as a list of kernel dictionaries (e.g., `{"sigma": ..., "rho": ...}`).
     filter : PyTree
         Boolean mask indicating trainable entries.
     m : Array
@@ -178,6 +179,12 @@ def whittle(latent_spec, filter, m, V, dt, clip=1e-5):
     -------
     PyTree
         Optimised spectral specification.
+
+    Examples
+    --------
+    >>> latent_spec = [[{"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0}]]
+    >>> trainable = [[{"sigma": True, "rho": True, "omega": True, "order": False}]]
+    >>> spec = whittle(latent_spec, trainable, m, V, dt)
     """
     # flatten hyperparams
     paramflat, paramdef, static = spec2vec(latent_spec, filter)

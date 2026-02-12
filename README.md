@@ -126,6 +126,10 @@ pytest
 
 Use module-level invocations for faster iteration, e.g. `pytest tests/test_hp.py`. Some tests generate diagnostic artefacts such as `cvhm.pdf`; remove them if you do not need the plots.
 
+## Documentation
+
+Local documentation lives in `docs/README.md`.
+
 ## License
 
 `cvhmax` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
