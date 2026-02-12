@@ -243,7 +243,14 @@ class CVHM:
                 carry = em_step(i, carry)
                 *_, nell = carry
                 jax.debug.callback(
-                    lambda x: pbar.update(task_id, advance=1, nell=x), nell
+                    lambda step_i, x: pbar.update(
+                        task_id,
+                        completed=int(step_i) + 1,
+                        nell=float(x),
+                    ),
+                    i,
+                    nell,
+                    ordered=True,
                 )
                 return carry
 
