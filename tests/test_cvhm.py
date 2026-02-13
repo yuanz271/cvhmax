@@ -1,8 +1,6 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import jax
 from jax import numpy as jnp, config
-from sklearn.linear_model import LinearRegression
 
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
@@ -43,21 +41,6 @@ def test_CVHM(capsys):
 
     assert m.shape == (T, n_factors)
     assert V.shape == (T, n_factors, n_factors)
-
-    m = np.asarray(m)
-    m = LinearRegression().fit(m, x).predict(m)
-
-    fig, axs = plt.subplots(2, 2)
-    axs[0, 0].plot(x[:, 0], label="Ground truth", alpha=0.5)
-    axs[0, 1].plot(m[:, 0], label="Inference", alpha=0.5, color="r")
-    axs[1, 0].plot(x[:, 1], label="Ground truth", alpha=0.5)
-    axs[1, 1].plot(m[:, 1], label="Inference", alpha=0.5, color="r")
-    axs[0, 0].legend()
-    axs[0, 1].legend()
-    axs[1, 0].legend()
-    axs[1, 1].legend()
-    fig.savefig("cvhm.pdf")
-    plt.close(fig)
 
 
 def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
