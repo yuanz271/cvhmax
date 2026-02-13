@@ -307,7 +307,7 @@ class Gaussian(CVI):
         tuple[tuple[Array, Array], tuple[Array, Array]]
             Smoothed latents and pseudo-observations.
         """
-        return CVI.infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr)
+        return super().infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr)
 
     @classmethod
     @override
@@ -515,17 +515,17 @@ def poisson_cvi_bin_stats(
 
     Notes
     -----
-    The natural parameters `(z, Z)` correspond to Gaussian statistics via
-    `m = -0.5 * Z^{-1} z` and `V = -0.5 * Z^{-1}`.
+    The information parameters `(z, Z)` correspond to Gaussian statistics via
+    `m = Z^{-1} z` and `V = Z^{-1}` where `Z = Σ⁻¹` and `z = Σ⁻¹ μ`.
     """
     U, s, V = jnp.linalg.svd(Z)
     Z = multi_dot((U, jnp.diag(s + TAU), U.T))
 
     Zcho = cho_factor(Z)
-    m = -0.5 * cho_solve(Zcho, z)  # Vj
+    m = cho_solve(Zcho, z)
 
     lin = H @ m + d
-    quad = jnp.einsum("nl, ln -> n", H, -0.5 * cho_solve(Zcho, H.mT))  # CVC'
+    quad = jnp.einsum("nl, ln -> n", H, cho_solve(Zcho, H.mT))  # CVC'
     eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
     lam = jnp.exp(eta)
 

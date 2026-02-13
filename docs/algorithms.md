@@ -11,6 +11,89 @@ The `CVHM.fit` method alternates between:
 
 The inner loop performs several CVI iterations before each outer EM update.
 
+## Gaussian Parameterizations
+
+The codebase uses two parameterizations of multivariate Gaussians:
+**information form** for filtering/smoothing and **mean-variance (moment)
+form** for observation model updates and loss computation.
+
+### Information form `(z, Z)`
+
+| Symbol | Definition | Properties |
+|---|---|---|
+| `Z = Σ⁻¹` | Precision matrix | Positive definite |
+| `z = Σ⁻¹ μ` | Precision-weighted mean | — |
+
+Convert to moments:
+
+```
+μ = Z⁻¹ z       (code: solve(Z, z))
+Σ = Z⁻¹          (code: inv(Z))
+```
+
+Where it appears:
+
+- `filtering.py` — predict/update steps, `bifilter` smoother
+- `cvhm.py` — initial conditions (`z0 = 0`, `Z0 = inv(Q0)`), `sde2gp` (`solve(Z, z)`, `inv(Z)`)
+- `cvi.py` — CVI loop inputs/outputs, pseudo-observation updates
+
+Key property: the filter update is additive.
+
+```
+z_post = z_pred + j
+Z_post = Z_pred + J
+```
+
+### Mean-variance (moment) form `(m, V)`
+
+| Symbol | Definition | Properties |
+|---|---|---|
+| `m` (or `μ`) | Mean vector | — |
+| `V` (or `Σ`) | Covariance matrix | Positive definite |
+
+Where it appears:
+
+- `sde2gp` output — converts information form to `(m, V)` for downstream use
+- Readout/observation model updates (`update_readout`)
+- Loss computation (`poisson_trial_nell`, `gaussian_trial_nell`)
+
+### Observation information increments `(j, J)`
+
+Same convention as `(z, Z)`:
+
+```
+J = Hᵀ R⁻¹ H       observation information matrix (positive semi-definite)
+j = Hᵀ R⁻¹ (y − d)  observation information vector
+```
+
+Computed by `trial_info_repr` in `utils.py`. In the Poisson CVI path, `(j, J)` are pseudo-observations updated iteratively rather than computed from a closed-form likelihood.
+
+### Variable name glossary
+
+| Variable | Form | Meaning |
+|---|---|---|
+| `z, Z` | Information | Posterior information vector / matrix |
+| `z0, Z0` | Information | Prior (initial) information vector / matrix |
+| `zp, Zp` | Information | Predicted (prior for current step) |
+| `zf, Zf` | Information | Forward-filtered |
+| `zpb, Zpb` | Information | Backward-predicted |
+| `j, J` | Information | Observation information increments |
+| `k, K` | Information | CVI pseudo-observation gradient updates |
+| `m, V` | Moment | Posterior mean / covariance |
+| `P` | Information | State noise precision `Q⁻¹` |
+
+### Note on exponential-family natural parameters
+
+The exponential-family natural parameters `(η₁, η₂)` for a Gaussian are
+`η₁ = Σ⁻¹ μ` and `η₂ = −½ Σ⁻¹`. These differ from information form by a
+factor of `−½` on the matrix component (`η₂ = −½ Z`). The moment recovery
+formulas are `μ = −½ η₂⁻¹ η₁` and `Σ = −½ η₂⁻¹`.
+
+**This codebase does not use natural parameters.** The `−0.5` factor in
+`poisson_cvi_bin_stats` (`cvi.py:525`) is a bug (BUG-4, see `docs/bugs.md`)
+where the natural-parameter formula was applied to information-form inputs.
+The correct conversion is `μ = Z⁻¹ z` with no `−0.5` factor.
+
 ## Information-Form Filtering
 
 Filtering is performed in information form (precision matrices). The forward and backward passes are combined by `bifilter` to obtain smoothed latents.

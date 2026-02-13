@@ -159,15 +159,6 @@ def test_gaussian_update_pseudo_noop():
     npt.assert_array_equal(np.asarray(J_out), np.asarray(J))
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Gaussian.infer calls CVI.infer(params, ...) which binds cls to CVI "
-        "(base class). Inside fori_loop, cls.update_pseudo dispatches to the "
-        "abstract CVI.update_pseudo (returns None) instead of Gaussian's no-op "
-        "override. Should use super().infer(...) to preserve cls binding."
-    ),
-    strict=True,
-)
 def test_gaussian_infer_single_cvi_iter():
     """Gaussian.infer forces cvi_iter=1 regardless of the argument."""
     L = 2

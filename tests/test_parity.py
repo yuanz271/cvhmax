@@ -667,23 +667,10 @@ class TestDynamicsPipeline:
 @requires_ref
 @pytest.mark.parity
 def test_poisson_cvi_bin_stats_convention():
-    """Document convention mismatch between cvhmax CVI and reference.
+    """Verify poisson_cvi_bin_stats matches reference using information form.
 
     The filter stores ``(z, Z)`` in information form where ``Z = J`` (precision)
-    and ``z = h = J mu``.  Recovering moments:
-
-    - ``sde2gp`` (correct): ``mu = Z^{-1} z``, ``Sigma = Z^{-1}``
-    - ``poisson_cvi_bin_stats``: ``m = -0.5 * Z^{-1} z``, ``V = -0.5 * Z^{-1}``
-
-    The ``-0.5`` is the natural-parameter-to-moment mapping for exponential
-    families (``mu = -0.5 * eta_2^{-1} eta_1``), but the filter uses information
-    form, not natural parameters.  Consequently the CVI computes a wrong
-    posterior mean (``-0.5 mu``) and a **negative** covariance (``-0.5 Sigma``).
-
-    This test verifies:
-    1. The outputs differ from the reference (which uses ``m = J^{-1} h``).
-    2. The gradient *formula structure* is identical: given the *same*
-       ``(m, V)`` values, both produce identical ``(k, K)``.
+    and ``z = h = J mu``.  Recovering moments: ``mu = Z^{-1} z``, ``Sigma = Z^{-1}``.
     """
     import torch
 
@@ -701,7 +688,7 @@ def test_poisson_cvi_bin_stats_convention():
     y_np = np.array([2.0, 3.0, 1.0])
     ymask_np = np.ones(1)
 
-    # --- cvhmax: uses m = -0.5 * Z^{-1} z ---
+    # --- cvhmax ---
     k_jax, K_jax = poisson_cvi_bin_stats(
         jnp.array(z_np),
         jnp.array(Z_np),
@@ -711,7 +698,7 @@ def test_poisson_cvi_bin_stats_convention():
         jnp.array(d_np),
     )
 
-    # --- reference: uses m = J^{-1} h (correct information-form recovery) ---
+    # --- reference: m = J^{-1} h, V = J^{-1} ---
     J_t = torch.tensor(Z_np, dtype=torch.float64)
     J_chol = torch.linalg.cholesky(J_t)
     m_ref = torch.linalg.solve(J_t, torch.tensor(z_np, dtype=torch.float64))
@@ -727,37 +714,17 @@ def test_poisson_cvi_bin_stats_convention():
     K_ref = -2 * g_v
     k_ref = g_m - 2 * (g_v @ m_ref)
 
-    # 1) Outputs should NOT match because mean differs by -0.5 factor
-    assert not np.allclose(
-        np.asarray(k_jax).flatten(), k_ref.detach().numpy(), atol=1e-6
-    ), "k should differ due to convention mismatch"
-
-    # 2) Verify formula structure: same (m, V) => same (k, K)
-    m_cvhmax = -0.5 * np.linalg.solve(Z_np, z_np)
-    V_cvhmax = -0.5 * np.linalg.inv(Z_np)
-
-    m_t2 = torch.tensor(m_cvhmax, dtype=torch.float64)
-    V_t2 = torch.tensor(V_cvhmax, dtype=torch.float64)
-    lin2 = m_t2 @ C_t.T + bias_t
-    quad2 = torch.einsum("nl, lm, nm -> n", C_t, V_t2, C_t)
-    eta2 = torch.minimum(lin2 + 0.5 * quad2, torch.tensor(7.0))
-    lam2 = torch.exp(eta2)
-    g_m2 = (y_t - lam2) @ C_t
-    g_v2 = -0.5 * torch.einsum("ni, n, nj -> ij", C_t, lam2, C_t)
-    K_manual = -2 * g_v2
-    k_manual = g_m2 - 2 * (g_v2 @ m_t2)
-
     npt.assert_allclose(
         np.asarray(k_jax).flatten(),
-        k_manual.detach().numpy(),
-        atol=1e-10,
-        err_msg="Gradient formula should match when given same (m, V)",
+        k_ref.detach().numpy(),
+        atol=1e-6,
+        err_msg="k (first natural param gradient) should match reference",
     )
     npt.assert_allclose(
         np.asarray(K_jax).reshape(state_dim, state_dim),
-        K_manual.detach().numpy(),
-        atol=1e-10,
-        err_msg="Precision formula should match when given same (m, V)",
+        K_ref.detach().numpy(),
+        atol=1e-6,
+        err_msg="K (second natural param gradient) should match reference",
     )
 
 
