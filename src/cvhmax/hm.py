@@ -188,18 +188,27 @@ class HidaMatern:
         -------
         Array
             Complex state covariance for the requested lag.
-
-        Raises
-        ------
-        NotImplementedError
-            Raised when the requested order lacks a closed-form implementation.
         """
         # TODO: confusing with covariance matrix
         # somehow not decorable by cache or cached_property
         if self.order == 0:
             K = Ks0(tau, self.sigma, self.rho, self.omega) + jnp.eye(self.nple) * self.s
+        elif self.order == 1:
+            K = Ks1(tau, self.sigma, self.rho, self.omega) + jnp.eye(self.nple) * self.s
         else:
-            raise NotImplementedError
+            from .kernel_generator import make_kernel
+
+            # Generator order M = self.order + 1 (SSM state dimension)
+            gen = make_kernel(self.nple)
+            K = (
+                gen.create_K_hat(
+                    jnp.asarray(tau, dtype=float),
+                    jnp.asarray(self.sigma, dtype=float),
+                    jnp.asarray(self.rho, dtype=float),
+                    jnp.asarray(self.omega, dtype=float),
+                )
+                + jnp.eye(self.nple) * self.s
+            )
 
         return K
 
@@ -317,11 +326,6 @@ def Ks(kernelparam, tau):
     -------
     Array
         Complex state covariance block.
-
-    Raises
-    ------
-    NotImplementedError
-        Raised for unsupported Matérn orders.
     """
     sigma, rho, omega, order = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
     if order == 0:
@@ -329,7 +333,16 @@ def Ks(kernelparam, tau):
     elif order == 1:
         return Ks1(tau, sigma, rho, omega)
     else:
-        raise NotImplementedError
+        from .kernel_generator import make_kernel
+
+        # Generator order M = order + 1 (SSM state dimension)
+        gen = make_kernel(order + 1)
+        return gen.create_K_hat(
+            jnp.asarray(tau, dtype=float),
+            jnp.asarray(sigma, dtype=float),
+            jnp.asarray(rho, dtype=float),
+            jnp.asarray(omega, dtype=float),
+        )
 
 
 def Af(kernelparam, tau):

@@ -53,8 +53,8 @@ def test_Ks():
     hm.Ks(kernelparam, 1.0)
 
     kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 2}
-    with pytest.raises(NotImplementedError):
-        hm.Ks(kernelparam, 1.0)
+    K = hm.Ks(kernelparam, 1.0)
+    assert K.shape == (3, 3)  # order 2 -> nple = 3
 
 
 def test_ssm_repr():

@@ -108,17 +108,47 @@ Source: `src/cvhmax/filtering.py`
 
 ## Hida-Matern Kernels
 
-`HidaMatern` represents Matern kernels as linear Gaussian state-space models. The kernel order determines the state-space dimension. Only select orders are implemented.
+`HidaMatern` represents Matern kernels modulated by a complex exponential
+as linear Gaussian state-space models:
+
+    k(tau) = sigma^2 * matern(nu, tau, rho) * exp(i * omega * tau)
+
+The kernel order determines the SSM state dimension `M = order + 1`.
+Orders 0 and 1 use hand-coded closed-form expressions (`Ks0`, `Ks1`).
+Higher orders are handled by the `kernel_generator` subpackage, which
+symbolically differentiates the kernel and converts the result to JAX
+functions at runtime via `sympy2jax`.
+
+### Kernel generator internals
+
+For an order-M kernel, the generator:
+
+1. Builds the symbolic Hida-Matern covariance using SymPy.
+2. Computes successive derivatives `d^p k / d tau^p` for `p = 0..2M-1`
+   and their limits at `tau -> 0+`.
+3. Assembles the M x M state-space covariance matrix `K_hat(tau)`:
+   - Outer entries (row 0, last column): `K_hat[r,c] = (-1)^c * d^{r+c}k/dtau^{r+c}`
+   - Inner entries via antisymmetry: `K_hat[r,c] = -K_hat[r-1, c+1]`
+4. Converts each entry to a JAX-traceable function using `sympy2jax.SymbolicModule`.
+5. Handles the `tau = 0` limit case with `jnp.where`.
+
+The SSM dynamics are derived from the kernel blocks:
+- Forward transition: `A = K(tau) @ K(0)^{-1}`
+- Process noise: `Q = K(0) - K(tau) @ K(0)^{-1} @ K(tau)^H`
+- These satisfy the Lyapunov equation: `A @ K(0) @ A^H + Q = K(0)`
+
+Generator instances are cached by order via `make_kernel(order)`, so the
+symbolic computation cost is paid once per order per process lifetime.
 
 Key code:
 
 - `HidaMatern.Af/Qf/Ab/Qb` for transitions and noise
 - `HidaMatern.K(tau)` for stationary covariances
+- `kernel_generator.HidaMaternKernelGenerator` for arbitrary-order kernels
+- `kernel_generator.make_kernel(order)` cached factory
 
-Source: `src/cvhmax/hm.py`
+Sources: `src/cvhmax/hm.py`, `src/cvhmax/kernel_generator/`
 
-## Whittle Hyperparameter Fitting
+See `kernel-generator.md` for usage examples and integration patterns.
 
-The `whittle` routine refines kernel hyperparameters in the frequency domain using the Whittle likelihood. It flattens a nested spec into a trainable vector, runs BFGS, and reconstructs the spec.
 
-Source: `src/cvhmax/hp.py`

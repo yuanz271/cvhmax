@@ -56,6 +56,21 @@ model.fit(y, ymask=ymask, random_state=0)
 m, V = model.posterior
 ```
 
+## Higher-Order Kernels
+
+By default the examples above use `order=0` (Matern-1/2). The kernel
+generator subpackage enables arbitrary smoothness orders:
+
+```python
+kernels = [
+    HidaMatern(sigma=1.0, rho=50.0, omega=0.0, order=2)  # Matern-5/2
+    for _ in range(n_latents)
+]
+```
+
+Higher orders produce smoother latent trajectories. See
+`kernel-generator.md` for the full usage guide.
+
 ## What You Get Back
 
 - `m`: posterior means shaped `(trials, time, latent_dim)`
