@@ -31,6 +31,8 @@ dev = [
     "pytest>=7.4.2",
     "chex>=0.1.87",
     "matplotlib>=3.10.3",
+    "torch>=2.10.0",
+    "einops>=0.8.2",
 ]
 
 [tool.hatch.metadata]
