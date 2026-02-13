@@ -196,7 +196,13 @@ class HidaMatern:
         elif self.order == 1:
             K = Ks1(tau, self.sigma, self.rho, self.omega) + jnp.eye(self.nple) * self.s
         else:
-            from .kernel_generator import make_kernel
+            try:
+                from .kernel_generator import make_kernel
+            except ImportError:
+                raise ImportError(
+                    "Orders >= 2 require the kergen extra. "
+                    "Install with:  pip install cvhmax[kergen]"
+                ) from None
 
             # Generator order M = self.order + 1 (SSM state dimension)
             gen = make_kernel(self.nple)
@@ -333,7 +339,13 @@ def Ks(kernelparam, tau):
     elif order == 1:
         return Ks1(tau, sigma, rho, omega)
     else:
-        from .kernel_generator import make_kernel
+        try:
+            from .kernel_generator import make_kernel
+        except ImportError:
+            raise ImportError(
+                "Orders >= 2 require the kergen extra. "
+                "Install with:  pip install cvhmax[kergen]"
+            ) from None
 
         # Generator order M = order + 1 (SSM state dimension)
         gen = make_kernel(order + 1)

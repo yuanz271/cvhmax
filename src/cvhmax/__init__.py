@@ -1,7 +1,6 @@
 from .cvhm import CVHM
 from .cvi import CVI, Gaussian, Poisson, Params
 from .hm import HidaMatern
-from .kernel_generator import HidaMaternKernelGenerator, make_kernel
 
 __all__ = [
     "CVHM",
@@ -10,6 +9,12 @@ __all__ = [
     "Poisson",
     "Params",
     "HidaMatern",
-    "HidaMaternKernelGenerator",
-    "make_kernel",
 ]
+
+# Optional: kernel_generator requires the `kergen` extra.
+try:
+    from .kernel_generator import HidaMaternKernelGenerator, make_kernel
+
+    __all__ += ["HidaMaternKernelGenerator", "make_kernel"]
+except ImportError:
+    pass

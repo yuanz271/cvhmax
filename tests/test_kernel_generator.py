@@ -1,4 +1,7 @@
-"""Tests for the kernel_generator subpackage."""
+"""Tests for the kernel_generator subpackage.
+
+Requires the ``kergen`` extra (sympy, sympy2jax).
+"""
 
 import sys
 from pathlib import Path
@@ -9,10 +12,13 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from cvhmax.kernel_generator import HidaMaternKernelGenerator, make_kernel
-from cvhmax.kernel_generator.matern import matern_poly, hida_matern_kernel
-from cvhmax.hm import HidaMatern, Ks0, Ks1, Ks
-from cvhmax.utils import real_repr, conjtrans
+pytest.importorskip("sympy", reason="kergen extra not installed")
+pytest.importorskip("sympy2jax", reason="kergen extra not installed")
+
+from cvhmax.kernel_generator import HidaMaternKernelGenerator, make_kernel  # noqa: E402
+from cvhmax.kernel_generator.matern import matern_poly, hida_matern_kernel  # noqa: E402
+from cvhmax.hm import HidaMatern, Ks0, Ks1, Ks  # noqa: E402
+from cvhmax.utils import real_repr, conjtrans  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
