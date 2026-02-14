@@ -14,8 +14,6 @@ from cvhmax.utils import (
     norm_loading,
     bin_info_repr,
     trial_info_repr,
-    natural_to_moment,
-    moment_to_natural,
 )
 
 
@@ -189,74 +187,3 @@ def test_trial_info_repr_mask(rng):
         j_exp_t = C.T @ Rinv @ (y[t] - d)
         npt.assert_allclose(np.asarray(j[t]), np.asarray(j_exp_t), atol=1e-10)
         npt.assert_allclose(np.asarray(J[t]), np.asarray(J_exp), atol=1e-10)
-
-
-# ---------------------------------------------------------------------------
-# natural_to_moment / moment_to_natural
-# ---------------------------------------------------------------------------
-
-
-def test_natural_moment_roundtrip_moment_start(rng):
-    """moment -> natural -> moment is identity."""
-    D = 4
-    A = rng.standard_normal((D, D))
-    Sigma = jnp.array(A @ A.T + 0.1 * np.eye(D))  # positive definite
-    mu = jnp.array(rng.standard_normal(D))
-
-    eta1, eta2 = moment_to_natural(mu, Sigma)
-    mu_rec, Sigma_rec = natural_to_moment(eta1, eta2)
-
-    npt.assert_allclose(np.asarray(mu_rec), np.asarray(mu), atol=1e-12)
-    npt.assert_allclose(np.asarray(Sigma_rec), np.asarray(Sigma), atol=1e-12)
-
-
-def test_natural_moment_roundtrip_natural_start(rng):
-    """natural -> moment -> natural is identity."""
-    D = 3
-    A = rng.standard_normal((D, D))
-    prec = A @ A.T + 0.1 * np.eye(D)
-    eta2 = jnp.array(-0.5 * prec)  # negative definite
-    eta1 = jnp.array(rng.standard_normal(D))
-
-    mu, Sigma = natural_to_moment(eta1, eta2)
-    eta1_rec, eta2_rec = moment_to_natural(mu, Sigma)
-
-    npt.assert_allclose(np.asarray(eta1_rec), np.asarray(eta1), atol=1e-12)
-    npt.assert_allclose(np.asarray(eta2_rec), np.asarray(eta2), atol=1e-12)
-
-
-def test_natural_moment_1d_analytic():
-    """1-D analytic check: Sigma=2, mu=3 -> eta1=1.5, eta2=-0.25."""
-    mu = jnp.array([3.0])
-    Sigma = jnp.array([[2.0]])
-
-    eta1, eta2 = moment_to_natural(mu, Sigma)
-    npt.assert_allclose(np.asarray(eta1), [1.5], atol=1e-14)
-    npt.assert_allclose(np.asarray(eta2), [[-0.25]], atol=1e-14)
-
-    mu_rec, Sigma_rec = natural_to_moment(eta1, eta2)
-    npt.assert_allclose(np.asarray(mu_rec), [3.0], atol=1e-14)
-    npt.assert_allclose(np.asarray(Sigma_rec), [[2.0]], atol=1e-14)
-
-
-def test_natural_to_moment_matches_sde2gp(rng):
-    """natural_to_moment on (z, -0.5*Z) matches sde2gp (without mask M)."""
-    from cvhmax.cvhm import sde2gp
-
-    D = 3
-    # Build valid information-form parameters
-    A = rng.standard_normal((D, D))
-    Z = jnp.array(A @ A.T + 0.5 * np.eye(D))  # precision, positive definite
-    z = jnp.array(rng.standard_normal(D))
-
-    # sde2gp expects (trials, time, ...) — use identity mask and single trial/time
-    M = jnp.eye(D)
-    m_sde, V_sde = sde2gp(z[None, None, :], Z[None, None, :, :], M)
-    m_sde = m_sde[0, 0]  # strip trial/time dims
-    V_sde = V_sde[0, 0]
-
-    # Convert info-form (z, Z) to natural params (z, -0.5*Z) then to moments
-    mu, Sigma = natural_to_moment(z, -0.5 * Z)
-
-    npt.assert_allclose(np.asarray(mu), np.asarray(m_sde), atol=1e-12)
-    npt.assert_allclose(np.asarray(Sigma), np.asarray(V_sde), atol=1e-12)

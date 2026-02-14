@@ -424,46 +424,5 @@ def filter_array(arr: Array, mask: Array) -> Array:
     return arr[mask > 0]
 
 
-def natural_to_moment(eta1: Array, eta2: Array) -> tuple[Array, Array]:
-    """Convert exponential-family natural parameters to moment parameters.
-
-    Parameters
-    ----------
-    eta1 : Array
-        First natural parameter, shape ``(..., D)``.  Equal to ``Σ⁻¹ μ``.
-    eta2 : Array
-        Second natural parameter, shape ``(..., D, D)``.  Equal to ``-½ Σ⁻¹``
-        (negative semi-definite).
-
-    Returns
-    -------
-    tuple[Array, Array]
-        ``(mu, Sigma)`` with shapes ``(..., D)`` and ``(..., D, D)``.
-    """
-    Sigma = -0.5 * jnp.linalg.inv(eta2)
-    mu = jnp.linalg.solve(-2.0 * eta2, eta1[..., None])[..., 0]
-    return mu, Sigma
-
-
-def moment_to_natural(mu: Array, Sigma: Array) -> tuple[Array, Array]:
-    """Convert moment parameters to exponential-family natural parameters.
-
-    Parameters
-    ----------
-    mu : Array
-        Mean vector, shape ``(..., D)``.
-    Sigma : Array
-        Covariance matrix, shape ``(..., D, D)`` (positive definite).
-
-    Returns
-    -------
-    tuple[Array, Array]
-        ``(eta1, eta2)`` with shapes ``(..., D)`` and ``(..., D, D)``.
-    """
-    eta1 = jnp.linalg.solve(Sigma, mu[..., None])[..., 0]
-    eta2 = -0.5 * jnp.linalg.inv(Sigma)
-    return eta1, eta2
-
-
 def to_device(arrays, sharding=None) -> tuple[Array, ...]:
     return tuple(jax.device_put(arr, sharding) for arr in arrays)
