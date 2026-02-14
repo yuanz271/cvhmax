@@ -276,10 +276,10 @@ class CVHM:
             # carry = step(em_it, carry)
             carry = jax.lax.fori_loop(0, self.max_iter, step, carry)
 
-        params, z, Z, j, J, m, V, _ = carry  # type: ignore
+        params, z, Z, j, J, m, V, _ = carry
         self.params = params
         self.latent = (z, Z)
-        self.posterior = (m, V)  # type: ignore
+        self.posterior = (m, V)
         return self
 
     def transform(self, y: Array, ymask: Array):

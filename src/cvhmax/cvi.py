@@ -682,10 +682,10 @@ class Poisson(CVI):
 
         C, d = lbfgs_solve(
             (C, d), partial(poisson_trial_nell, y=y, ymask=ymask, m=m, V=V)
-        )  # type: ignore
+        )
 
-        nell = poisson_trial_nell((C, d), y=y, ymask=ymask, m=m, V=V, gamma=0.0)  # type: ignore
-        return Params(C=C, d=d, R=R, M=params.M), nell  # type: ignore
+        nell = poisson_trial_nell((C, d), y=y, ymask=ymask, m=m, V=V, gamma=0.0)
+        return Params(C=C, d=d, R=R, M=params.M), nell
 
     @classmethod
     def update_pseudo(
@@ -784,6 +784,6 @@ class Poisson(CVI):
         C, d = lbfgs_solve(
             (C, d),
             partial(poisson_trial_nell, y=y, ymask=jnp.ones(y.shape[:1]), m=m, V=V),
-        )  # type: ignore
+        )
 
-        return Params(C=C, d=d, R=None, M=lmask)  # type: ignore
+        return Params(C=C, d=d, R=None, M=lmask)
