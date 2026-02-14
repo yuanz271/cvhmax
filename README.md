@@ -81,10 +81,10 @@ Use `model.fit_transform(...)` when you only need the posterior means. The `cvi`
 
 ## Data model
 
-- **Observations (`y`)** – array shaped `(trial, time, obs_dim)` or `(time, obs_dim)`. Single-trial data are automatically expanded to match the expected rank.
+- **Observations (`y`)** – array shaped `(trial, time, obs_dim (N))` or `(time, obs_dim (N))`. Single-trial data are automatically expanded to match the expected rank.
 - **Mask (`ymask`)** – binary array broadcastable over `y`. `1` marks observed entries, `0` marks missing/padded bins.
-- **Posterior mean (`m`)** – returned via `model.posterior[0]`, shaped `(trial, time, latent_dim)`.
-- **Posterior covariance (`V`)** – returned via `model.posterior[1]`, shaped `(trial, time, latent_dim, latent_dim)`.
+- **Posterior mean (`m`)** – returned via `model.posterior[0]`, shaped `(trial, time, latent_dim (K))`.
+- **Posterior covariance (`V`)** – returned via `model.posterior[1]`, shaped `(trial, time, latent_dim (K), latent_dim (K))`.
 
 Pad unequal trial lengths with zeros in `y`, mark them as missing in `ymask`, and the filters will skip them automatically.
 

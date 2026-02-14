@@ -73,7 +73,7 @@ Higher orders produce smoother latent trajectories. See
 
 ## What You Get Back
 
-- `m`: posterior means shaped `(trials, time, latent_dim)`
-- `V`: posterior covariances shaped `(trials, time, latent_dim, latent_dim)`
+- `m`: posterior means shaped `(trials, time, latent_dim (K))`
+- `V`: posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`
 
 Next: `data-model.md` for full shape and mask conventions.

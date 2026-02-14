@@ -2,6 +2,10 @@
 
 This page outlines the core algorithms used by cvhmax.
 
+> **Dimension conventions.** This page uses `N` (observation dimension),
+> `K` (latent dimension, number of GP kernels), and `L` (state dimension,
+> SDE state = `2 * sum(nple)`).  See `data-model.md` for the full glossary.
+
 ## CVI-EM Loop
 
 The `CVHM.fit` method alternates between:
@@ -118,7 +122,9 @@ as linear Gaussian state-space models:
 
     k(tau) = sigma^2 * matern(nu, tau, rho) * exp(i * omega * tau)
 
-The kernel order determines the SSM state dimension `M = order + 1`.
+The kernel order determines the per-kernel complex state dimension
+`nple = order + 1`.  The total state dimension is `L = 2 * sum(nple)`
+across all kernels (factor of 2 from the real-valued representation).
 Orders 0 and 1 use hand-coded closed-form expressions (`Ks0`, `Ks1`).
 Higher orders are handled by the `kernel_generator` subpackage, which
 symbolically differentiates the kernel and converts the result to JAX

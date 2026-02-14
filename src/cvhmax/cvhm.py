@@ -41,7 +41,7 @@ class CVHM:
     ----------
     posterior : tuple[Array, Array]
         Posterior mean and covariance. Shapes are
-        `(trials, time, latent_dim)` and `(trials, time, latent_dim, latent_dim)`
+        `(trials, time, latent_dim (K))` and `(trials, time, latent_dim (K), latent_dim (K))`
         after calling :meth:`fit`.
     """
 
@@ -116,12 +116,13 @@ class CVHM:
         return symm(real_repr(C))
 
     def latent_mask(self):
-        """Construct the block-diagonal latent-to-SSM selection matrix.
+        """Construct the block-diagonal selection matrix from latent to state space.
 
         Returns
         -------
         Array
-            Mask mapping latent components to real-valued SSM coordinates.
+            Mask of shape ``(latent_dim (K), state_dim (L))`` selecting the
+            GP-value coordinate of each kernel in the real-valued SDE state.
         """
         ssm_dim = sum([kernel.nple for kernel in self.kernels])
         M = jnp.zeros((self.n_components, 2 * ssm_dim))
@@ -330,16 +331,17 @@ class CVHM:
 
 
 def sde2gp(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:
-    """Convert information-form latents into GP mean and covariance.
+    """Convert information-form SDE state into GP mean and covariance.
 
     Parameters
     ----------
     z : Array
-        Information vectors shaped `(trials, time, state_dim)`.
+        Information vectors shaped `(trials, time, state_dim (L))`.
     Z : Array
-        Information matrices shaped `(trials, time, state_dim, state_dim)`.
+        Information matrices shaped `(trials, time, state_dim (L), state_dim (L))`.
     M : Array
-        Latent-to-output mask applied to recover GP marginals.
+        Selection mask shaped `(latent_dim (K), state_dim (L))` mapping
+        SDE state coordinates to GP components.
 
     Returns
     -------

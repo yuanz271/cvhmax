@@ -55,15 +55,15 @@ class Params(Module):
     Attributes
     ----------
     C : Array
-        Loading matrix with shape `(obs_dim, latent_dim)`.
+        Loading matrix with shape `(obs_dim (N), latent_dim (K))`.
     d : Array
-        Bias vector with shape `(obs_dim,)`.
+        Bias vector with shape `(obs_dim (N),)`.
     R : Array
-        Observation covariance. Typically `(obs_dim, obs_dim)`; some
+        Observation covariance. Typically `(obs_dim (N), obs_dim (N))`; some
         initializers may use a vector of variances.
     M : Array
-        Latent mask mapping latent components to state-space coordinates,
-        shape `(latent_dim, state_dim)`.
+        Selection mask mapping latent components to state coordinates,
+        shape `(latent_dim (K), state_dim (L))`.
     """
 
     C: Array
@@ -128,14 +128,14 @@ class CVI:
             Current readout parameter state.
         j, J : Array
             Initial pseudo-observation natural parameters with shapes
-            `(trials, time, state_dim)` and `(trials, time, state_dim, state_dim)`.
+            `(trials, time, state_dim (L))` and `(trials, time, state_dim (L), state_dim (L))`.
         y : Array
             Observation tensor shaped `(trials, time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`, typically `(trials, time)`.
         z0, Z0 : Array
-            Initial latent information parameters shaped `(trials, state_dim)`
-            and `(trials, state_dim, state_dim)`.
+            Initial state information parameters shaped `(trials, state_dim (L))`
+            and `(trials, state_dim (L), state_dim (L))`.
         smooth_fun : Callable
             Filtering routine returning smoothed information tuples.
         smooth_args : tuple
@@ -177,13 +177,13 @@ class CVI:
         params : Params
             Current readout parameter state.
         y : Array
-            Observations shaped `(trials, time, obs_dim)`.
+            Observations shaped `(trials, time, obs_dim (N))`.
         ymask : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(trials, time, latent_dim)`.
+            Posterior means shaped `(trials, time, latent_dim (K))`.
         V : Array
-            Posterior covariances shaped `(trials, time, latent_dim, latent_dim)`.
+            Posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`.
 
         Returns
         -------
@@ -211,19 +211,19 @@ class CVI:
         params : Params
             Current readout parameter state.
         y : Array
-            Observations shaped `(trials, time, obs_dim)`.
+            Observations shaped `(trials, time, obs_dim (N))`.
         ymask : Array
             Observation mask aligned with `y`.
         z : Array
-            Posterior information vectors shaped `(trials, time, state_dim)`.
+            Posterior information vectors shaped `(trials, time, state_dim (L))`.
         Z : Array
-            Posterior information matrices shaped `(trials, time, state_dim, state_dim)`.
+            Posterior information matrices shaped `(trials, time, state_dim (L), state_dim (L))`.
         j : Array
-            Pseudo-observation vectors shaped `(trials, time, state_dim)`.
+            Pseudo-observation vectors shaped `(trials, time, state_dim (L))`.
         J : Array
-            Pseudo-observation matrices shaped `(trials, time, state_dim, state_dim)`.
+            Pseudo-observation matrices shaped `(trials, time, state_dim (L), state_dim (L))`.
         lr : float
-            Learning rate for pseudo-observation updates.
+            Pseudo-observation learning rate.
 
         Returns
         -------
@@ -243,19 +243,19 @@ class CVI:
         params : Params
             Current readout parameter state.
         y : Array
-            Observations shaped `(time, obs_dim)`.
+            Observations shaped `(time, obs_dim (N))`.
         ymask : Array
             Observation mask, shape `(time,)`.
         A : Array
-            Forward transition matrix shaped `(state_dim, state_dim)`.
+            Forward transition matrix shaped `(state_dim (L), state_dim (L))`.
         Q : Array
-            Forward process noise covariance shaped `(state_dim, state_dim)`.
+            Forward process noise covariance shaped `(state_dim (L), state_dim (L))`.
 
         Returns
         -------
         tuple[Array, Array]
             Pseudo-observation vectors and matrices with shapes
-            `(time, state_dim)` and `(time, state_dim, state_dim)`.
+            `(time, state_dim (L))` and `(time, state_dim (L), state_dim (L))`.
         """
 
     @classmethod
@@ -374,7 +374,7 @@ class Gaussian(CVI):
         -------
         tuple[Array, Array]
             Observation information vectors and matrices with shapes
-            `(time, state_dim)` and `(time, state_dim, state_dim)`.
+            `(time, state_dim (L))` and `(time, state_dim (L), state_dim (L))`.
         """
         C = params.loading()
         d = params.d
@@ -397,13 +397,13 @@ class Gaussian(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim)`.
+            Observation tensor shaped `(trials, time, obs_dim (N))`.
         ymask : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(trials, time, latent_dim)`.
+            Posterior means shaped `(trials, time, latent_dim (K))`.
         P : Array
-            Posterior covariances shaped `(trials, time, latent_dim, latent_dim)`.
+            Posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`.
 
         Returns
         -------
@@ -588,13 +588,13 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(time, obs_dim)`.
+            Observation tensor shaped `(time, obs_dim (N))`.
         ymask : Array
             Observation mask, shape `(time,)`.
         A : Array
-            Forward transition matrix shaped `(state_dim, state_dim)`.
+            Forward transition matrix shaped `(state_dim (L), state_dim (L))`.
         Q : Array
-            Forward process noise covariance shaped `(state_dim, state_dim)`.
+            Forward process noise covariance shaped `(state_dim (L), state_dim (L))`.
 
         Returns
         -------
@@ -654,13 +654,13 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim)`.
+            Observation tensor shaped `(trials, time, obs_dim (N))`.
         ymask : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(trials, time, latent_dim)`.
+            Posterior means shaped `(trials, time, latent_dim (K))`.
         V : Array
-            Posterior covariances shaped `(trials, time, latent_dim, latent_dim)`.
+            Posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`.
 
         Returns
         -------
@@ -706,17 +706,17 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim)`.
+            Observation tensor shaped `(trials, time, obs_dim (N))`.
         ymask : Array
             Observation mask aligned with `y`.
         z : Array
-            Posterior information vectors shaped `(trials, time, state_dim)`.
+            Posterior information vectors shaped `(trials, time, state_dim (L))`.
         Z : Array
-            Posterior information matrices shaped `(trials, time, state_dim, state_dim)`.
+            Posterior information matrices shaped `(trials, time, state_dim (L), state_dim (L))`.
         j : Array
-            Current pseudo-observation vectors shaped `(trials, time, state_dim)`.
+            Current pseudo-observation vectors shaped `(trials, time, state_dim (L))`.
         J : Array
-            Current pseudo-observation matrices shaped `(trials, time, state_dim, state_dim)`.
+            Current pseudo-observation matrices shaped `(trials, time, state_dim (L), state_dim (L))`.
         lr : float
             Learning rate for the convex combination.
 

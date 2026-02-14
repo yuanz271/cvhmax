@@ -22,16 +22,18 @@ where `sigma` is the amplitude, `rho` is the length scale, `omega` is
 an oscillation frequency, and `nu = p + 1/2` controls the smoothness.
 
 By expressing this kernel in state-space form, Kalman filtering reduces
-GP inference from O(T^3) to O(T). The state dimension equals the
-generator order `M = p + 1`.
+GP inference from O(T^3) to O(T).  Each kernel's complex state dimension
+equals the generator order `nple = M = p + 1`.  The total state dimension
+across all `K` kernels is `L = 2 * sum(nple)` (factor of 2 from real-valued
+representation).
 
 ### Order conventions
 
 The generator order `M` is the SSM state dimension. The `HidaMatern`
 dataclass in `hm.py` uses a smoothness index where `order = M - 1`.
 
-| Generator order (M) | Matern smoothness | `HidaMatern.order` | State dim |
-|----------------------|-------------------|--------------------|-----------|
+| Generator order (M) | Matern smoothness | `HidaMatern.order` | Per-kernel dim (`nple`) |
+|----------------------|-------------------|--------------------|------------------------|
 | 1                    | 1/2               | 0                  | 1         |
 | 2                    | 3/2               | 1                  | 2         |
 | 3                    | 5/2               | 2                  | 3         |

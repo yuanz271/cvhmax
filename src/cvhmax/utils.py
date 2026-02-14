@@ -280,7 +280,7 @@ def mixture_mask(mixture_spec: list[dict]):
 
 
 def latent_mask(latent_spec):
-    """Construct a block-diagonal mask across latent mixtures.
+    """Construct a block-diagonal selection mask from latent to state space.
 
     Parameters
     ----------
@@ -290,7 +290,8 @@ def latent_mask(latent_spec):
     Returns
     -------
     Array
-        Block-diagonal mask mapping latents to state-space coordinates.
+        Mask of shape ``(latent_dim (K), state_dim (L))`` selecting the
+        GP-value coordinate of each kernel in the real-valued SDE state.
     """
     left = jsp.linalg.block_diag(
         *[mixture_mask(mixture_spec) for mixture_spec in latent_spec]
