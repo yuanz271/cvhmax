@@ -226,14 +226,6 @@ def test_poisson_cvi_gradient_direction(rng):
     assert not jnp.allclose(j_new, j), "CVI update produced no change"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Gaussian.initialize_params creates R=jnp.zeros(y.shape[-1]) (1D vector) "
-        "which crashes in bin_info_repr's jnp.linalg.solve(R, C) that expects "
-        "a 2D matrix. Source bug in cvi.py:434."
-    ),
-    strict=True,
-)
 def test_gaussian_e2e(linear_gaussian_data):
     """CVHM with Gaussian likelihood recovers latents with R^2 > 0.5."""
     data = linear_gaussian_data

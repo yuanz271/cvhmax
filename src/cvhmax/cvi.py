@@ -410,9 +410,9 @@ class Gaussian(CVI):
         tuple[Params, float]
             Updated parameters and the (unused) negative log-likelihood proxy.
         """
-        y = jnp.vstack(y)
-        ymask = jnp.vstack(ymask)
-        m = jnp.vstack(m)
+        y = y.reshape(-1, y.shape[-1])
+        ymask = ymask.ravel()
+        m = m.reshape(-1, m.shape[-1])
         C, d, R = ridge_estimate(y, ymask, m, P)
         params = Params(C=C, d=d, R=R, M=params.M)
         return params, jnp.nan
@@ -457,7 +457,7 @@ class Gaussian(CVI):
         y = filter_array(y, ymask)
         _, C, d = fa_init(y, n_factors, random_state)
 
-        return Params(C=C, d=d, R=jnp.zeros(y.shape[-1]), M=lmask)
+        return Params(C=C, d=d, R=jnp.eye(y.shape[-1]), M=lmask)
 
 
 def poisson_trial_nell(
@@ -504,7 +504,7 @@ def poisson_trial_nell(
 
     C_reg = gamma * jnp.linalg.norm(C) / n_valid_bins
     bin_nells = vmap(bin_nell)(y, m, V)
-    bin_nells = jnp.where(jnp.expand_dims(ymask, -1), bin_nells, 0)
+    bin_nells = jnp.where(ymask, bin_nells, 0)
 
     return jnp.sum(bin_nells) / n_valid_bins + C_reg
 
@@ -675,10 +675,10 @@ class Poisson(CVI):
         # m = filter_array(m, ymask)
         # V = filter_array(V, ymask)
 
-        y = jnp.vstack(y)
-        ymask = jnp.vstack(ymask)
-        m = jnp.vstack(m)
-        V = jnp.vstack(V)
+        y = y.reshape(-1, y.shape[-1])
+        ymask = ymask.ravel()
+        m = m.reshape(-1, m.shape[-1])
+        V = V.reshape(-1, *V.shape[-2:])
 
         C, d = lbfgs_solve(
             (C, d), partial(poisson_trial_nell, y=y, ymask=ymask, m=m, V=V)

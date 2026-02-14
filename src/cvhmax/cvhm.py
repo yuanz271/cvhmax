@@ -217,7 +217,7 @@ class CVHM:
         )
 
         def em_step(iter, carry):
-            params, j, J, *_ = carry
+            params, _, _, j, J, *_ = carry
             M = params.lmask()
 
             (z, Z), (j, J) = self.cvi.infer(
@@ -238,6 +238,17 @@ class CVHM:
             m, V = sde2gp(z, Z, M)
 
             params, nell = self.cvi.update_readout(params, y, ymask, m, V)
+
+            # Refresh information from updated params.  For conjugate
+            # (Gaussian) readouts the pseudo-observations are a
+            # deterministic function of the readout parameters, so they
+            # must be recomputed after each M-step.  For non-conjugate
+            # (Poisson) readouts the CVI iterations inside ``infer``
+            # already maintain pseudo-observations, so the refresh has
+            # no effect beyond a warm restart.
+            j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
+                params, y, ymask, Af, Qf
+            )
 
             return params, z, Z, j, J, m, V, nell
 
