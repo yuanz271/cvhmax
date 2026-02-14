@@ -1,9 +1,13 @@
-"""Van der Pol oscillator demo: evaluate CVHM filtering with known readout.
+"""Van der Pol oscillator demo: CVHM inference with frozen and estimated readout.
 
 Synthesises 2-D latent trajectories from the Van der Pol oscillator, generates
-Poisson spike counts through a known loading matrix, then runs CVHM inference
-with the loading and bias fixed at their true values.  This isolates the
-filtering quality from readout estimation.
+Poisson spike counts through a known loading matrix, then runs two inference
+cases:
+
+1. **Frozen readout** — loading and bias are fixed at their true values,
+   isolating filtering quality from readout estimation.
+2. **Estimated readout** — loading and bias are initialised via factor
+   analysis and refined by LBFGS at each EM M-step.
 
 Usage::
 
@@ -114,75 +118,83 @@ def standardize(x):
 
 
 # ---------------------------------------------------------------------------
-# Main
+# Fit, evaluate, and plot
 # ---------------------------------------------------------------------------
 
 
-def main():
-    # --- Simulation parameters ---
-    rng = np.random.default_rng(2024)
-    n_trials = 10
-    T = 500
-    dt = 0.02
-    mu = 1.0
-    n_obs = 50
-    n_latents = 2
+def run_case(
+    y,
+    x_std,
+    kernels,
+    dt,
+    observation,
+    title,
+    out_path,
+    *,
+    params=None,
+    max_iter=50,
+    cvi_iter=5,
+    random_state=42,
+):
+    """Fit a CVHM model and save a diagnostic figure.
 
-    # --- Synthesise Van der Pol latents ---
-    x_raw = simulate_vdp(n_trials, T, dt, mu=mu, rng=rng)
-    x_std, _, _ = standardize(x_raw)
+    Parameters
+    ----------
+    y : Array
+        Observations shaped ``(n_trials, T, n_obs)``.
+    x_std : ndarray
+        Standardised true latents shaped ``(n_trials, T, n_latents)``.
+    kernels : list[HidaMatern]
+        One kernel per latent component.
+    dt : float
+        Sampling interval.
+    observation : str
+        CVI subclass name (e.g. ``"FrozenPoisson"``, ``"Poisson"``).
+    title : str
+        Figure super-title.
+    out_path : str
+        Path where the PDF figure is saved.
+    params : Params or None, optional
+        Pre-set readout parameters.  When provided the model skips
+        initialisation and uses these directly.
+    max_iter : int
+        Number of outer EM iterations.
+    cvi_iter : int
+        Number of inner CVI iterations per EM step.
+    random_state : int
+        Seed for initialisation.
 
-    # --- True readout ---
-    C_true = rng.standard_normal((n_obs, n_latents))
-    # Column-normalise so norm_loading(C_true) == C_true
-    C_true /= np.linalg.norm(C_true, axis=0, keepdims=True)
+    Returns
+    -------
+    float
+        Pooled R-squared between aligned posterior and true latents.
+    """
+    n_trials, T, n_latents = x_std.shape
 
-    baseline_rate = 5.0
-    d_true = np.full(n_obs, np.log(baseline_rate))
-
-    # --- Generate Poisson observations ---
-    log_rate = np.einsum("ntl,ol->nto", x_std, C_true) + d_true[None, None, :]
-    y_np = rng.poisson(np.exp(log_rate))
-    y = jnp.asarray(y_np, dtype=jnp.float64)
-
-    print(f"Latents: {x_std.shape}  Observations: {y.shape}")
-
-    # --- Build and fit model with frozen readout ---
-    kernels = [
-        HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(n_latents)
-    ]
     model = CVHM(
         n_components=n_latents,
         dt=dt,
         kernels=kernels,
-        observation="FrozenPoisson",
-        max_iter=50,
-        cvi_iter=5,
+        observation=observation,
+        max_iter=max_iter,
+        cvi_iter=cvi_iter,
     )
-    # Pre-set params so initialize_params returns them as-is
-    model.params = Params(
-        C=jnp.asarray(C_true),
-        d=jnp.asarray(d_true),
-        R=None,
-        M=model.latent_mask(),
-    )
-    model.fit(y, random_state=42)
+    if params is not None:
+        model.params = params
 
-    # --- Extract posterior ---
-    m, V = model.posterior
-    m = np.asarray(m)  # (n_trials, T, n_latents)
+    model.fit(y, random_state=random_state)
 
-    # --- Align inferred latents to true via least-squares ---
-    # The GP prior controls latent scale independently of C, so a linear
-    # transform is needed to map inferred coordinates back to true ones.
+    # --- Extract posterior and align ---
+    m = np.asarray(model.posterior[0])  # (n_trials, T, n_latents)
+
     m_flat = m.reshape(-1, n_latents)
     x_flat = x_std.reshape(-1, n_latents)
-    # Solve x_flat ≈ [m_flat, 1] @ W  (affine map)
     ones = np.ones((m_flat.shape[0], 1))
     A = np.hstack([m_flat, ones])
     W, _, _, _ = np.linalg.lstsq(A, x_flat, rcond=None)
     m_aligned = (A @ W).reshape(n_trials, T, n_latents)
 
+    # --- R-squared ---
     ss_res = np.sum((m_aligned.reshape(-1, n_latents) - x_flat) ** 2)
     ss_tot = np.sum((x_flat - x_flat.mean(axis=0)) ** 2)
     r2 = 1.0 - ss_res / ss_tot
@@ -198,7 +210,7 @@ def main():
     t_axis = np.arange(T) * dt
 
     fig, axs = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
-    fig.suptitle("CVHM inference on Van der Pol latents (frozen readout)")
+    fig.suptitle(title)
 
     # Time courses
     for dim, ax in enumerate(axs[0]):
@@ -234,7 +246,6 @@ def main():
         alpha = 0.4
         ax.plot(x_std[i, :, 0], x_std[i, :, 1], "b", alpha=alpha, linewidth=0.8)
         ax.plot(m_aligned[i, :, 0], m_aligned[i, :, 1], "r", alpha=alpha, linewidth=0.8)
-    # Manual legend entries
     ax.plot([], [], "b", label="True")
     ax.plot([], [], "r", label="Inferred")
     ax.set_xlabel("Latent 1")
@@ -243,10 +254,87 @@ def main():
     ax.legend(fontsize="small")
     ax.set_aspect("equal", adjustable="datalim")
 
-    out_path = "examples/demo_vdp.pdf"
     fig.savefig(out_path)
     plt.close(fig)
     print(f"Saved {out_path}")
+
+    return r2
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+
+def main():
+    # --- Simulation parameters ---
+    rng = np.random.default_rng(2024)
+    n_trials = 10
+    T = 500
+    dt = 0.02
+    mu = 1.0
+    n_obs = 50
+    n_latents = 2
+
+    # --- Synthesise Van der Pol latents ---
+    x_raw = simulate_vdp(n_trials, T, dt, mu=mu, rng=rng)
+    x_std, _, _ = standardize(x_raw)
+
+    # --- True readout ---
+    C_true = rng.standard_normal((n_obs, n_latents))
+    C_true /= np.linalg.norm(C_true, axis=0, keepdims=True)
+
+    baseline_rate = 5.0
+    d_true = np.full(n_obs, np.log(baseline_rate))
+
+    # --- Generate Poisson observations ---
+    log_rate = np.einsum("ntl,ol->nto", x_std, C_true) + d_true[None, None, :]
+    y_np = rng.poisson(np.exp(log_rate))
+    y = jnp.asarray(y_np, dtype=jnp.float64)
+
+    print(f"Latents: {x_std.shape}  Observations: {y.shape}")
+
+    # --- Shared kernels ---
+    kernels = [
+        HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(n_latents)
+    ]
+
+    # --- Case 1: Frozen readout (true C and d) ---
+    print("\n--- Frozen readout ---")
+    true_params = Params(
+        C=jnp.asarray(C_true),
+        d=jnp.asarray(d_true),
+        R=None,
+        M=CVHM(
+            n_components=n_latents, dt=dt, kernels=kernels, observation="FrozenPoisson"
+        ).latent_mask(),
+    )
+    run_case(
+        y,
+        x_std,
+        kernels,
+        dt,
+        observation="FrozenPoisson",
+        title="CVHM on Van der Pol latents (frozen readout)",
+        out_path="examples/demo_vdp_frozen.pdf",
+        params=true_params,
+        max_iter=50,
+        cvi_iter=5,
+    )
+
+    # --- Case 2: Estimated readout (C and d learned from data) ---
+    print("\n--- Estimated readout ---")
+    run_case(
+        y,
+        x_std,
+        kernels,
+        dt,
+        observation="Poisson",
+        title="CVHM on Van der Pol latents (estimated readout)",
+        out_path="examples/demo_vdp_estimated.pdf",
+        max_iter=50,
+        cvi_iter=5,
+    )
 
 
 if __name__ == "__main__":
