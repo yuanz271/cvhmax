@@ -12,6 +12,7 @@ from cvhmax.utils import (
     symm,
     conjtrans,
     norm_loading,
+    bin_info_repr,
     trial_info_repr,
     natural_to_moment,
     moment_to_natural,
@@ -142,6 +143,52 @@ def test_trial_info_repr_analytic(rng):
 
     npt.assert_allclose(np.asarray(j), np.asarray(j_exp), atol=1e-10)
     npt.assert_allclose(np.asarray(J), np.asarray(J_exp_tiled), atol=1e-10)
+
+
+def test_bin_info_repr_mask(rng):
+    """Masked bins contribute zero information (j=0, J=0)."""
+    N, L = 5, 2
+    C = jnp.array(rng.standard_normal((N, L)))
+    d = jnp.array(rng.standard_normal(N))
+    R = jnp.eye(N) * 0.5
+    y = jnp.array(rng.standard_normal(N))
+
+    # Unmasked: normal computation
+    j_on, J_on = bin_info_repr(y, jnp.array(1.0), C, d, R)
+    assert jnp.any(j_on != 0)
+    assert jnp.any(J_on != 0)
+
+    # Masked: zero information
+    j_off, J_off = bin_info_repr(y, jnp.array(0.0), C, d, R)
+    npt.assert_array_equal(np.asarray(j_off), 0.0)
+    npt.assert_array_equal(np.asarray(J_off), 0.0)
+
+
+def test_trial_info_repr_mask(rng):
+    """trial_info_repr zeros out masked bins, keeps unmasked bins."""
+    T, N, L = 10, 5, 2
+    C = jnp.array(rng.standard_normal((N, L)))
+    d = jnp.array(rng.standard_normal(N))
+    R = jnp.eye(N) * 0.5
+    y = jnp.array(rng.standard_normal((T, N)))
+
+    # Mask out bins 0, 3, 7
+    ymask = jnp.ones(T).at[jnp.array([0, 3, 7])].set(0.0)
+
+    j, J = trial_info_repr(y, ymask, C, d, R)
+
+    # Masked bins should be zero
+    for t in [0, 3, 7]:
+        npt.assert_array_equal(np.asarray(j[t]), 0.0)
+        npt.assert_array_equal(np.asarray(J[t]), 0.0)
+
+    # Unmasked bins should match direct computation
+    Rinv = jnp.linalg.inv(R)
+    J_exp = C.T @ Rinv @ C
+    for t in [1, 2, 4, 5, 6, 8, 9]:
+        j_exp_t = C.T @ Rinv @ (y[t] - d)
+        npt.assert_allclose(np.asarray(j[t]), np.asarray(j_exp_t), atol=1e-10)
+        npt.assert_allclose(np.asarray(J[t]), np.asarray(J_exp), atol=1e-10)
 
 
 # ---------------------------------------------------------------------------

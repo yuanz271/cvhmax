@@ -114,7 +114,9 @@ def bin_info_repr(
     y : Array
         Observations for one bin, shape ``(N,)``.
     ymask : Array
-        Observation mask for one bin, shape ``()``.
+        Observation mask for one bin, shape ``()``. When zero, both ``j``
+        and ``J`` are set to zero so the bin contributes no information
+        to the filter update.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
@@ -130,8 +132,8 @@ def bin_info_repr(
     J = C.T @ jnp.linalg.solve(R, C)
     j = C.T @ jnp.linalg.solve(R, y - d)
 
-    j: Array = jnp.where(jnp.expand_dims(ymask, -1), j, 0)
-    J: Array = jnp.where(jnp.expand_dims(jnp.expand_dims(ymask, -1), -1), J, 0)
+    j: Array = jnp.where(ymask, j, 0)
+    J: Array = jnp.where(ymask, J, 0)
 
     return j, J
 
