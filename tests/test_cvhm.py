@@ -33,7 +33,7 @@ def test_CVHM(capsys):
     y = jnp.expand_dims(y, 0)
 
     with capsys.disabled():
-        model = CVHM(n_factors, dt, kernels, max_iter=20, likelihood="Poisson")
+        model = CVHM(n_factors, dt, kernels, max_iter=20, observation="Poisson")
         result = model.fit(y)
     m, V = result.posterior
     m = m[0]
@@ -72,7 +72,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
 
     def fake_initialize_params(
-        cls, y, ymask, n_factors, lmask, *, random_state
+        cls, y, ymask, n_factors, lmask, *, random_state, params=None
     ) -> Params:
         obs_dim = y.shape[-1]
         C = jnp.zeros((obs_dim, n_factors), dtype=y.dtype)
@@ -121,7 +121,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
         n_components=n_components,
         dt=1.0,
         kernels=kernels,
-        likelihood="Poisson",
+        observation="Poisson",
         max_iter=3,
     )
 

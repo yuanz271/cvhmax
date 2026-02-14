@@ -27,20 +27,13 @@ config.update("jax_enable_x64", True)
 
 
 class FrozenPoisson(Poisson):
-    """Poisson CVI that never updates the readout parameters.
+    """Poisson CVI that keeps readout parameters fixed.
 
-    Set the class attributes ``_true_C`` and ``_true_d`` before calling
-    ``CVHM.fit`` so that ``initialize_params`` returns the true readout.
+    Pass pre-set ``Params`` via ``CVHM(params=...)`` and this subclass
+    will preserve them throughout fitting — ``initialize_params`` returns
+    them as-is (via the base class ``params`` argument) and
+    ``update_readout`` is a no-op.
     """
-
-    _true_C: np.ndarray | None = None
-    _true_d: np.ndarray | None = None
-
-    @classmethod
-    def initialize_params(cls, y, ymask, n_factors, lmask, *, random_state):
-        C = jnp.asarray(cls._true_C, dtype=y.dtype)
-        d = jnp.asarray(cls._true_d, dtype=y.dtype)
-        return Params(C=C, d=d, R=None, M=lmask)
 
     @classmethod
     def update_readout(cls, params, y, ymask, m, V):
@@ -154,11 +147,7 @@ def main():
 
     print(f"Latents: {x_std.shape}  Observations: {y.shape}")
 
-    # --- Set up FrozenPoisson ---
-    FrozenPoisson._true_C = C_true
-    FrozenPoisson._true_d = d_true
-
-    # --- Build and fit model ---
+    # --- Build and fit model with frozen readout ---
     kernels = [
         HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(n_latents)
     ]
@@ -166,9 +155,16 @@ def main():
         n_components=n_latents,
         dt=dt,
         kernels=kernels,
-        likelihood="FrozenPoisson",
+        observation="FrozenPoisson",
         max_iter=50,
         cvi_iter=5,
+    )
+    # Pre-set params so initialize_params returns them as-is
+    model.params = Params(
+        C=jnp.asarray(C_true),
+        d=jnp.asarray(d_true),
+        R=None,
+        M=model.latent_mask(),
     )
     model.fit(y, random_state=42)
 

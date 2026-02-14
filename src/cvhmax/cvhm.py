@@ -28,8 +28,8 @@ class CVHM:
         Sequence of kernel objects providing SSM parameters.
     params : Params | None, optional
         Initial CVI parameter state. Defaults to `None`.
-    likelihood : str, default="Gaussian"
-        Name of the CVI likelihood registered in `CVI.registry`.
+    observation : str, default="Gaussian"
+        Name of the CVI observation model registered in `CVI.registry`.
     lr : float, default=0.1
         Learning rate for pseudo-observation updates.
     max_iter : int, default=10
@@ -49,7 +49,7 @@ class CVHM:
     dt: float
     kernels: Sequence[Any]
     params: Params | None = None
-    likelihood: str = "Gaussian"
+    observation: str = "Gaussian"
     lr: float = 0.1
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 10
@@ -57,8 +57,8 @@ class CVHM:
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
-        """Resolve the CVI subclass for the requested likelihood."""
-        self.cvi = CVI.registry.get(self.likelihood, Gaussian)
+        """Resolve the CVI subclass for the requested observation model."""
+        self.cvi = CVI.registry.get(self.observation, Gaussian)
 
     def Af(self):
         """Forward transition matrix for the latent SSM.
@@ -156,7 +156,7 @@ class CVHM:
         >>> y = jnp.asarray(...)  # (trials, time, features)
         >>> ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
         >>> kernels = [HidaMatern(order=0) for _ in range(2)]
-        >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels, likelihood="Gaussian")
+        >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels, observation="Gaussian")
         >>> model.fit(y, ymask=ymask, random_state=0)
         """
         if ymask is None:
@@ -172,7 +172,12 @@ class CVHM:
             random_state = secrets.randbits(32)
 
         params = self.params = self.cvi.initialize_params(
-            y, ymask, self.n_components, self.latent_mask(), random_state=random_state
+            y,
+            ymask,
+            self.n_components,
+            self.latent_mask(),
+            random_state=random_state,
+            params=self.params,
         )
 
         Af = self.Af()

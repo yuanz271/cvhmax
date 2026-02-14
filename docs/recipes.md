@@ -10,10 +10,10 @@ If your observations are `(time, features)`, you can pass them directly. The mod
 
 Pad shorter trials with zeros and set the corresponding `ymask` entries to `0`. The filter will ignore masked bins.
 
-## Choosing Likelihoods
+## Choosing Observation Models
 
-- Use `likelihood="Gaussian"` for real-valued observations.
-- Use `likelihood="Poisson"` for count data.
+- Use `observation="Gaussian"` for real-valued observations.
+- Use `observation="Poisson"` for count data.
 
 ## Debugging Convergence
 

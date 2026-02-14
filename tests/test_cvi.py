@@ -253,7 +253,7 @@ def test_gaussian_e2e(linear_gaussian_data):
         n_components=1,
         dt=1.0,
         kernels=kernels,
-        likelihood="Gaussian",
+        observation="Gaussian",
         max_iter=10,
         cvi_iter=1,
     )

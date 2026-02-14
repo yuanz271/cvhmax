@@ -113,7 +113,7 @@ model = CVHM(
     n_components=2,
     dt=1.0,
     kernels=kernels,
-    likelihood="Gaussian",
+    observation="Gaussian",
     max_iter=5,
 )
 model.fit(y, ymask=ymask, random_state=0)

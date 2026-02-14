@@ -260,8 +260,21 @@ class CVI:
 
     @classmethod
     @abstractmethod
-    def initialize_params(cls, *args, **kwargs) -> Params:
+    def initialize_params(
+        cls,
+        y: Array,
+        ymask: Array,
+        n_factors: int,
+        lmask: Array,
+        *,
+        random_state: int,
+        params: Params | None = None,
+    ) -> Params:
         """Create the initial readout parameter state.
+
+        When ``params`` is provided, return it directly and skip
+        initialisation.  This allows callers to supply pre-set
+        parameters (e.g. the true readout in a simulation).
 
         Parameters
         ----------
@@ -273,6 +286,10 @@ class CVI:
             Number of latent factors to initialize.
         lmask : Array
             Latent mask mapping components to state-space coordinates.
+        random_state : int
+            Seed for any stochastic initialisation.
+        params : Params or None, optional
+            If provided, returned as-is (skipping initialisation).
 
         Returns
         -------
@@ -307,7 +324,9 @@ class Gaussian(CVI):
         tuple[tuple[Array, Array], tuple[Array, Array]]
             Smoothed latents and pseudo-observations.
         """
-        return super().infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr)
+        return super().infer(
+            params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr
+        )
 
     @classmethod
     @override
@@ -407,6 +426,7 @@ class Gaussian(CVI):
         lmask: Array,
         *,
         random_state: int,
+        params: Params | None = None,
     ) -> Params:
         """Initialise Gaussian readout via FA.
 
@@ -422,12 +442,17 @@ class Gaussian(CVI):
             Latent mask mapping latent components to outputs.
         random_state : int
             Seed used for factor analysis.
+        params : Params or None, optional
+            If provided, returned as-is (skipping initialisation).
 
         Returns
         -------
         Params
             Initial Gaussian readout parameters.
         """
+        if params is not None:
+            return params
+
         y = filter_array(y, ymask)
         _, C, d = fa_init(y, n_factors, random_state)
 
@@ -720,8 +745,9 @@ class Poisson(CVI):
         lmask: Array,
         *,
         random_state: int,
+        params: Params | None = None,
     ) -> Params:
-        """Initialise Poisson readout via FA followed by Whittle optimisation.
+        """Initialise Poisson readout via FA followed by LBFGS optimisation.
 
         Parameters
         ----------
@@ -735,12 +761,17 @@ class Poisson(CVI):
             Latent mask mapping latent components to outputs.
         random_state : int
             Seed used for factor analysis.
+        params : Params or None, optional
+            If provided, returned as-is (skipping initialisation).
 
         Returns
         -------
         Params
             Initial Poisson readout parameters.
         """
+        if params is not None:
+            return params
+
         y = filter_array(y, ymask)
         m, C, d = fa_init(y, n_factors, random_state)
 
