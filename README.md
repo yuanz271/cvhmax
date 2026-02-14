@@ -70,7 +70,7 @@ model = CVHM(
     n_components=n_latents,
     dt=dt,
     kernels=kernels,
-    likelihood="Poisson",  # or "Gaussian"
+    observation="Poisson",  # or "Gaussian"
     max_iter=5,
 )
 model.fit(y, ymask=ymask, random_state=0)

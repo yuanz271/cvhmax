@@ -421,6 +421,236 @@ j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
 
 ---
 
+## BUG-10: `latent_mask` stride-2 indexing assumes `order=1` — OPEN
+
+| | |
+|---|---|
+| **File** | `src/cvhmax/cvhm.py:129` |
+| **Severity** | Medium — wrong posterior extraction for multi-component models with `order != 1` |
+| **Affects** | `CVHM.latent_mask()` → `sde2gp` → posterior mean/covariance |
+| **Status** | Open |
+
+### Description
+
+`CVHM.latent_mask` constructs the selection matrix `M` that maps latent
+components to their corresponding real-valued state-space coordinates.
+After `block_diag` of N complex kernel blocks and `real_repr`, the state
+vector is laid out as:
+
+```
+[Re(kernel_0), ..., Re(kernel_{N-1}), Im(kernel_0), ..., Im(kernel_{N-1})]
+```
+
+where each kernel occupies `nple = order + 1` consecutive entries in the
+real and imaginary halves.
+
+The current code uses a hardcoded stride of 2:
+
+```python
+for i in range(self.n_components):
+    M = M.at[i, i * 2].set(1.0)
+```
+
+This places 1s at columns 0, 2, 4, … which is only correct when every
+kernel has `nple = 2` (i.e., `order = 1`). For other orders or mixed
+orders, the mask selects the wrong state-space dimensions.
+
+### Example
+
+Two `order=0` kernels (`nple=1` each). `ssm_dim = 2`, state vector has
+4 entries: `[Re(k0), Re(k1), Im(k0), Im(k1)]`.
+
+| Latent | Current (`i*2`) | Selects | Correct column | Should select |
+|--------|-----------------|---------|----------------|---------------|
+| 0 | 0 | Re(k0) | 0 | Re(k0) |
+| 1 | 2 | Im(k0) | 1 | Re(k1) |
+
+Latent 1 picks the imaginary part of kernel 0 instead of the real part
+of kernel 1.
+
+### Scope
+
+| Condition | Correct? |
+|-----------|----------|
+| `n_components = 1` (any order) | Yes — `0 * 2 = 0` matches offset 0 |
+| `n_components >= 2`, all `order = 1` | Yes — stride 2 matches `nple = 2` |
+| `n_components >= 2`, any `order != 1` | **No** |
+
+### Root cause
+
+Hardcoded stride of 2 instead of accumulating each kernel's `nple`.
+
+### Proposed fix
+
+Replace the stride-2 loop with `nple`-based offset accumulation,
+consistent with `utils.latent_mask` (`utils.py:265`):
+
+```python
+offset = 0
+for i, kernel in enumerate(self.kernels):
+    M = M.at[i, offset].set(1.0)
+    offset += kernel.nple
+```
+
+---
+
+## BUG-11: `ridge_estimate` divides residual covariance by total `T` instead of valid count — FIXED
+
+| | |
+|---|---|
+| **File** | `src/cvhmax/utils.py:396` |
+| **Severity** | Medium — systematically underestimates observation noise when data is partially masked |
+| **Affects** | `ridge_estimate` → `Gaussian.update_readout` → observation information `(j, J)` |
+| **Test** | — |
+| **Status** | Fixed |
+
+### Description
+
+`ridge_estimate` zeros out masked rows of `y` and `m1` before computing
+the regression (lines 386–388), so the residual `r = y - m1 @ w` is zero
+for masked bins. The sum of squared residuals `r.T @ r` therefore only
+accumulates contributions from valid bins — this is correct.
+
+However, the observation noise covariance was computed as:
+
+```python
+R = r.T @ r / T
+```
+
+where `T` is the total number of rows (valid + masked). Masked rows
+contribute zero to the numerator but inflate the denominator, causing `R`
+to be underestimated in proportion to the fraction of masked bins.
+
+### Example
+
+With `T = 100` bins and 50 masked (`ymask` has 50 ones), the sum of
+squared residuals comes from 50 bins but is divided by 100, making `R`
+roughly half its true value.
+
+### Downstream impact
+
+`R` feeds into `bin_info_repr` (`utils.py:132`):
+
+```python
+J = C.T @ solve(R, C)
+j = C.T @ solve(R, y - d)
+```
+
+An underestimated `R` inflates `J` and `j`, making the filter
+overconfident in observations relative to the dynamics prior. The
+posterior is biased toward noisy observations and away from the smoothed
+latent trajectory. The effect scales with the masked fraction.
+
+### Root cause
+
+Divisor should be the number of valid bins, not the total bin count.
+
+### Fix
+
+Replaced the divisor with the valid count:
+
+```python
+n_valid = jnp.maximum(jnp.sum(ymask), 1.0)
+R = r.T @ r / n_valid
+```
+
+`jnp.maximum(..., 1.0)` guards against division by zero when all bins
+are masked. At this point `ymask` has shape `(T, 1)` (from
+`expand_dims` on line 386), so `jnp.sum(ymask)` counts the valid bins.
+
+### Note
+
+With fully-observed data (`ymask` all ones), `n_valid == T` and the
+result is unchanged. This is likely why the bug was not caught — tests
+typically use fully-observed data.
+
+---
+
+## BUG-12: README example uses wrong parameter name `likelihood` — FIXED
+
+| | |
+|---|---|
+| **File** | `README.md:73` |
+| **Severity** | Low — runtime `TypeError` if user copies the example |
+| **Affects** | Documentation only |
+| **Status** | Fixed |
+
+### Description
+
+The README quickstart passes `likelihood="Poisson"` to the `CVHM`
+constructor:
+
+```python
+model = CVHM(
+    n_components=n_latents,
+    dt=dt,
+    kernels=kernels,
+    likelihood="Poisson",  # or "Gaussian"
+    max_iter=5,
+)
+```
+
+The `CVHM` dataclass (`cvhm.py:52`) defines the field as
+`observation: str = "Gaussian"`. Using `likelihood=` raises:
+
+```
+TypeError: CVHM.__init__() got an unexpected keyword argument 'likelihood'
+```
+
+`docs/quickstart.md` already uses the correct `observation=` kwarg.
+
+### Fix
+
+Change `likelihood="Poisson"` to `observation="Poisson"` on
+`README.md:73`.
+
+---
+
+## BUG-13: Version mismatch between `pyproject.toml` and `__about__.py` — FIXED
+
+| | |
+|---|---|
+| **File** | `pyproject.toml:3` / `src/cvhmax/__about__.py:4` |
+| **Severity** | Low — no runtime impact but confusing for packaging/release |
+| **Affects** | Version reporting |
+| **Status** | Fixed |
+
+### Description
+
+`pyproject.toml` declares `version = "0.1.0"` while `__about__.py`
+declares `__version__ = "0.0.1"`. The build system (hatchling) uses
+`pyproject.toml` as the authoritative source, so installed packages get
+`0.1.0`. The `__about__.py` file is not imported by any module, so this
+is purely a maintenance inconsistency.
+
+### Fix
+
+Align `__about__.py` to `"0.1.0"`.
+
+---
+
+## BUG-14: Impossible `torch>=2.10.0` dev dependency — FIXED
+
+| | |
+|---|---|
+| **File** | `pyproject.toml:40` |
+| **Severity** | Low — prevents installing dev dependencies; all parity tests skipped |
+| **Affects** | Dev environment setup, `tests/test_parity.py` |
+| **Status** | Fixed |
+
+### Description
+
+The dev dependency group pins `torch>=2.10.0`. PyTorch has not released
+version 2.10 (latest stable is ~2.5). This prevents
+`uv sync --group dev` or equivalent from resolving torch, which means
+the parity tests (all guarded by `@requires_ref`) are always skipped.
+
+### Fix
+
+Lower to a version that exists, e.g. `torch>=2.1.0`.
+
+---
+
 ## Summary table
 
 | ID | Location | Severity | Category | Status | Test |
@@ -434,6 +664,11 @@ j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
 | BUG-7 | `cvi.py:507` | Low | Masking | **Fixed** | Latent |
 | BUG-8 | `cvhm.py:220` | Critical | Logic | **Fixed** | `test_gaussian_e2e` |
 | BUG-9 | `cvhm.py:240` | High | Logic | **Fixed** | `test_gaussian_e2e` |
+| BUG-10 | `cvhm.py:129` | Medium | Indexing | **Open** | — |
+| BUG-11 | `utils.py:396` | Medium | Masking | **Fixed** | — |
+| BUG-12 | `README.md:73` | Low | Docs | **Fixed** | — |
+| BUG-13 | `pyproject.toml:3` / `__about__.py:4` | Low | Config | **Fixed** | — |
+| BUG-14 | `pyproject.toml:40` | Low | Config | **Fixed** | — |
 
 ### Interaction between bugs
 

@@ -393,7 +393,8 @@ def ridge_estimate(y, ymask, m, V, lam=0.1):
     w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
 
     r = y - m1 @ w  # (t, y)
-    R = r.T @ r / T  # (y, y)
+    n_valid = jnp.maximum(jnp.sum(ymask), 1.0)
+    R = r.T @ r / n_valid  # (y, y)
 
     d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
 
