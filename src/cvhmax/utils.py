@@ -101,40 +101,95 @@ def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
-def trial_info_repr(
+def bin_info_repr(
     y: Array, ymask: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
-    """Compute Gaussian observation information per time bin.
+    """Compute Gaussian observation information for a single bin.
+
+    Operates on one bin of observations and returns
+    information vectors ``j`` and matrices ``J``.
 
     Parameters
     ----------
     y : Array
-        Observation tensor.
+        Observations for one bin, shape ``(N,)``.
     ymask : Array
-        Observation mask aligned with `y`.
+        Observation mask for one bin, shape ``()``.
     C : Array
-        Observation matrix.
+        Observation matrix, shape ``(N, L)``.
     d : Array
-        Bias term.
+        Bias term, shape ``(N,)``.
     R : Array
-        Observation covariance.
+        Observation covariance, shape ``(N, N)``.
 
     Returns
     -------
     tuple[Array, Array]
-        Observation information vectors and matrices.
+        ``(j, J)`` with shapes ``(L,)`` and ``(L, L)``.
     """
-    T = y.shape[0]
-
     J = C.T @ jnp.linalg.solve(R, C)
-    j = C.T @ jnp.linalg.solve(R, y.T - d)
-    j = j.T
-    J = jnp.tile(J, (T, 1, 1))
+    j = C.T @ jnp.linalg.solve(R, y - d)
 
     j: Array = jnp.where(jnp.expand_dims(ymask, -1), j, 0)  # broadcastable mask
-    # J: Array = jnp.where(jnp.expand_dims(ymask, (-2, -1)), J, 0)
 
     return j, J
+
+
+def trial_info_repr(
+    y: Array, ymask: Array, C: Array, d: Array, R: Array
+) -> tuple[Array, Array]:
+    """Compute Gaussian observation information for a single trial.
+
+    Vmaps :func:`bin_info_repr` over the leading (time) axis of ``y``.
+
+    Parameters
+    ----------
+    y : Array
+        Observations for one trial, shape ``(T, N)``.
+    ymask : Array
+        Observation mask for one trial, shape ``(T,)``.
+    C : Array
+        Observation matrix, shape ``(N, L)``.
+    d : Array
+        Bias term, shape ``(N,)``.
+    R : Array
+        Observation covariance, shape ``(N, N)``.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        ``(j, J)`` with shapes ``(T, L)`` and ``(T, L, L)``.
+    """
+    return jax.vmap(partial(bin_info_repr, C=C, d=d, R=R))(y, ymask)
+
+
+def batch_info_repr(
+    y: Array, ymask: Array, C: Array, d: Array, R: Array
+) -> tuple[Array, Array]:
+    """Compute Gaussian observation information for multiple trials.
+
+    Vmaps :func:`trial_info_repr` over the leading (trial) axis of ``y``.
+
+    Parameters
+    ----------
+    y : Array
+        Observations, shape ``(trials, T, N)``.
+    ymask : Array
+        Observation mask, shape ``(trials, T)``.
+    C : Array
+        Observation matrix, shape ``(N, L)``.
+    d : Array
+        Bias term, shape ``(N,)``.
+    R : Array
+        Observation covariance, shape ``(N, N)``.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        ``(j, J)`` with shapes ``(trials, T, L)`` and
+        ``(trials, T, L, L)``.
+    """
+    return jax.vmap(partial(trial_info_repr, C=C, d=d, R=R))(y, ymask)
 
 
 def conjtrans(x):

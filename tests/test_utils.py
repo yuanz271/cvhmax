@@ -8,8 +8,13 @@ import numpy.testing as npt
 
 from cvhmax import utils
 from cvhmax.utils import (
-    real_repr, symm, conjtrans, norm_loading, trial_info_repr,
-    natural_to_moment, moment_to_natural,
+    real_repr,
+    symm,
+    conjtrans,
+    norm_loading,
+    trial_info_repr,
+    natural_to_moment,
+    moment_to_natural,
 )
 
 
@@ -118,14 +123,10 @@ def test_norm_loading_unit_rows(rng):
 
 
 def test_trial_info_repr_analytic(rng):
-    """trial_info_repr matches hand-computed j = C^T R^{-1}(y-d), J = C^T R^{-1} C.
-
-    Note: trial_info_repr does ``y.T - d`` which requires ``d`` to have shape
-    ``(N, 1)`` for broadcasting with ``y.T`` of shape ``(N, T)``.
-    """
+    """trial_info_repr matches hand-computed j = C^T R^{-1}(y-d), J = C^T R^{-1} C."""
     T, N, L = 50, 8, 3
     C = jnp.array(rng.standard_normal((N, L)))
-    d = jnp.array(rng.standard_normal((N, 1)))  # column vector for broadcast
+    d = jnp.array(rng.standard_normal(N))
     R = jnp.eye(N) * 0.5
     y = jnp.array(rng.standard_normal((T, N)))
     ymask = jnp.ones(T)
@@ -134,7 +135,8 @@ def test_trial_info_repr_analytic(rng):
 
     # Expected
     Rinv = jnp.linalg.inv(R)
-    j_exp = (C.T @ Rinv @ (y.T - d)).T  # (T, L)
+    # Expected: per-bin j_t = C^T R^{-1} (y_t - d), J = C^T R^{-1} C tiled
+    j_exp = (C.T @ Rinv @ (y.T - d[:, None])).T  # (T, L)
     J_exp = C.T @ Rinv @ C  # (L, L)
     J_exp_tiled = jnp.tile(J_exp, (T, 1, 1))
 

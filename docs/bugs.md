@@ -7,49 +7,65 @@ using explicit `assert not allclose` checks).
 
 ---
 
-## BUG-1: `trial_info_repr` J shape when vmapped per time bin
+## BUG-1: Redundant vmap in `Gaussian.initialize_info` — FIXED
 
 | | |
 |---|---|
-| **File** | `src/cvhmax/utils.py:132` |
+| **File** | `src/cvhmax/cvi.py:385` (inner vmap) + `src/cvhmax/cvhm.py:215` (outer vmap) |
 | **Severity** | High — produces wrong-rank output, breaks downstream filtering |
-| **Affects** | `Gaussian.initialize_info` |
-| **Test** | `tests/test_cvi.py::test_gaussian_initialize_info_shape` (xfail) |
+| **Affects** | `Gaussian.initialize_info` → `bin_info_repr` |
+| **Test** | `tests/test_cvi.py::test_gaussian_initialize_info_shape` |
+| **Status** | Fixed |
 
 ### Description
 
-`trial_info_repr` computes `J = C.T @ solve(R, C)` (shape `(L, L)`) then
-tiles it with `jnp.tile(J, (T, 1, 1))` where `T = y.shape[0]`.
-
-`Gaussian.initialize_info` (`cvi.py:366`) calls:
+`initialize_info` is called from `CVHM.fit` (`cvhm.py:215`) wrapped in an
+outer vmap over the trial axis:
 
 ```python
-return vmap(partial(trial_info_repr, C=H, d=d, R=R))(y, ymask)
+j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
+    params, y, ymask, Af, Qf
+)
 ```
 
-This vmaps over the time axis of `y` (shape `(T, N)`), so each invocation
-receives `y_t` of shape `(N,)`. Inside `trial_info_repr`, `T = y.shape[0]`
-evaluates to `N` (observation dimension), producing `J` of shape `(N, L, L)`
-per time bin. After the vmap, the final shape is `(T, N, L, L)` instead of
-the expected `(T, L, L)`.
+With `y` shaped `(trials, T, N)`, the outer vmap strips the trial axis, so
+each `initialize_info` call receives `y` of shape `(T, N)`.
+
+`Gaussian.initialize_info` (`cvi.py:385`) then applied a second vmap:
+
+```python
+return vmap(partial(bin_info_repr, C=H, d=d, R=R))(y, ymask)
+```
+
+This mapped over the leading axis of `(T, N)`, passing per-time-bin slices of
+shape `(N,)` to `bin_info_repr`. The old `bin_info_repr` (then called
+`trial_info_repr`) interpreted its first argument as `(T, N)` and did
+`jnp.tile(J, (T, 1, 1))` where `T = y.shape[0]` evaluated to `N`
+(observation dimension, not time), producing `(T, N, L, L)` instead of
+`(T, L, L)`.
 
 ### Root cause
 
-`trial_info_repr` was designed to operate on a full `(T, N)` observation
-matrix. `Gaussian.initialize_info` incorrectly vmaps it over individual time
-bins.
+`bin_info_repr` was designed to operate on a full `(T, N)` matrix for a
+single trial.  `Gaussian.initialize_info` incorrectly vmapped it over
+individual time bins, but the trial axis was already stripped by the outer
+vmap in `cvhm.py:215`.
 
-### Suggested fix
+### Fix
 
-Remove the inner vmap in `Gaussian.initialize_info` and call
-`trial_info_repr` directly:
+Refactored the information-representation functions into a clear hierarchy:
+
+- `bin_info_repr(y, ymask, C, d, R)` — single bin, `y` shape `(N,)`
+- `trial_info_repr(y, ymask, C, d, R)` — vmaps `bin_info_repr` over time,
+  `y` shape `(T, N)`
+- `batch_info_repr(y, ymask, C, d, R)` — vmaps `trial_info_repr` over
+  trials, `y` shape `(trials, T, N)`
+
+`Gaussian.initialize_info` now calls `trial_info_repr` directly:
 
 ```python
 return trial_info_repr(y, ymask, H, d, R)
 ```
-
-`trial_info_repr` already handles the full `(T, N)` tensor and tiles `J`
-to `(T, L, L)`.
 
 ---
 
@@ -102,7 +118,7 @@ return super().infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1,
 |---|---|
 | **File** | `src/cvhmax/cvi.py:434` |
 | **Severity** | High — crashes the Gaussian E2E pipeline |
-| **Affects** | `Gaussian.initialize_params` → `trial_info_repr` |
+| **Affects** | `Gaussian.initialize_params` → `bin_info_repr` |
 | **Test** | `tests/test_cvi.py::test_gaussian_e2e` (xfail) |
 
 ### Description
@@ -113,7 +129,7 @@ return super().infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1,
 R = jnp.zeros(y.shape[-1])  # shape (N,) — 1D vector
 ```
 
-This `R` is later passed to `trial_info_repr` which calls
+This `R` is later passed to `bin_info_repr` which calls
 `jnp.linalg.solve(R, C)`. `solve` requires a 2D matrix for its first
 argument; a 1D vector raises a shape error.
 
@@ -211,64 +227,56 @@ quad = einsum("nl, ln -> n", H, cho_solve(Zcho, H.mT))  # Sigma = Z^{-1}
 
 ---
 
-## BUG-5: `trial_info_repr` broadcasting with `d`
+## BUG-5: `bin_info_repr` broadcasting with `d` — FIXED
 
 | | |
 |---|---|
 | **File** | `src/cvhmax/utils.py:130` |
 | **Severity** | Medium — silent wrong results when `N != T` |
-| **Affects** | `trial_info_repr`, `Gaussian.initialize_info` |
-| **Test** | `tests/test_utils.py::test_trial_info_repr_analytic` (uses workaround), `tests/test_parity.py::test_observation_info_parity` (uses workaround) |
+| **Affects** | `bin_info_repr`, `Gaussian.initialize_info` |
+| **Test** | `tests/test_utils.py::test_trial_info_repr_analytic`, `tests/test_parity.py::test_observation_info_parity` |
+| **Status** | Fixed |
 
 ### Description
 
-`trial_info_repr` computes `y.T - d` on line 130:
-
-```python
-j = C.T @ jnp.linalg.solve(R, y.T - d)
-```
-
-`y.T` has shape `(N, T)` and `d` (the bias) has shape `(N,)`. JAX broadcasts
-`(N,)` as `(1, N)`, producing `(N, T) - (1, N)` which only works when
-`N == T`. When `N != T`, this either raises a shape error or silently
-produces wrong results via broadcasting.
+The old `bin_info_repr` (then called `trial_info_repr`) computed `y.T - d`
+where `y.T` had shape `(N, T)` and `d` had shape `(N,)`. JAX broadcast
+`(N,)` as `(1, N)`, producing `(N, T) - (1, N)` which only worked when
+`N == T`. When `N != T`, this either raised a shape error or silently
+produced wrong results.
 
 ### Root cause
 
-`d` should be reshaped to `(N, 1)` (column vector) so that it broadcasts
-correctly against `(N, T)`.
+The function operated on a full `(T, N)` matrix and transposed `y` before
+subtracting `d`, creating a broadcasting mismatch.
 
-### Workaround
+### Fix
 
-Callers can pass `d` as `d[:, None]` (shape `(N, 1)`). The existing parity
-tests use this workaround.
-
-### Suggested fix
-
-Inside `trial_info_repr`, reshape `d` before the subtraction:
-
-```python
-d = d[:, None] if d.ndim == 1 else d  # ensure (N, 1) for broadcasting
-j = C.T @ jnp.linalg.solve(R, y.T - d)
-```
+`bin_info_repr` now operates on a single bin: `y` has shape `(N,)` and `d`
+has shape `(N,)`, so `y - d` is element-wise with no broadcasting ambiguity.
+The `d[:, None]` workarounds in tests have been removed.
 
 ---
 
 ## Summary table
 
-| ID | Location | Severity | Category | Status | xfail test |
-|----|----------|----------|----------|--------|------------|
-| BUG-1 | `utils.py:132` / `cvi.py:366` | High | Shape | **Open** | `test_gaussian_initialize_info_shape` |
+| ID | Location | Severity | Category | Status | Test |
+|----|----------|----------|----------|--------|------|
+| BUG-1 | `cvi.py:385` / `cvhm.py:215` | High | Shape | **Fixed** | `test_gaussian_initialize_info_shape` |
 | BUG-2 | `cvi.py:310` | High | Dispatch | **Fixed** (`4439022`) | `test_gaussian_infer_single_cvi_iter` |
-| BUG-3 | `cvi.py:434` | High | Shape | **Open** | `test_gaussian_e2e` |
+| BUG-3 | `cvi.py:434` | High | Shape | **Open** | `test_gaussian_e2e` (xfail) |
 | BUG-4 | `cvi.py:525` | Medium | Convention | **Fixed** (`4439022`) | `test_poisson_cvi_bin_stats_convention` |
-| BUG-5 | `utils.py:130` | Medium | Broadcasting | **Open** | (workaround in tests) |
+| BUG-5 | `utils.py:130` | Medium | Broadcasting | **Fixed** | `test_trial_info_repr_analytic` |
 
 ### Interaction between bugs
 
-BUG-1 and BUG-3 together make the Gaussian end-to-end pipeline non-functional:
-BUG-3 crashes during parameter initialization, and even if `R` were fixed,
-BUG-1 would produce wrong-rank `J` tensors during filtering.
+**BUG-3** is the only remaining open bug. It crashes during
+`Gaussian.initialize_params` by creating a 1D `R` vector instead of a 2D
+covariance matrix, which blocks the Gaussian end-to-end pipeline.
+
+~~BUG-1 and BUG-3 together make the Gaussian end-to-end pipeline
+non-functional.~~ **BUG-1 fixed** — `bin_info_repr` now operates per-bin on
+`(N,)` input and `Gaussian.initialize_info` calls `trial_info_repr` directly.
 
 ~~BUG-2 affects the Gaussian CVI loop but is partially masked by the conjugate
 structure.~~ **Fixed** — `Gaussian.infer` now uses `super().infer(...)` which
@@ -279,5 +287,6 @@ the erroneous `-0.5` factor in `poisson_cvi_bin_stats` has been removed,
 aligning moment recovery with the information-form convention used by the
 rest of the codebase.
 
-BUG-5 affects both likelihoods through `trial_info_repr` but is easily
-worked around by passing `d` as `d[:, None]`.
+~~BUG-5 affects both likelihoods through `bin_info_repr`.~~ **Fixed** —
+`bin_info_repr` now operates on a single bin where `y` and `d` are both
+`(N,)`, eliminating the broadcasting issue.

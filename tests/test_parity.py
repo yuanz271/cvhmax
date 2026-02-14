@@ -911,12 +911,11 @@ def test_observation_info_parity():
     )
 
     # --- cvhmax (single trial) ---
-    # trial_info_repr expects d as (N, 1) for broadcasting with y.T
     j_jax, J_jax = trial_info_repr(
         jnp.array(y_np[0]),
         jnp.array(ymask_np[0]),
         jnp.array(C_np),
-        jnp.array(d_np[:, None]),
+        jnp.array(d_np),
         jnp.array(R_np),
     )
 

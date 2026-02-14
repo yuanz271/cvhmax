@@ -382,7 +382,7 @@ class Gaussian(CVI):
 
         H = C @ M
 
-        return vmap(partial(trial_info_repr, C=H, d=d, R=R))(y, ymask)
+        return trial_info_repr(y, ymask, H, d, R)
 
     @classmethod
     @override
@@ -752,7 +752,7 @@ class Poisson(CVI):
         Parameters
         ----------
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim)`.
+            Flatten observation tensor shaped `(trials * time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         n_factors : int

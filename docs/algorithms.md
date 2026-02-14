@@ -66,7 +66,7 @@ J = Hᵀ R⁻¹ H       observation information matrix (positive semi-definite)
 j = Hᵀ R⁻¹ (y − d)  observation information vector
 ```
 
-Computed by `trial_info_repr` in `utils.py`. In the Poisson CVI path, `(j, J)` are pseudo-observations updated iteratively rather than computed from a closed-form likelihood.
+Computed by `bin_info_repr` in `utils.py` (with `trial_info_repr` and `batch_info_repr` as vmapped wrappers over trial and batch axes respectively). In the Poisson CVI path, `(j, J)` are pseudo-observations updated iteratively rather than computed from a closed-form likelihood.
 
 ### Variable name glossary
 

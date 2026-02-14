@@ -9,7 +9,7 @@ from sklearn.linear_model import LinearRegression
 from cvhmax.cvi import Params, poisson_cvi_bin_stats, Poisson, Gaussian
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern, sample_matern
-from cvhmax.utils import norm_loading, trial_info_repr
+from cvhmax.utils import norm_loading
 import chex
 
 
@@ -75,12 +75,9 @@ def test_Poisson(capsys):
 def test_gaussian_initialize_info_values(rng):
     """Gaussian.initialize_info produces j = H^T R^{-1}(y-d), J = H^T R^{-1} H.
 
-    Gaussian.initialize_info uses ``vmap(trial_info_repr)(y, ymask)`` which
-    maps over the *time* axis.  Each per-bin call receives ``y_t`` of shape
-    ``(N,)`` but ``trial_info_repr`` interprets its first arg as ``(T, N)`` and
-    does ``jnp.tile(J, (T, 1, 1))`` with T = y.shape[0] = N, producing an
-    extra dimension.  This test verifies the Gaussian info formula directly,
-    bypassing the source bug.
+    Gaussian.initialize_info calls ``trial_info_repr(y, ymask, H, d, R)``
+    which vmaps ``bin_info_repr`` over the time axis.  This test verifies
+    the Gaussian observation information formula directly.
     """
     T, N, L = 30, 8, 2
     C_raw = jnp.array(rng.standard_normal((N, L)))
@@ -113,15 +110,6 @@ def test_gaussian_initialize_info_values(rng):
     assert np.all(eigvals >= -1e-10), f"J has negative eigenvalues: {eigvals}"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Gaussian.initialize_info vmaps trial_info_repr per time bin, but "
-        "trial_info_repr does jnp.tile(J, (T, 1, 1)) where T = y.shape[0]. "
-        "Per-bin y has shape (N,) so T becomes N, producing extra dimension "
-        "in J: (trials, T, N, L, L) instead of (trials, T, L, L)."
-    ),
-    strict=True,
-)
 def test_gaussian_initialize_info_shape():
     """Gaussian.initialize_info should produce J of shape (trials, T, L, L)."""
     T, N, L = 30, 8, 2
@@ -236,8 +224,8 @@ def test_poisson_cvi_gradient_direction(rng):
 @pytest.mark.xfail(
     reason=(
         "Gaussian.initialize_params creates R=jnp.zeros(y.shape[-1]) (1D vector) "
-        "which crashes in trial_info_repr's jnp.linalg.solve(R, C) that expects "
-        "a 2-D matrix. Source bug in cvi.py:434."
+        "which crashes in bin_info_repr's jnp.linalg.solve(R, C) that expects "
+        "a 2D matrix. Source bug in cvi.py:434."
     ),
     strict=True,
 )
