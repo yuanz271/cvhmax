@@ -779,7 +779,7 @@ class Poisson(CVI):
         m, C, d = fa_init(y, n_factors, random_state)
 
         n_bins, n_obs = y.shape
-        V = jnp.zeros((n_bins, n_factors, n_factors))  # dummpy variance
+        V = jnp.zeros((n_bins, n_factors, n_factors))  # dummy variance
 
         C, d = lbfgs_solve(
             (C, d),

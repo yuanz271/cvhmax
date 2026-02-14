@@ -199,7 +199,7 @@ class CVHM:
         Z0 = jnp.tile(Z0, (n_trials, 1, 1))
         # <<<
 
-        # >>> Make dummpy variables
+        # >>> Make dummy variables
         z = jnp.zeros((n_trials, n_bins, L))
         Z = jnp.zeros((n_trials, n_bins, L, L))
         m = jnp.zeros((n_trials, n_bins, self.n_components))
