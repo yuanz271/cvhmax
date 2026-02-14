@@ -10,7 +10,7 @@ from jax.scipy.linalg import block_diag
 import chex
 
 from .cvi import CVI, Gaussian, Params
-from .utils import real_repr, symm, training_progress, to_device
+from .utils import real_repr, symm, cho_inv, training_progress, to_device
 from .filtering import bifilter
 
 
@@ -186,15 +186,15 @@ class CVHM:
         Qb = self.Qb()
         Q0 = self.Q0()
 
-        Pf = jnp.linalg.inv(Qf)
-        Pb = jnp.linalg.inv(Qb)
+        Pf = cho_inv(Qf)
+        Pb = cho_inv(Qb)
 
         # >>> Make stationary distribution
         n_trials = jnp.size(y, 0)
         n_bins = jnp.size(y, 1)
         L = Af.shape[0]
         z0 = jnp.zeros(L)
-        Z0 = jnp.linalg.inv(Q0)
+        Z0 = cho_inv(Q0)
         z0 = jnp.tile(z0, (n_trials, 1))
         Z0 = jnp.tile(Z0, (n_trials, 1, 1))
         # <<<
@@ -347,5 +347,5 @@ def sde2gp(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:
         Posterior means and covariances induced by the mask `M`.
     """
     m = vmap(lambda zk, Zk: jnp.linalg.solve(Zk, zk[..., None])[..., 0] @ M.T)(z, Z)
-    V = vmap(lambda Zk: M @ jnp.linalg.inv(Zk) @ M.T)(Z)
+    V = vmap(vmap(lambda Zk: M @ cho_inv(Zk) @ M.T))(Z)
     return m, V

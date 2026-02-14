@@ -85,6 +85,23 @@ def symm(x):
     return 0.5 * (x + x.T)
 
 
+def cho_inv(A: Array) -> Array:
+    """Invert a symmetric positive-definite matrix via Cholesky decomposition.
+
+    Parameters
+    ----------
+    A : Array
+        Symmetric positive-definite matrix, shape ``(D, D)``.
+
+    Returns
+    -------
+    Array
+        The inverse ``A⁻¹``, shape ``(D, D)``.
+    """
+    Lcho = jsp.linalg.cho_factor(A)
+    return jsp.linalg.cho_solve(Lcho, jnp.eye(A.shape[-1]))
+
+
 def real_repr(c):
     """Convert a complex matrix to its real-valued block representation.
 
