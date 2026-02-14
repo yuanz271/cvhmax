@@ -528,7 +528,9 @@ def poisson_cvi_bin_stats(
     y : Array
         Observed counts for the bin.
     ymask : Array
-        Boolean mask marking valid observations.
+        Observation mask for one bin, shape ``()``. When zero, both ``k``
+        and ``K`` are set to zero so the bin contributes no
+        pseudo-observation gradient to the CVI update.
     H : Array
         Effective observation matrix.
     d : Array
@@ -561,8 +563,8 @@ def poisson_cvi_bin_stats(
     K = -2 * grad_V
     k = grad_m - 2 * grad_V @ m
 
-    k = jnp.where(jnp.expand_dims(ymask, -1), k, 0)
-    K = jnp.where(jnp.expand_dims(ymask, (-2, -1)), K, 0)
+    k = jnp.where(ymask, k, 0)
+    K = jnp.where(ymask, K, 0)
 
     return k, K
 

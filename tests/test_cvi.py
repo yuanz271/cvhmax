@@ -175,18 +175,23 @@ def test_gaussian_infer_single_cvi_iter():
 
 
 def test_poisson_cvi_masked_zero():
-    """When ymask=0, poisson_cvi_bin_stats should produce j=0, J=0."""
+    """Masked bins contribute zero CVI gradients (k=0, K=0)."""
     N, L = 5, 3
-    z = jnp.zeros(L)
-    Z = -jnp.eye(L)  # valid precision (negative for the -0.5 convention)
+    z = jnp.ones(L)
+    Z = jnp.eye(L) * 2.0
     y = jnp.ones(N) * 10.0
-    ymask = jnp.zeros(1)  # masked out
-    H = jnp.ones((N, L))
+    H = jnp.ones((N, L)) * 0.3
     d = jnp.zeros(N)
 
-    k, K = poisson_cvi_bin_stats(z, Z, y, ymask, H, d)
-    npt.assert_allclose(np.asarray(k), 0.0, atol=1e-14)
-    npt.assert_allclose(np.asarray(K), 0.0, atol=1e-14)
+    # Unmasked: normal computation
+    k_on, K_on = poisson_cvi_bin_stats(z, Z, y, jnp.array(1.0), H, d)
+    assert jnp.any(k_on != 0)
+    assert jnp.any(K_on != 0)
+
+    # Masked: zero gradients
+    k_off, K_off = poisson_cvi_bin_stats(z, Z, y, jnp.array(0.0), H, d)
+    npt.assert_array_equal(np.asarray(k_off), 0.0)
+    npt.assert_array_equal(np.asarray(K_off), 0.0)
 
 
 def test_poisson_cvi_gradient_direction(rng):
