@@ -243,9 +243,9 @@ class CVI:
         params : Params
             Current readout parameter state.
         y : Array
-            Observations shaped `(trials, time, obs_dim)`.
+            Observations shaped `(time, obs_dim)`.
         ymask : Array
-            Observation mask aligned with `y`.
+            Observation mask, shape `(time,)`.
         A : Array
             Forward transition matrix shaped `(state_dim, state_dim)`.
         Q : Array
@@ -255,7 +255,7 @@ class CVI:
         -------
         tuple[Array, Array]
             Pseudo-observation vectors and matrices with shapes
-            `(trials, time, state_dim)` and `(trials, time, state_dim, state_dim)`.
+            `(time, state_dim)` and `(time, state_dim, state_dim)`.
         """
 
     @classmethod
@@ -362,9 +362,9 @@ class Gaussian(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim)`.
+            Observation tensor shaped `(time, obs_dim)`.
         ymask : Array
-            Observation mask aligned with `y`, typically `(trials, time)`.
+            Observation mask, shape `(time,)`.
         A : Array
             Forward transition matrix (unused, keeps API symmetry).
         Q : Array
@@ -373,7 +373,8 @@ class Gaussian(CVI):
         Returns
         -------
         tuple[Array, Array]
-            Observation information vectors and matrices.
+            Observation information vectors and matrices with shapes
+            `(time, state_dim)` and `(time, state_dim, state_dim)`.
         """
         C = params.loading()
         d = params.d
@@ -585,9 +586,9 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim)`.
+            Observation tensor shaped `(time, obs_dim)`.
         ymask : Array
-            Observation mask aligned with `y`.
+            Observation mask, shape `(time,)`.
         A : Array
             Forward transition matrix shaped `(state_dim, state_dim)`.
         Q : Array
@@ -752,7 +753,7 @@ class Poisson(CVI):
         Parameters
         ----------
         y : Array
-            Flatten observation tensor shaped `(trials * time, obs_dim)`.
+            Flattened observation tensor shaped `(trials * time, obs_dim)`.
         ymask : Array
             Observation mask aligned with `y`.
         n_factors : int

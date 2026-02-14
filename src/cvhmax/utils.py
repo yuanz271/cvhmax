@@ -130,7 +130,8 @@ def bin_info_repr(
     J = C.T @ jnp.linalg.solve(R, C)
     j = C.T @ jnp.linalg.solve(R, y - d)
 
-    j: Array = jnp.where(jnp.expand_dims(ymask, -1), j, 0)  # broadcastable mask
+    j: Array = jnp.where(jnp.expand_dims(ymask, -1), j, 0)
+    J: Array = jnp.where(jnp.expand_dims(jnp.expand_dims(ymask, -1), -1), J, 0)
 
     return j, J
 
