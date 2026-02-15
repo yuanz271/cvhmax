@@ -12,6 +12,7 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `Params`: readout parameter container
 - `HidaMatern`: kernel class for state-space dynamics
 - `HidaMaternKernelGenerator`, `make_kernel`: kernel generator for arbitrary orders
+- `pad_trials`, `unpad_trials`: utilities for variable-length trials
 
 ## CVHM
 
@@ -64,3 +65,15 @@ throughout the pipeline.
 Source: `src/cvhmax/kernel_generator/`
 
 See `kernel-generator.md` for usage examples and integration patterns.
+
+## Utilities
+
+- `pad_trials(y_list, ymask_list=None)` → `(y, ymask, trial_lengths)`
+  Pad variable-length trials into rectangular arrays.
+- `unpad_trials(arrays, trial_lengths)` → `list[Array]` or `list[tuple[Array, ...]]`
+  Strip padding from rectangular arrays back to per-trial slices.
+  Accepts a single array or a tuple of arrays.
+
+Source: `src/cvhmax/utils.py`
+
+See `data-model.md` for a full usage example.
