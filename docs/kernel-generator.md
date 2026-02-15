@@ -302,4 +302,4 @@ src/cvhmax/kernel_generator/
 
 - `api.md` -- API reference for all public symbols
 - `algorithms.md` -- mathematical details of the K_hat construction
-- `quickstart.md` -- end-to-end CVHM examples including higher-order kernels
+- `README.md` (repo root) -- end-to-end CVHM quickstart

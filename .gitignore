@@ -4,3 +4,4 @@ outputs
 *.npy
 *.npz
 hida_matern_gp_lvms/
+uv.lock

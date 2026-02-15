@@ -13,7 +13,3 @@
 ## JAX Warnings
 
 Some JAX linear algebra warnings indicate future behavior changes. Prefer `jnp.linalg.solve(A, b[..., None])[..., 0]` for batched 1D solves.
-
-## Test Artifacts
-
-Some tests emit plots (e.g., `cvhm.pdf`). Remove them if they are not needed.
