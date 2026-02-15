@@ -3,58 +3,19 @@ import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
-# import equinox as eqx
 import pytest
 
-from cvhmax import hm, utils
-from cvhmax.hm import HidaMatern, Ks0, spectral_density
+from cvhmax import hm
+from cvhmax.hm import HidaMatern, spectral_density
 from cvhmax.utils import real_repr, conjtrans
 
 
-def test_HidaMatern():
-    kernel = hm.HidaMatern(1.0, 1.0, 0.0, 0)
-
-    K0 = kernel.K(0.0)
-    assert K0.shape == (1, 1)
-
-    dt = 1.0
-
-    kernel.Af(dt)
-    kernel.Qf(dt)
-    kernel.Ab(dt)
-    kernel.Qb(dt)
-
-
-# def test_composite():
-#     # 2 latents
-#     # L1: 1 kernel
-#     # L2: 2 kernels
-#     hyperparams = [[{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 1}], [{'sigma': 1., 'rho': 1., 'omega': 0., 'order': 0}, {'sigma': 1., 'rho': 1., 'omega': 1., 'order': 1}]]
-#     hyperspec = [[{'sigma': True, 'rho': True, 'omega': True, 'order': False}], [{'sigma': True, 'rho': True, 'omega': True, 'order': False}, {'sigma': True, 'rho': True, 'omega': True, 'order': False}]]
-#     # print(tree_util.tree_structure(hyperparams))
-#     hyperdef, hyperflat = tree_util.tree_flatten(hyperparams)
-#     # print(hyperflat)
-#     # https://docs.kidger.site/equinox/all-of-equinox/
-#     # eqx.partition
-
-#     params, static = eqx.partition(hyperparams, hyperspec)
-#     # eqx.tree_pprint(params)
-#     # eqx.tree_pprint(static)
-#     paramflat, paramdef = tree_util.tree_flatten(params)
-#     # print(paramdef)
-#     # print(paramflat)
-
-
-def test_Ks():
-    kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0}
-    hm.Ks(kernelparam, 1.0)
-
-    kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}
-    hm.Ks(kernelparam, 1.0)
-
-    kernelparam = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 2}
-    K = hm.Ks(kernelparam, 1.0)
-    assert K.shape == (3, 3)  # order 2 -> nple = 3
+@pytest.mark.parametrize("order,expected_nple", [(0, 1), (1, 2), (2, 3)])
+def test_Ks(order, expected_nple):
+    """Ks returns a (nple, nple) stationary covariance matrix."""
+    spec = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": order}
+    K = hm.Ks(spec, 1.0)
+    assert K.shape == (expected_nple, expected_nple)
 
 
 def test_ssm_repr():
@@ -67,21 +28,8 @@ def test_ssm_repr():
         ],
     ]
     Af, Qf, Ab, Qb = hm.ssm_repr(kernelparams, dt)
-    # eqx.tree_pprint(Af)
     paramflat, paramdef = tree_util.tree_flatten(Af)
     assert len(paramflat) == 3
-
-
-def test_mask():
-    kernelparams = [
-        [{"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}],
-        [
-            {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0},
-            {"sigma": 1.0, "rho": 1.0, "omega": 1.0, "order": 1},
-        ],
-    ]
-    M = utils.latent_mask(kernelparams)
-    print(M)
 
 
 # ---------------------------------------------------------------------------

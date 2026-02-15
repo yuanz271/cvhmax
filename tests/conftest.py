@@ -96,24 +96,3 @@ def linear_gaussian_data(rng, dt):
     y = y[np.newaxis, ...]  # (1, T, n_obs)
 
     return dict(y=y, x_true=x, C=C, d=d, R=R, T=T, n_obs=n_obs)
-
-
-@pytest.fixture
-def poisson_data(rng, dt):
-    """Synthetic Poisson data for 1 latent, 10 observations, T=200."""
-    T = 200
-    n_obs = 10
-    sigma, rho = 1.0, 50.0
-
-    x = sample_matern(T, dt, sigma, rho)  # (T,)
-    x = np.asarray(x).reshape(T, 1)
-
-    C = rng.uniform(-0.5, 0.5, size=(n_obs, 1))
-    d = np.ones(n_obs) * 1.5  # baseline rate
-
-    eta = x @ C.T + d
-    lam = np.exp(eta)
-    y = rng.poisson(lam).astype(float)
-    y = y[np.newaxis, ...]  # (1, T, n_obs)
-
-    return dict(y=y, x_true=x, C=C, d=d, T=T, n_obs=n_obs)

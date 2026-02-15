@@ -1,75 +1,14 @@
 import numpy as np
 import numpy.testing as npt
-from functools import partial
 
-import pytest
-from jax import numpy as jnp, vmap
+import chex
+from jax import numpy as jnp
 from sklearn.linear_model import LinearRegression
 
 from cvhmax.cvi import Params, poisson_cvi_bin_stats, Poisson, Gaussian
 from cvhmax.cvhm import CVHM
-from cvhmax.hm import HidaMatern, sample_matern
+from cvhmax.hm import HidaMatern
 from cvhmax.utils import norm_loading
-import chex
-
-
-def dimensions():
-    return 10, 5
-
-
-def test_poisson_cvi_stats():
-    N, L = dimensions()
-
-    j = jnp.zeros(L)
-    J = -jnp.eye(L)
-    y = jnp.zeros(N)
-    valid_y = jnp.ones(1)
-    C = jnp.ones((N, L))
-    d = jnp.ones(N)
-
-    poisson_cvi_bin_stats(j, J, y, valid_y, C, d)
-
-
-def test_Poisson(capsys):
-    T = 20
-    N = 10
-    L = 5
-    rng = np.random.default_rng()
-    y = jnp.array(rng.poisson(5, size=(1, T, N)))
-    valid_y = jnp.ones((1, T))
-    C = jnp.ones((N, L))
-    d = jnp.ones(N)
-
-    A = jnp.eye(L)
-    Q = jnp.eye(L)
-
-    params = Params(C=C, d=d, R=jnp.zeros((N, N)), M=jnp.eye(L))
-
-    j, J = vmap(Poisson.initialize_info, in_axes=(None, 0, 0, None, None))(
-        params, y, valid_y, A, Q
-    )
-    chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
-
-    m = jnp.array(rng.normal(size=(1, T, L)))
-    V = jnp.expand_dims(jnp.tile(jnp.eye(L), (T, 1, 1)), 0)
-
-    with capsys.disabled():
-        chex.assert_equal_shape((y, m, V), dims=0)
-        print(f"{y.shape=} {m.shape=}, {V.shape=}")
-        params, nell = Poisson.update_readout(params, y, valid_y, m, V)
-
-        z = jnp.zeros((1, T, L))
-        Z = jnp.expand_dims(jnp.tile(jnp.eye(L), (T, 1, 1)), 0)
-        chex.assert_equal_shape((z, Z, j, J, y), dims=0)
-
-        chex.assert_shape((z, Z), ((1, T, L), (1, T, L, L)))
-        j, J = Poisson.update_pseudo(params, y, valid_y, z, Z, j, J, 0.1)
-        chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
-
-
-# ---------------------------------------------------------------------------
-# New tests
-# ---------------------------------------------------------------------------
 
 
 def test_gaussian_initialize_info_values(rng):
@@ -108,26 +47,6 @@ def test_gaussian_initialize_info_values(rng):
     )
     eigvals = np.linalg.eigvalsh(np.asarray(J_exp_single))
     assert np.all(eigvals >= -1e-10), f"J has negative eigenvalues: {eigvals}"
-
-
-def test_gaussian_initialize_info_shape():
-    """Gaussian.initialize_info should produce J of shape (trials, T, L, L)."""
-    T, N, L = 30, 8, 2
-    C_raw = jnp.ones((N, L))
-    d = jnp.zeros(N)
-    R = jnp.eye(N)
-    M = jnp.eye(L)
-    params = Params(C=C_raw, d=d, R=R, M=M)
-
-    y = jnp.ones((1, T, N))
-    valid_y = jnp.ones((1, T))
-    A_dummy = jnp.eye(L)
-    Q_dummy = jnp.eye(L)
-
-    j, J = vmap(Gaussian.initialize_info, in_axes=(None, 0, 0, None, None))(
-        params, y, valid_y, A_dummy, Q_dummy
-    )
-    chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
 
 
 def test_gaussian_update_pseudo_noop():

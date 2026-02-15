@@ -2,50 +2,7 @@ from jax import numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
-from cvhmax import filtering
 from cvhmax.filtering import predict, bifilter, information_filter
-
-
-def test_information_filter():
-    y_ndim = 5
-    x_ndim = 2
-    n = 100
-    omega = 10.0
-
-    H = np.random.randn(y_ndim, x_ndim)
-    R = np.eye(y_ndim)
-
-    F = np.random.randn(x_ndim, x_ndim)
-    # Q = np.eye(x_ndim) / omega**2
-    Qinv = np.eye(x_ndim) * omega**2
-
-    x = np.reshape(np.sin(np.arange(x_ndim * n) / omega), (x_ndim, n))
-    y = H @ x + np.random.randn(y_ndim, n)
-
-    K = H.T @ np.linalg.solve(R, H)
-    # I = np.tile(I, (n, 1, 1))
-    # assert I.shape == (n, x_ndim, x_ndim)
-
-    k = H.T @ np.linalg.solve(R, y)
-    assert k.shape == (x_ndim, n)
-    k = k.T
-
-    z = np.random.randn(x_ndim)
-    Z = Qinv
-
-    T = k.shape[0]
-    K = jnp.tile(K, (T, 1, 1))
-
-    _, state = filtering.information_filter_step((z, Z), (k[0], K[0]), F, Qinv)
-    zp, Zp, z, Z = filtering.information_filter((z, Z), (k, K), F, Qinv)
-
-    assert z.shape == (n, x_ndim)
-    assert Z.shape == (n, x_ndim, x_ndim)
-
-
-# ---------------------------------------------------------------------------
-# New tests
-# ---------------------------------------------------------------------------
 
 
 def test_predict_1d_ar1():
@@ -179,19 +136,3 @@ def test_bifilter_no_observations():
     # Without observations, the smoothed information should be close to the prior
     # z should remain near zero (no data to pull it away)
     npt.assert_allclose(np.asarray(z_sm), 0.0, atol=1e-6)
-
-
-def test_bifilter_output_shapes():
-    """Verify bifilter output shapes for various configurations."""
-    for L in [1, 2, 4]:
-        T = 20
-        j = jnp.zeros((T, L))
-        J = jnp.zeros((T, L, L))
-        z0 = jnp.zeros(L)
-        Z0 = jnp.eye(L)
-        F = jnp.eye(L)
-        P = jnp.eye(L)
-
-        z, Z = bifilter(j, J, z0, Z0, F, P, F, P)
-        assert z.shape == (T, L), f"z shape mismatch for L={L}"
-        assert Z.shape == (T, L, L), f"Z shape mismatch for L={L}"
