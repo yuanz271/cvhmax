@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import jax
 from jax import numpy as jnp, config
 
@@ -7,6 +8,37 @@ from cvhmax.hm import HidaMatern
 from cvhmax.hm import sample_matern
 
 config.update("jax_enable_x64", True)
+
+
+@pytest.mark.parametrize(
+    "orders",
+    [
+        [0],
+        [0, 0],
+        [1, 1],
+        [2, 2],
+        [0, 1],
+        [1, 0],
+        [0, 1, 2],
+    ],
+)
+def test_latent_mask(orders):
+    kernels = [HidaMatern(order=p) for p in orders]
+    K = len(orders)
+    L = 2 * sum(k.nple for k in kernels)
+
+    model = CVHM(n_components=K, dt=1.0, kernels=kernels)
+    M = model.latent_mask()
+
+    assert M.shape == (K, L)
+    assert jnp.all(M.sum(axis=1) == 1.0)
+    assert int(jnp.count_nonzero(M)) == K
+
+    # Each kernel block gets [1, 2, ..., nple]; M selects the first element.
+    parts = [jnp.arange(1, k.nple + 1, dtype=float) for k in kernels]
+    real_half = jnp.concatenate(parts)
+    z = jnp.concatenate([real_half, jnp.zeros_like(real_half)])
+    assert jnp.allclose(M @ z, jnp.ones(K))
 
 
 def test_CVHM(capsys):
