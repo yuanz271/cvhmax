@@ -14,6 +14,8 @@ from cvhmax.utils import (
     norm_loading,
     bin_info_repr,
     trial_info_repr,
+    pad_trials,
+    unpad_trials,
 )
 
 
@@ -187,3 +189,101 @@ def test_trial_info_repr_mask(rng):
         j_exp_t = C.T @ Rinv @ (y[t] - d)
         npt.assert_allclose(np.asarray(j[t]), np.asarray(j_exp_t), atol=1e-10)
         npt.assert_allclose(np.asarray(J[t]), np.asarray(J_exp), atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# pad_trials / unpad_trials
+# ---------------------------------------------------------------------------
+
+
+class TestPadTrials:
+    """Tests for pad_trials and unpad_trials."""
+
+    def _make_trials(self, lengths, N=4, rng=None):
+        """Helper: create random per-trial observation arrays."""
+        if rng is None:
+            rng = np.random.default_rng(0)
+        return [jnp.asarray(rng.standard_normal((T_i, N))) for T_i in lengths]
+
+    def test_shapes(self):
+        y_list = self._make_trials([300, 500, 250])
+        y, ymask, trial_lengths = pad_trials(y_list)
+        assert y.shape == (3, 500, 4)
+        assert ymask.shape == (3, 500)
+        assert trial_lengths.shape == (3,)
+        npt.assert_array_equal(np.asarray(trial_lengths), [300, 500, 250])
+
+    def test_padded_bins_masked(self):
+        y_list = self._make_trials([10, 20])
+        y, ymask, _ = pad_trials(y_list)
+        # First trial is shorter; bins 10..19 should be masked
+        npt.assert_array_equal(np.asarray(ymask[0, 10:]), 0)
+        # Second trial fills entirely
+        npt.assert_array_equal(np.asarray(ymask[1, :]), 1)
+
+    def test_padded_values_zero(self):
+        y_list = self._make_trials([10, 20])
+        y, _, _ = pad_trials(y_list)
+        npt.assert_array_equal(np.asarray(y[0, 10:]), 0.0)
+
+    def test_no_ymask_default(self):
+        y_list = self._make_trials([5, 8, 3])
+        _, ymask, _ = pad_trials(y_list)
+        for i, T_i in enumerate([5, 8, 3]):
+            npt.assert_array_equal(np.asarray(ymask[i, :T_i]), 1)
+            npt.assert_array_equal(np.asarray(ymask[i, T_i:]), 0)
+
+    def test_preserves_original_mask(self):
+        y_list = self._make_trials([10, 15])
+        # Mark bins 0 and 3 as missing in trial 0
+        mask0 = jnp.ones(10, dtype=jnp.uint8).at[0].set(0).at[3].set(0)
+        mask1 = jnp.ones(15, dtype=jnp.uint8)
+        _, ymask, _ = pad_trials(y_list, ymask_list=[mask0, mask1])
+        # Original missing values preserved
+        assert int(ymask[0, 0]) == 0
+        assert int(ymask[0, 3]) == 0
+        # Other original bins still observed
+        assert int(ymask[0, 1]) == 1
+        # Padded bins masked
+        npt.assert_array_equal(np.asarray(ymask[0, 10:]), 0)
+
+    def test_equal_lengths(self):
+        y_list = self._make_trials([20, 20, 20])
+        y, ymask, trial_lengths = pad_trials(y_list)
+        assert y.shape == (3, 20, 4)
+        npt.assert_array_equal(np.asarray(ymask), 1)
+        npt.assert_array_equal(np.asarray(trial_lengths), [20, 20, 20])
+
+    def test_single_trial(self):
+        y_list = self._make_trials([30])
+        y, ymask, trial_lengths = pad_trials(y_list)
+        assert y.shape == (1, 30, 4)
+        npt.assert_array_equal(np.asarray(ymask), 1)
+
+    def test_unpad_roundtrip(self):
+        lengths = [10, 20, 15]
+        y_list = self._make_trials(lengths)
+        y, _, trial_lengths = pad_trials(y_list)
+        recovered = unpad_trials(y, trial_lengths)
+        assert len(recovered) == 3
+        for orig, rec in zip(y_list, recovered):
+            npt.assert_array_equal(np.asarray(rec), np.asarray(orig))
+
+    def test_unpad_tuple(self):
+        lengths = [10, 20]
+        rng = np.random.default_rng(1)
+        K = 2
+        m = jnp.asarray(rng.standard_normal((2, 20, K)))
+        V = jnp.asarray(rng.standard_normal((2, 20, K, K)))
+        recovered = unpad_trials((m, V), jnp.asarray(lengths))
+        assert len(recovered) == 2
+        # Each element is a tuple of (m_i, V_i)
+        m0, V0 = recovered[0]
+        assert m0.shape == (10, K)
+        assert V0.shape == (10, K, K)
+        m1, V1 = recovered[1]
+        assert m1.shape == (20, K)
+        assert V1.shape == (20, K, K)
+        # Values match the original slices
+        npt.assert_array_equal(np.asarray(m0), np.asarray(m[0, :10]))
+        npt.assert_array_equal(np.asarray(V1), np.asarray(V[1, :20]))

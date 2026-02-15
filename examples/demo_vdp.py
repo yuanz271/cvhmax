@@ -1,13 +1,16 @@
 """Van der Pol oscillator demo: CVHM inference with frozen and estimated readout.
 
 Synthesises 2-D latent trajectories from the Van der Pol oscillator, generates
-Poisson spike counts through a known loading matrix, then runs two inference
+Poisson spike counts through a known loading matrix, then runs three inference
 cases:
 
 1. **Frozen readout** — loading and bias are fixed at their true values,
    isolating filtering quality from readout estimation.
 2. **Estimated readout** — loading and bias are initialised via factor
    analysis and refined by LBFGS at each EM M-step.
+3. **Variable-length trials** — trials are truncated to different lengths,
+   padded with :func:`~cvhmax.utils.pad_trials`, fitted as usual, and
+   unpadded with :func:`~cvhmax.utils.unpad_trials`.
 
 Usage::
 
@@ -22,6 +25,7 @@ from jax import config, numpy as jnp
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params, Poisson
 from cvhmax.hm import HidaMatern
+from cvhmax.utils import pad_trials, unpad_trials
 
 config.update("jax_enable_x64", True)
 
@@ -335,6 +339,159 @@ def main():
         max_iter=50,
         cvi_iter=5,
     )
+
+    # --- Case 3: Variable-length trials (pad/unpad showcase) ---
+    run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng)
+
+
+def run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng):
+    """Case 3: variable-length trials with pad/unpad workflow.
+
+    Truncates existing equal-length trials to random lengths, pads them
+    into a rectangular array, fits the model, and unpads the posterior.
+    """
+    print("\n--- Variable-length trials (padded) ---")
+
+    # Simulate unequal trial lengths by truncating existing data
+    trial_lengths_np = rng.integers(250, 501, size=n_trials)
+    y_list = [
+        jnp.asarray(y_np[i, :tl], dtype=jnp.float64)
+        for i, tl in enumerate(trial_lengths_np)
+    ]
+    x_list = [x_std[i, :tl] for i, tl in enumerate(trial_lengths_np)]
+    print(f"Trial lengths: {trial_lengths_np}")
+
+    # --- Pad to rectangular arrays ---
+    y_padded, ymask, trial_lengths = pad_trials(y_list)
+    print(f"Padded shape: y={y_padded.shape}, ymask={ymask.shape}")
+
+    # --- Fit (the filter skips padded bins automatically via ymask=0) ---
+    kernels = [
+        HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(n_latents)
+    ]
+    model = CVHM(
+        n_components=n_latents,
+        dt=dt,
+        kernels=kernels,
+        observation="Poisson",
+        max_iter=50,
+        cvi_iter=5,
+    )
+    model.fit(y_padded, ymask=ymask, random_state=42)
+
+    # --- Unpad posterior back to per-trial arrays ---
+    m_list = unpad_trials(model.posterior[0], trial_lengths)
+    V_list = unpad_trials(model.posterior[1], trial_lengths)
+    for i in range(n_trials):
+        print(
+            f"  Trial {i}: T={trial_lengths_np[i]}, "
+            f"m={m_list[i].shape}, V={V_list[i].shape}"
+        )
+
+    # --- R-squared on concatenated unpadded posteriors ---
+    m_all = np.concatenate([np.asarray(mi) for mi in m_list])
+    x_all = np.concatenate(x_list)
+    ones = np.ones((m_all.shape[0], 1))
+    A = np.hstack([m_all, ones])
+    W, _, _, _ = np.linalg.lstsq(A, x_all, rcond=None)
+    m_aligned_all = A @ W
+
+    ss_res = np.sum((m_aligned_all - x_all) ** 2)
+    ss_tot = np.sum((x_all - x_all.mean(axis=0)) ** 2)
+    r2 = 1.0 - ss_res / ss_tot
+    print(f"R² (pooled, variable-length): {r2:.4f}")
+
+    # --- Plot multiple trials of various length ---
+    n_show = min(4, n_trials)
+    trial_colors = ["tab:blue", "tab:orange", "tab:green", "tab:purple"]
+
+    # Pre-compute aligned posteriors for shown trials
+    aligned = []
+    for i in range(n_show):
+        T_i = int(trial_lengths_np[i])
+        m_i = np.asarray(m_list[i])
+        A_i = np.hstack([m_i, np.ones((T_i, 1))])
+        aligned.append(A_i @ W)
+
+    fig, axs = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
+    fig.suptitle("CVHM on Van der Pol latents (variable-length trials, padded)")
+
+    # Top row: time courses for each latent dimension
+    for dim, ax in enumerate(axs[0]):
+        for i in range(n_show):
+            T_i = int(trial_lengths_np[i])
+            t_ax = np.arange(T_i) * dt
+            c = trial_colors[i]
+            ax.plot(t_ax, x_list[i][:, dim], color=c, ls="-", alpha=0.6, lw=0.8)
+            ax.plot(t_ax, aligned[i][:, dim], color=c, ls="--", alpha=0.9, lw=0.8)
+        ax.plot([], [], "k-", alpha=0.6, label="True")
+        ax.plot([], [], "k--", alpha=0.9, label="Inferred")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel(f"Latent {dim + 1}")
+        ax.set_title(f"Latent dim {dim + 1}")
+        ax.legend(loc="upper right", fontsize="small")
+
+    # Bottom-left: phase portrait — single shortest trial
+    shortest = int(np.argmin(trial_lengths_np[:n_show]))
+    ax = axs[1, 0]
+    c = trial_colors[shortest]
+    T_s = int(trial_lengths_np[shortest])
+    ax.plot(
+        x_list[shortest][:, 0],
+        x_list[shortest][:, 1],
+        color=c,
+        ls="-",
+        alpha=0.6,
+        label="True",
+    )
+    ax.plot(
+        aligned[shortest][:, 0],
+        aligned[shortest][:, 1],
+        color=c,
+        ls="--",
+        alpha=0.9,
+        label="Inferred",
+    )
+    ax.set_xlabel("Latent 1")
+    ax.set_ylabel("Latent 2")
+    ax.set_title(f"Phase portrait — trial {shortest} (T={T_s})")
+    ax.legend(fontsize="small")
+    ax.set_aspect("equal", adjustable="datalim")
+
+    # Bottom-right: phase portrait — multiple trials
+    ax = axs[1, 1]
+    for i in range(n_show):
+        c = trial_colors[i]
+        T_i = int(trial_lengths_np[i])
+        ax.plot(
+            x_list[i][:, 0],
+            x_list[i][:, 1],
+            color=c,
+            ls="-",
+            alpha=0.5,
+            lw=0.8,
+        )
+        ax.plot(
+            aligned[i][:, 0],
+            aligned[i][:, 1],
+            color=c,
+            ls="--",
+            alpha=0.8,
+            lw=0.8,
+        )
+    ax.plot([], [], "k-", alpha=0.5, label="True")
+    ax.plot([], [], "k--", alpha=0.8, label="Inferred")
+    ax.set_xlabel("Latent 1")
+    ax.set_ylabel("Latent 2")
+    ax.set_title(f"Phase portrait — trials 0..{n_show - 1}")
+    ax.legend(fontsize="small")
+    ax.set_aspect("equal", adjustable="datalim")
+
+    fig.savefig("examples/demo_vdp_padded.pdf")
+    plt.close(fig)
+    print("Saved examples/demo_vdp_padded.pdf")
+
+    return r2
 
 
 if __name__ == "__main__":

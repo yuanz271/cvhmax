@@ -74,10 +74,55 @@ After fitting:
 - `m`: posterior mean, `(trials, time, latent_dim (K))`
 - `V`: posterior covariance, `(trials, time, latent_dim (K), latent_dim (K))`
 
-## Padding Unequal Lengths
+## Variable-Length Trials
 
-For unequal trial lengths:
+JAX requires rectangular arrays, but experimental trials often have
+different lengths.  Use `pad_trials` before fitting and `unpad_trials`
+after to handle this transparently — the filter never sees the padding
+logic.
 
-- pad `y` with zeros
-- set padded bins to `0` in `ymask`
-- the filters will skip those bins via masking
+```python
+from cvhmax import CVHM, HidaMatern, pad_trials, unpad_trials
+
+# Per-trial arrays of different lengths
+y_list = [y_trial_0, y_trial_1, y_trial_2]  # (300, N), (500, N), (250, N)
+
+# Pad to rectangular arrays
+y, ymask, trial_lengths = pad_trials(y_list)
+# y.shape == (3, 500, N),  ymask.shape == (3, 500)
+
+# Fit as usual — padded bins have ymask=0 so the filter skips them
+model = CVHM(n_components=2, dt=0.01, kernels=[HidaMatern() for _ in range(2)])
+model.fit(y, ymask=ymask)
+
+# Strip padding from posterior
+m_list = unpad_trials(model.posterior[0], trial_lengths)
+V_list = unpad_trials(model.posterior[1], trial_lengths)
+# m_list[0].shape == (300, K), m_list[1].shape == (500, K), ...
+
+# Or unpad both at once as tuples
+mv_list = unpad_trials(model.posterior, trial_lengths)
+# mv_list[0] == (m_trial_0, V_trial_0)
+```
+
+### How it works
+
+`pad_trials` zero-pads shorter trials along the time axis and sets
+`ymask = 0` for padded bins.  Because the information filter adds `j`
+and `J` at each bin (see [Masking](#masking) above), padded bins
+contribute zero information and the filter falls through to a pure
+prediction step.
+
+Pre-existing missing values (`ymask = 0`) within original trials are
+preserved — padding only appends new masked bins at the end.
+
+### API
+
+| Function | Signature | Returns |
+|----------|-----------|---------|
+| `pad_trials` | `(y_list, ymask_list=None)` | `(y, ymask, trial_lengths)` |
+| `unpad_trials` | `(arrays, trial_lengths)` | `list[Array]` or `list[tuple[Array, ...]]` |
+
+`unpad_trials` accepts either a single array or a tuple of arrays.
+When given a tuple, each list element is a tuple of the unpadded
+arrays for that trial.

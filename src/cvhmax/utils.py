@@ -442,5 +442,79 @@ def filter_array(arr: Array, mask: Array) -> Array:
     return arr[mask > 0]
 
 
+def pad_trials(
+    y_list: list[Array], ymask_list: list[Array] | None = None
+) -> tuple[Array, Array, Array]:
+    """Pad variable-length trials into rectangular arrays.
+
+    Shorter trials are zero-padded along the time axis and the
+    corresponding mask entries are set to zero so that the information
+    filter treats padded bins as missing data.  Any pre-existing missing
+    values (``ymask == 0``) inside original trials are preserved.
+
+    Parameters
+    ----------
+    y_list : list[Array]
+        Per-trial observations, each shaped ``(T_i, obs_dim (N))``.
+    ymask_list : list[Array] or None
+        Per-trial masks, each shaped ``(T_i,)``.
+        If ``None``, all original bins are treated as observed.
+
+    Returns
+    -------
+    y : Array
+        Padded observations, shape ``(n_trials, T_max, obs_dim (N))``.
+    ymask : Array
+        Combined mask, shape ``(n_trials, T_max)``.  Padded positions and
+        originally missing bins are zero.
+    trial_lengths : Array
+        Original length of each trial, shape ``(n_trials,)``, for use
+        with :func:`unpad_trials`.
+    """
+    trial_lengths = jnp.asarray([y_i.shape[0] for y_i in y_list])
+    T_max = int(jnp.max(trial_lengths))
+    N = y_list[0].shape[-1]
+    n_trials = len(y_list)
+
+    y = jnp.zeros((n_trials, T_max, N), dtype=y_list[0].dtype)
+    ymask = jnp.zeros((n_trials, T_max), dtype=jnp.uint8)
+
+    for i, y_i in enumerate(y_list):
+        T_i = y_i.shape[0]
+        y = y.at[i, :T_i].set(y_i)
+        if ymask_list is not None:
+            ymask = ymask.at[i, :T_i].set(ymask_list[i])
+        else:
+            ymask = ymask.at[i, :T_i].set(1)
+
+    return y, ymask, trial_lengths
+
+
+def unpad_trials(arrays, trial_lengths):
+    """Strip padding from rectangular arrays.
+
+    Parameters
+    ----------
+    arrays : Array or tuple[Array, ...]
+        Padded array(s) with trials on axis 0 and time on axis 1.
+        If a tuple, each element is unpadded independently.
+    trial_lengths : array-like
+        Original length of each trial.
+
+    Returns
+    -------
+    list[Array] or list[tuple[Array, ...]]
+        Per-trial slices with padding removed.  Returns a list of arrays
+        when *arrays* is a single array, or a list of tuples when *arrays*
+        is a tuple.
+    """
+    lengths = [int(tl) for tl in trial_lengths]
+
+    if isinstance(arrays, tuple):
+        return [tuple(a[i, : lengths[i]] for a in arrays) for i in range(len(lengths))]
+
+    return [arrays[i, : lengths[i]] for i in range(len(lengths))]
+
+
 def to_device(arrays, sharding=None) -> tuple[Array, ...]:
     return tuple(jax.device_put(arr, sharding) for arr in arrays)

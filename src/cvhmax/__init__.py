@@ -1,6 +1,7 @@
 from .cvhm import CVHM
 from .cvi import CVI, Gaussian, Poisson, Params
 from .hm import HidaMatern
+from .utils import pad_trials, unpad_trials
 
 __all__ = [
     "CVHM",
@@ -9,6 +10,8 @@ __all__ = [
     "Poisson",
     "Params",
     "HidaMatern",
+    "pad_trials",
+    "unpad_trials",
 ]
 
 # Optional: kernel_generator requires the `kergen` extra.
