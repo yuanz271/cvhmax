@@ -17,14 +17,19 @@ Variational latent-state inference with Hida-Matern kernels in JAX. Uses informa
 ```
 cvhmax/
 |-- src/cvhmax/
-|   |-- __init__.py     # Public exports
-|   |-- cvhm.py         # CVHM wrapper + EM loop
-|   |-- cvi.py          # CVI base + Gaussian/Poisson readouts
-|   |-- filtering.py    # Information-form forward/backward filtering (bifilter)
-|   |-- hm.py           # HidaMatern kernel (SSM blocks)
-|   |-- hp.py           # Whittle spectral hyperparameter fitting
-|   `-- utils.py        # Linear algebra + opt + progress utilities
-`-- tests/              # Mirrors src/ modules (test_<module>.py)
+|   |-- __init__.py            # Public exports
+|   |-- cvhm.py                # CVHM wrapper + EM loop
+|   |-- cvi.py                 # CVI base + Gaussian/Poisson readouts
+|   |-- filtering.py           # Information-form forward/backward filtering (bifilter)
+|   |-- hm.py                  # HidaMatern kernel (SSM blocks)
+|   |-- hp.py                  # Whittle spectral hyperparameter fitting
+|   |-- utils.py               # Linear algebra + opt + progress utilities
+|   `-- kernel_generator/      # Arbitrary-order kernels via SymPy + sympy2jax
+|-- tests/                     # Mirrors src/ modules (test_<module>.py)
+|-- docs/                      # Local Markdown documentation
+|-- examples/                  # Demo scripts (e.g., demo_vdp.py)
+|-- CONTRIBUTING.md            # Developer workflow and guidelines
+`-- AGENTS.md                  # This file
 ```
 
 ## Build / Lint / Test Commands
@@ -83,7 +88,7 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add new likelihood/readout | `src/cvhmax/cvi.py` | Subclass `CVI`; registry via `__init_subclass__` |
+| Add new observation model | `src/cvhmax/cvi.py` | Subclass `CVI`; registry via `__init_subclass__` |
 | Adjust EM loop / training | `src/cvhmax/cvhm.py` | `CVHM.fit()`, `em_step` |
 | Filtering logic | `src/cvhmax/filtering.py` | `information_filter_step`, `bifilter` |
 | Kernel / dynamics blocks | `src/cvhmax/hm.py` | `Af/Qf/Ab/Qb`, `K(tau)` |
@@ -92,18 +97,16 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 
 ## Docs Update Rule
 
-- Any public API or behavior change requires updating relevant docstrings and docs pages.
-- At minimum, update `docs/api.md` plus any impacted guide (e.g., shapes/masks -> `docs/data-model.md`, algorithms -> `docs/algorithms.md`).
-- If examples change, update both `README.md` and `docs/quickstart.md`.
-
-## Docs Touchpoints
+**Every code change must include matching documentation updates.** This is a hard rule, not a suggestion. Check the touchpoints table below after every change and update all affected files before considering the task complete.
 
 | Change Type | Update |
 |-------------|--------|
-| Public API surface | `docs/api.md` + docstrings for affected symbols |
+| Public API surface | `docs/api.md` + docstrings + `__all__` in `__init__.py` |
 | Shapes/masks/data model | `docs/data-model.md` + docstrings |
 | Algorithms/logic changes | `docs/algorithms.md` + docstrings |
-| Dev workflow/tooling | `docs/contributing.md` + `README.md` (if user-facing) |
+| Kernel generator | `docs/kernel-generator.md` + `docs/algorithms.md` |
+| Examples / quickstart | `README.md` |
+| Dev workflow/tooling | `CONTRIBUTING.md` + `README.md` (if user-facing) |
 
 ## Code Style Guidelines
 
@@ -154,8 +157,6 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 
 ## Notes / Gotchas
 
-- Some tests emit artifacts (e.g., `cvhm.pdf`); clean up if needed.
 - The test suite uses `chex` for shape assertions.
 - `CVI` subclasses are looked up by class name via `CVI.registry`; keep names stable.
 - Public exports live in `src/cvhmax/__init__.py`; update `__all__` when adding user-facing APIs.
-- No Cursor/Copilot instruction files found (`.cursor/rules/`, `.cursorrules`, `.github/copilot-instructions.md`).

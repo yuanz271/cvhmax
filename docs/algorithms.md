@@ -98,10 +98,8 @@ The exponential-family natural parameters `(η₁, η₂)` for a Gaussian are
 factor of `−½` on the matrix component (`η₂ = −½ Z`). The moment recovery
 formulas are `μ = −½ η₂⁻¹ η₁` and `Σ = −½ η₂⁻¹`.
 
-**This codebase does not use natural parameters.** The `−0.5` factor in
-`poisson_cvi_bin_stats` (`cvi.py:525`) is a bug (BUG-4, see `docs/bugs.md`)
-where the natural-parameter formula was applied to information-form inputs.
-The correct conversion is `μ = Z⁻¹ z` with no `−0.5` factor.
+**This codebase uses information form, not natural parameters.** The
+correct conversion is `μ = Z⁻¹ z` with no `−0.5` factor.
 
 ## Information-Form Filtering
 
@@ -161,5 +159,3 @@ Key code:
 Sources: `src/cvhmax/hm.py`, `src/cvhmax/kernel_generator/`
 
 See `kernel-generator.md` for usage examples and integration patterns.
-
-
