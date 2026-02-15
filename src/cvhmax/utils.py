@@ -447,10 +447,11 @@ def pad_trials(
 ) -> tuple[Array, Array, Array]:
     """Pad variable-length trials into rectangular arrays.
 
-    Shorter trials are zero-padded along the time axis and the
-    corresponding mask entries are set to zero so that the information
-    filter treats padded bins as missing data.  Any pre-existing missing
-    values (``ymask == 0``) inside original trials are preserved.
+    Shorter trials are right-padded (zeros appended after the last
+    time bin) and the corresponding mask entries are set to zero so
+    that the information filter treats padded bins as missing data.
+    Any pre-existing missing values (``ymask == 0``) inside original
+    trials are preserved.
 
     Parameters
     ----------

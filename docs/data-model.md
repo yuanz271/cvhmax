@@ -114,7 +114,8 @@ contribute zero information and the filter falls through to a pure
 prediction step.
 
 Pre-existing missing values (`ymask = 0`) within original trials are
-preserved — padding only appends new masked bins at the end.
+preserved — padding is right-sided (zeros appended after the last
+original time bin).
 
 ### API
 
