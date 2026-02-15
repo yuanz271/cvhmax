@@ -124,10 +124,12 @@ class CVHM:
             Mask of shape ``(latent_dim (K), state_dim (L))`` selecting the
             GP-value coordinate of each kernel in the real-valued SDE state.
         """
-        ssm_dim = sum([kernel.nple for kernel in self.kernels])
+        ssm_dim = sum(kernel.nple for kernel in self.kernels)
         M = jnp.zeros((self.n_components, 2 * ssm_dim))
-        for i in range(self.n_components):
-            M = M.at[i, i * 2].set(1.0)
+        offset = 0
+        for i, kernel in enumerate(self.kernels):
+            M = M.at[i, offset].set(1.0)
+            offset += kernel.nple
 
         return M
 

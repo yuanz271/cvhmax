@@ -421,14 +421,14 @@ j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
 
 ---
 
-## BUG-10: `latent_mask` stride-2 indexing assumes `order=1` — OPEN
+## BUG-10: `latent_mask` stride-2 indexing assumes `order=1` — FIXED
 
 | | |
 |---|---|
 | **File** | `src/cvhmax/cvhm.py:129` |
 | **Severity** | Medium — wrong posterior extraction for multi-component models with `order != 1` |
 | **Affects** | `CVHM.latent_mask()` → `sde2gp` → posterior mean/covariance |
-| **Status** | Open |
+| **Status** | Fixed |
 
 ### Description
 
@@ -664,7 +664,7 @@ Lower to a version that exists, e.g. `torch>=2.1.0`.
 | BUG-7 | `cvi.py:507` | Low | Masking | **Fixed** | Latent |
 | BUG-8 | `cvhm.py:220` | Critical | Logic | **Fixed** | `test_gaussian_e2e` |
 | BUG-9 | `cvhm.py:240` | High | Logic | **Fixed** | `test_gaussian_e2e` |
-| BUG-10 | `cvhm.py:129` | Medium | Indexing | **Open** | — |
+| BUG-10 | `cvhm.py:129` | Medium | Indexing | Fixed | `099c818` |
 | BUG-11 | `utils.py:396` | Medium | Masking | **Fixed** | — |
 | BUG-12 | `README.md:73` | Low | Docs | **Fixed** | — |
 | BUG-13 | `pyproject.toml:3` / `__about__.py:4` | Low | Config | **Fixed** | — |
