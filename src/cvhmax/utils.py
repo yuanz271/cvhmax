@@ -17,7 +17,7 @@ from rich.progress import (
 EPS = 1e-6
 
 
-def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
+def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
     """Approximate bounded LBFGS solver mirroring SciPy defaults.
 
     Parameters
@@ -28,8 +28,8 @@ def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
         Objective function accepting the parameter PyTree.
     max_iter : int, default=100
         Maximum number of optimisation steps.
-    factr : float, default=1e12
-        Factor controlling the gradient tolerance `factr * eps`.
+    tfactor : float, default=1e12
+        Factor controlling the gradient tolerance `tfactor * eps`.
 
     Returns
     -------
@@ -37,7 +37,7 @@ def lbfgs_solve(init_params, fun, max_iter=100, factr=1e12):
         Optimised parameter values.
     """
     # argument default values copied from scipy.optimize.fmin_l_bfgs_b
-    tol = factr * jnp.finfo(float).eps
+    tol = tfactor * jnp.finfo(float).eps
 
     # opt = optax.lbfgs(linesearch=optax.scale_by_backtracking_linesearch(max_backtracking_steps=15))
     opt = optax.lbfgs(
@@ -85,6 +85,23 @@ def symm(x):
     return 0.5 * (x + x.T)
 
 
+def cho_inv(A: Array) -> Array:
+    """Invert a symmetric positive-definite matrix via Cholesky decomposition.
+
+    Parameters
+    ----------
+    A : Array
+        Symmetric positive-definite matrix, shape ``(D, D)``.
+
+    Returns
+    -------
+    Array
+        The inverse ``A⁻¹``, shape ``(D, D)``.
+    """
+    Lcho = jsp.linalg.cho_factor(A)
+    return jsp.linalg.cho_solve(Lcho, jnp.eye(A.shape[-1]))
+
+
 def real_repr(c):
     """Convert a complex matrix to its real-valued block representation.
 
@@ -101,40 +118,98 @@ def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
-def trial_info_repr(
-    y: Array, ymask: Array, C: Array, d: Array, R: Array
+def bin_info_repr(
+    y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
-    """Compute Gaussian observation information per time bin.
+    """Compute Gaussian observation information for a single bin.
+
+    Operates on one bin of observations and returns
+    information vectors ``j`` and matrices ``J``.
 
     Parameters
     ----------
     y : Array
-        Observation tensor.
-    ymask : Array
-        Observation mask aligned with `y`.
+        Observations for one bin, shape ``(N,)``.
+    valid_y : Array
+        Observation mask for one bin, shape ``()``. When zero, both ``j``
+        and ``J`` are set to zero so the bin contributes no information
+        to the filter update.
     C : Array
-        Observation matrix.
+        Observation matrix, shape ``(N, L)``.
     d : Array
-        Bias term.
+        Bias term, shape ``(N,)``.
     R : Array
-        Observation covariance.
+        Observation covariance, shape ``(N, N)``.
 
     Returns
     -------
     tuple[Array, Array]
-        Observation information vectors and matrices.
+        ``(j, J)`` with shapes ``(L,)`` and ``(L, L)``.
     """
-    T = y.shape[0]
-
     J = C.T @ jnp.linalg.solve(R, C)
-    j = C.T @ jnp.linalg.solve(R, y.T - d)
-    j = j.T
-    J = jnp.tile(J, (T, 1, 1))
+    j = C.T @ jnp.linalg.solve(R, y - d)
 
-    j: Array = jnp.where(jnp.expand_dims(ymask, -1), j, 0)  # broadcastable mask
-    # J: Array = jnp.where(jnp.expand_dims(ymask, (-2, -1)), J, 0)
+    j: Array = jnp.where(valid_y, j, 0)
+    J: Array = jnp.where(valid_y, J, 0)
 
     return j, J
+
+
+def trial_info_repr(
+    y: Array, valid_y: Array, C: Array, d: Array, R: Array
+) -> tuple[Array, Array]:
+    """Compute Gaussian observation information for a single trial.
+
+    Vmaps :func:`bin_info_repr` over the leading (time) axis of ``y``.
+
+    Parameters
+    ----------
+    y : Array
+        Observations for one trial, shape ``(T, N)``.
+    valid_y : Array
+        Observation mask for one trial, shape ``(T,)``.
+    C : Array
+        Observation matrix, shape ``(N, L)``.
+    d : Array
+        Bias term, shape ``(N,)``.
+    R : Array
+        Observation covariance, shape ``(N, N)``.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        ``(j, J)`` with shapes ``(T, L)`` and ``(T, L, L)``.
+    """
+    return jax.vmap(partial(bin_info_repr, C=C, d=d, R=R))(y, valid_y)
+
+
+def batch_info_repr(
+    y: Array, valid_y: Array, C: Array, d: Array, R: Array
+) -> tuple[Array, Array]:
+    """Compute Gaussian observation information for multiple trials.
+
+    Vmaps :func:`trial_info_repr` over the leading (trial) axis of ``y``.
+
+    Parameters
+    ----------
+    y : Array
+        Observations, shape ``(trials, T, N)``.
+    valid_y : Array
+        Observation mask, shape ``(trials, T)``.
+    C : Array
+        Observation matrix, shape ``(N, L)``.
+    d : Array
+        Bias term, shape ``(N,)``.
+    R : Array
+        Observation covariance, shape ``(N, N)``.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        ``(j, J)`` with shapes ``(trials, T, L)`` and
+        ``(trials, T, L, L)``.
+    """
+    return jax.vmap(partial(trial_info_repr, C=C, d=d, R=R))(y, valid_y)
 
 
 def conjtrans(x):
@@ -205,7 +280,7 @@ def mixture_mask(mixture_spec: list[dict]):
 
 
 def latent_mask(latent_spec):
-    """Construct a block-diagonal mask across latent mixtures.
+    """Construct a block-diagonal selection mask from latent to state space.
 
     Parameters
     ----------
@@ -215,7 +290,8 @@ def latent_mask(latent_spec):
     Returns
     -------
     Array
-        Block-diagonal mask mapping latents to state-space coordinates.
+        Mask of shape ``(latent_dim (K), state_dim (L))`` selecting the
+        GP-value coordinate of each kernel in the real-valued SDE state.
     """
     left = jsp.linalg.block_diag(
         *[mixture_mask(mixture_spec) for mixture_spec in latent_spec]
@@ -296,13 +372,15 @@ def training_progress():
     )
 
 
-def ridge_estimate(y, m, V, lam=0.1):
+def ridge_estimate(y, valid_y, m, V, lam=0.1):
     """Solve a ridge regression for the observation model.
 
     Parameters
     ----------
     y : Array
         Observations.
+    valid_y : Array
+        Observation mask aligned with `y`.
     m : Array
         Posterior means.
     V : Array
@@ -315,8 +393,6 @@ def ridge_estimate(y, m, V, lam=0.1):
     tuple[Array, Array, Array]
         Loading matrix, bias vector, and observation covariance.
     """
-    y = jnp.vstack(y)
-    m = jnp.vstack(m)
 
     T, y_dim = y.shape
     _, z_dim = m.shape
@@ -325,13 +401,18 @@ def ridge_estimate(y, m, V, lam=0.1):
 
     assert m1.shape == (T, z_dim + 1)
 
+    valid_y = jnp.expand_dims(valid_y, -1)  # (T, 1)
+    y = jnp.where(valid_y, y, 0)  # apply mask to y
+    m1 = jnp.where(valid_y, m1, 0)  # apply mask to m1
+
     zy = m1.T @ y  # (z + 1, t) (t, y) -> (z + 1, y)
     zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)
     eye = jnp.eye(zz.shape[0])
     w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
 
     r = y - m1 @ w  # (t, y)
-    R = r.T @ r / T  # (y, y)
+    n_valid = jnp.maximum(jnp.sum(valid_y), 1.0)
+    R = r.T @ r / n_valid  # (y, y)
 
     d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
 
@@ -359,3 +440,82 @@ def filter_array(arr: Array, mask: Array) -> Array:
         Filtered array containing only entries where the mask is positive.
     """
     return arr[mask > 0]
+
+
+def pad_trials(
+    y_list: list[Array], valid_y_list: list[Array] | None = None
+) -> tuple[Array, Array, Array]:
+    """Pad variable-length trials into rectangular arrays.
+
+    Shorter trials are right-padded (zeros appended after the last
+    time bin) and the corresponding mask entries are set to zero so
+    that the information filter treats padded bins as missing data.
+    Any pre-existing missing values (``valid_y == 0``) inside original
+    trials are preserved.
+
+    Parameters
+    ----------
+    y_list : list[Array]
+        Per-trial observations, each shaped ``(T_i, obs_dim (N))``.
+    valid_y_list : list[Array] or None
+        Per-trial masks, each shaped ``(T_i,)``.
+        If ``None``, all original bins are treated as observed.
+
+    Returns
+    -------
+    y : Array
+        Padded observations, shape ``(n_trials, T_max, obs_dim (N))``.
+    valid_y : Array
+        Combined mask, shape ``(n_trials, T_max)``.  Padded positions and
+        originally missing bins are zero.
+    trial_lengths : Array
+        Original length of each trial, shape ``(n_trials,)``, for use
+        with :func:`unpad_trials`.
+    """
+    trial_lengths = jnp.asarray([y_i.shape[0] for y_i in y_list])
+    T_max = int(jnp.max(trial_lengths))
+    N = y_list[0].shape[-1]
+    n_trials = len(y_list)
+
+    y = jnp.zeros((n_trials, T_max, N), dtype=y_list[0].dtype)
+    valid_y = jnp.zeros((n_trials, T_max), dtype=jnp.uint8)
+
+    for i, y_i in enumerate(y_list):
+        T_i = y_i.shape[0]
+        y = y.at[i, :T_i].set(y_i)
+        if valid_y_list is not None:
+            valid_y = valid_y.at[i, :T_i].set(valid_y_list[i])
+        else:
+            valid_y = valid_y.at[i, :T_i].set(1)
+
+    return y, valid_y, trial_lengths
+
+
+def unpad_trials(arrays, trial_lengths):
+    """Strip padding from rectangular arrays.
+
+    Parameters
+    ----------
+    arrays : Array or tuple[Array, ...]
+        Padded array(s) with trials on axis 0 and time on axis 1.
+        If a tuple, each element is unpadded independently.
+    trial_lengths : array-like
+        Original length of each trial.
+
+    Returns
+    -------
+    list[Array] or list[tuple[Array, ...]]
+        Per-trial slices with padding removed.  Returns a list of arrays
+        when *arrays* is a single array, or a list of tuples when *arrays*
+        is a tuple.
+    """
+    lengths = [int(tl) for tl in trial_lengths]
+
+    if isinstance(arrays, tuple):
+        return [tuple(a[i, : lengths[i]] for a in arrays) for i in range(len(lengths))]
+
+    return [arrays[i, : lengths[i]] for i in range(len(lengths))]
+
+
+def to_device(arrays, sharding=None) -> tuple[Array, ...]:
+    return tuple(jax.device_put(arr, sharding) for arr in arrays)

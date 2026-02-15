@@ -94,9 +94,9 @@ def spectral_loss(paramflat, paramdef, static, spectral_density, m, V, dt, clip=
     spectral_density : Callable
         Function mapping kernel specs to their power spectral density.
     m : Array
-        Posterior means with shape `(time, latent_dim)`.
+        Posterior means with shape `(time, latent_dim (K))`.
     V : Array
-        Posterior covariances with shape `(time, latent_dim, latent_dim)`.
+        Posterior covariances with shape `(time, latent_dim (K), latent_dim (K))`.
     dt : float
         Discretisation step of the time axis.
     clip : float, default=1e-5
@@ -162,13 +162,14 @@ def whittle(latent_spec, filter, m, V, dt, clip=1e-5):
     Parameters
     ----------
     latent_spec : PyTree
-        Initial spectral specification.
+        Initial spectral specification. Each latent component is represented
+        as a list of kernel dictionaries (e.g., `{"sigma": ..., "rho": ...}`).
     filter : PyTree
         Boolean mask indicating trainable entries.
     m : Array
-        Posterior means with shape `(time, latent_dim)`.
+        Posterior means with shape `(time, latent_dim (K))`.
     V : Array
-        Posterior covariances with shape `(time, latent_dim, latent_dim)`.
+        Posterior covariances with shape `(time, latent_dim (K), latent_dim (K))`.
     dt : float
         Discretisation step of the time axis.
     clip : float, default=1e-5
@@ -178,6 +179,12 @@ def whittle(latent_spec, filter, m, V, dt, clip=1e-5):
     -------
     PyTree
         Optimised spectral specification.
+
+    Examples
+    --------
+    >>> latent_spec = [[{"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0}]]
+    >>> trainable = [[{"sigma": True, "rho": True, "omega": True, "order": False}]]
+    >>> spec = whittle(latent_spec, trainable, m, V, dt)
     """
     # flatten hyperparams
     paramflat, paramdef, static = spec2vec(latent_spec, filter)

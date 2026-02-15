@@ -1,13 +1,44 @@
 import numpy as np
-import matplotlib.pyplot as plt
+import pytest
+import jax
 from jax import numpy as jnp, config
-from sklearn.linear_model import LinearRegression
 
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
 from cvhmax.hm import sample_matern
 
 config.update("jax_enable_x64", True)
+
+
+@pytest.mark.parametrize(
+    "orders",
+    [
+        [0],
+        [0, 0],
+        [1, 1],
+        [2, 2],
+        [0, 1],
+        [1, 0],
+        [0, 1, 2],
+    ],
+)
+def test_latent_mask(orders):
+    kernels = [HidaMatern(order=p) for p in orders]
+    K = len(orders)
+    L = 2 * sum(k.nple for k in kernels)
+
+    model = CVHM(n_components=K, dt=1.0, kernels=kernels)
+    M = model.latent_mask()
+
+    assert M.shape == (K, L)
+    assert jnp.all(M.sum(axis=1) == 1.0)
+    assert int(jnp.count_nonzero(M)) == K
+
+    # Each kernel block gets [1, 2, ..., nple]; M selects the first element.
+    parts = [jnp.arange(1, k.nple + 1, dtype=float) for k in kernels]
+    real_half = jnp.concatenate(parts)
+    z = jnp.concatenate([real_half, jnp.zeros_like(real_half)])
+    assert jnp.allclose(M @ z, jnp.ones(K))
 
 
 def test_CVHM(capsys):
@@ -34,7 +65,7 @@ def test_CVHM(capsys):
     y = jnp.expand_dims(y, 0)
 
     with capsys.disabled():
-        model = CVHM(n_factors, dt, kernels, max_iter=2, likelihood="Poisson")
+        model = CVHM(n_factors, dt, kernels, max_iter=20, observation="Poisson")
         result = model.fit(y)
     m, V = result.posterior
     m = m[0]
@@ -42,18 +73,106 @@ def test_CVHM(capsys):
 
     assert m.shape == (T, n_factors)
     assert V.shape == (T, n_factors, n_factors)
-    
-    m = np.asarray(m)
-    m = LinearRegression().fit(m, x).predict(m)
 
-    fig, axs = plt.subplots(2, 2)
-    axs[0, 0].plot(x[:, 0], label="Ground truth", alpha=0.5)
-    axs[0, 1].plot(m[:, 0], label="Inference", alpha=0.5, color="r")
-    axs[1, 0].plot(x[:, 1], label="Ground truth", alpha=0.5)
-    axs[1, 1].plot(m[:, 1], label="Inference", alpha=0.5, color="r")
-    axs[0, 0].legend()
-    axs[0, 1].legend()
-    axs[1, 0].legend()
-    axs[1, 1].legend()
-    fig.savefig("cvhm.pdf")
-    plt.close(fig)
+
+def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
+    class FakeProgress:
+        def __init__(self):
+            self.add_task_calls = []
+            self.update_calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def add_task(self, description, total, **fields):
+            self.add_task_calls.append(
+                dict(description=description, total=total, fields=fields)
+            )
+            return 123
+
+        def update(self, task_id, **kwargs):
+            self.update_calls.append((task_id, kwargs))
+
+    fake_pbar = FakeProgress()
+
+    import cvhmax.cvhm as cvhm_mod
+    from cvhmax.cvi import Params, Poisson
+
+    monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
+
+    def fake_initialize_params(
+        cls, y, valid_y, n_factors, lmask, *, random_state, params=None
+    ) -> Params:
+        obs_dim = y.shape[-1]
+        C = jnp.zeros((obs_dim, n_factors), dtype=y.dtype)
+        d = jnp.zeros(obs_dim, dtype=y.dtype)
+        R = jnp.zeros((obs_dim, obs_dim), dtype=y.dtype)
+        return Params(C=C, d=d, R=R, M=lmask)
+
+    def fake_update_readout(cls, params, y, valid_y, m, V) -> tuple[Params, float]:
+        return params, jnp.nan
+
+    monkeypatch.setattr(
+        Poisson, "initialize_params", classmethod(fake_initialize_params)
+    )
+    monkeypatch.setattr(Poisson, "update_readout", classmethod(fake_update_readout))
+
+    recorded = []
+    import jax.debug as jdebug
+
+    def record_debug_callback(
+        callback, *args, ordered=False, partitioned=False, **kwargs
+    ):
+        recorded.append(
+            dict(
+                callback=callback,
+                args=args,
+                ordered=ordered,
+                partitioned=partitioned,
+                kwargs=kwargs,
+            )
+        )
+        return None
+
+    monkeypatch.setattr(jdebug, "callback", record_debug_callback)
+
+    n_devices = len(jax.devices())
+    trials = max(1, n_devices)
+    T = 4
+    obs_dim = 3
+    n_components = 1
+
+    y = jnp.zeros((trials, T, obs_dim), dtype=jnp.float64)
+    valid_y = jnp.ones((trials, T), dtype=jnp.uint8)
+
+    kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
+    model = CVHM(
+        n_components=n_components,
+        dt=1.0,
+        kernels=kernels,
+        observation="Poisson",
+        max_iter=3,
+    )
+
+    model.fit(y, valid_y=valid_y, random_state=0)
+
+    assert any(call["ordered"] is True for call in recorded), recorded
+
+    cb_calls = [call for call in recorded if len(call["args"]) == 2]
+    assert cb_calls, recorded
+
+    cb = cb_calls[0]["callback"]
+    cb(0, 1.23)
+    cb(2, 4.56)
+
+    assert fake_pbar.add_task_calls, "Expected add_task() to be called"
+    assert fake_pbar.update_calls, "Expected update() to be called"
+
+    for _, kwargs in fake_pbar.update_calls:
+        assert "completed" in kwargs
+        assert "advance" not in kwargs
+        assert 1 <= kwargs["completed"] <= 3
+        assert isinstance(kwargs.get("nell"), float)

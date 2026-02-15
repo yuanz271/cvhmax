@@ -1,10 +1,23 @@
-# SPDX-FileCopyrightText: 2023-present yuanz <yuanz271@gmail.com>
-#
-# SPDX-License-Identifier: MIT
-
 from .cvhm import CVHM
 from .cvi import CVI, Gaussian, Poisson, Params
 from .hm import HidaMatern
-from .hp import whittle
+from .utils import pad_trials, unpad_trials
 
-__all__ = ["CVHM", "CVI", "Gaussian", "Poisson", "Params", "HidaMatern", "whittle"]
+__all__ = [
+    "CVHM",
+    "CVI",
+    "Gaussian",
+    "Poisson",
+    "Params",
+    "HidaMatern",
+    "pad_trials",
+    "unpad_trials",
+]
+
+# Optional: kernel_generator requires the `kergen` extra.
+try:
+    from .kernel_generator import HidaMaternKernelGenerator, make_kernel
+
+    __all__ += ["HidaMaternKernelGenerator", "make_kernel"]
+except ImportError:
+    pass
