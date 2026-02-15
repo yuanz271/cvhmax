@@ -12,7 +12,7 @@ from cvhmax.hm import HidaMatern
 
 # Observations shaped (trials, time, features)
 y = jnp.asarray(...)  # your data
-ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
 
 n_latents = 2
 dt = 1.0
@@ -28,7 +28,7 @@ model = CVHM(
     observation="Gaussian",
     max_iter=5,
 )
-model.fit(y, ymask=ymask, random_state=0)
+model.fit(y, valid_y=valid_y, random_state=0)
 
 m, V = model.posterior
 ```
@@ -42,7 +42,7 @@ from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
 
 y = jnp.asarray(...)
-ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
 
 model = CVHM(
     n_components=2,
@@ -51,7 +51,7 @@ model = CVHM(
     observation="Poisson",
     max_iter=5,
 )
-model.fit(y, ymask=ymask, random_state=0)
+model.fit(y, valid_y=valid_y, random_state=0)
 
 m, V = model.posterior
 ```

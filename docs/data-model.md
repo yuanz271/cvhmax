@@ -9,7 +9,7 @@ This page defines the canonical shapes and masking conventions used by cvhmax.
 
 ## Masking
 
-- `ymask`: binary mask aligned to the first two axes of `y`
+- `valid_y`: binary mask aligned to the first two axes of `y`
 - Shape is typically `(trials, time)` and must be broadcastable to `y`
 - `1` indicates observed entries, `0` indicates missing/padded bins
 
@@ -23,7 +23,7 @@ Z_post = Z_pred + J
 z_post = z_pred + j
 ```
 
-When `ymask[t] = 0`, both `j[t]` and `J[t]` are set to zero, so the
+When `valid_y[t] = 0`, both `j[t]` and `J[t]` are set to zero, so the
 filter update at that time bin reduces to:
 
 ```
@@ -33,9 +33,9 @@ z_post = z_pred
 
 The posterior at a masked bin equals the prediction — no observation
 information is incorporated. This is implemented in `bin_info_repr`
-(`utils.py`), which applies `jnp.where(ymask, ·, 0)` to both `j` and
+(`utils.py`), which applies `jnp.where(valid_y, ·, 0)` to both `j` and
 `J` after computing them. Since `bin_info_repr` operates on a single bin
-where `ymask` is a scalar, the mask zeros out the entire vector/matrix
+where `valid_y` is a scalar, the mask zeros out the entire vector/matrix
 rather than individual entries.
 
 ## Dimensions
@@ -88,12 +88,12 @@ from cvhmax import CVHM, HidaMatern, pad_trials, unpad_trials
 y_list = [y_trial_0, y_trial_1, y_trial_2]  # (300, N), (500, N), (250, N)
 
 # Pad to rectangular arrays
-y, ymask, trial_lengths = pad_trials(y_list)
-# y.shape == (3, 500, N),  ymask.shape == (3, 500)
+y, valid_y, trial_lengths = pad_trials(y_list)
+# y.shape == (3, 500, N),  valid_y.shape == (3, 500)
 
-# Fit as usual — padded bins have ymask=0 so the filter skips them
+# Fit as usual — padded bins have valid_y=0 so the filter skips them
 model = CVHM(n_components=2, dt=0.01, kernels=[HidaMatern() for _ in range(2)])
-model.fit(y, ymask=ymask)
+model.fit(y, valid_y=valid_y)
 
 # Strip padding from posterior
 m_list = unpad_trials(model.posterior[0], trial_lengths)
@@ -108,12 +108,12 @@ mv_list = unpad_trials(model.posterior, trial_lengths)
 ### How it works
 
 `pad_trials` zero-pads shorter trials along the time axis and sets
-`ymask = 0` for padded bins.  Because the information filter adds `j`
+`valid_y = 0` for padded bins.  Because the information filter adds `j`
 and `J` at each bin (see [Masking](#masking) above), padded bins
 contribute zero information and the filter falls through to a pure
 prediction step.
 
-Pre-existing missing values (`ymask = 0`) within original trials are
+Pre-existing missing values (`valid_y = 0`) within original trials are
 preserved — padding is right-sided (zeros appended after the last
 original time bin).
 
@@ -121,7 +121,7 @@ original time bin).
 
 | Function | Signature | Returns |
 |----------|-----------|---------|
-| `pad_trials` | `(y_list, ymask_list=None)` | `(y, ymask, trial_lengths)` |
+| `pad_trials` | `(y_list, valid_y_list=None)` | `(y, valid_y, trial_lengths)` |
 | `unpad_trials` | `(arrays, trial_lengths)` | `list[Array]` or `list[tuple[Array, ...]]` |
 
 `unpad_trials` accepts either a single array or a tuple of arrays.

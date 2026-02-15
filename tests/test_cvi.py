@@ -23,11 +23,11 @@ def test_poisson_cvi_stats():
     j = jnp.zeros(L)
     J = -jnp.eye(L)
     y = jnp.zeros(N)
-    ymask = jnp.ones(1)
+    valid_y = jnp.ones(1)
     C = jnp.ones((N, L))
     d = jnp.ones(N)
 
-    poisson_cvi_bin_stats(j, J, y, ymask, C, d)
+    poisson_cvi_bin_stats(j, J, y, valid_y, C, d)
 
 
 def test_Poisson(capsys):
@@ -36,7 +36,7 @@ def test_Poisson(capsys):
     L = 5
     rng = np.random.default_rng()
     y = jnp.array(rng.poisson(5, size=(1, T, N)))
-    ymask = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T))
     C = jnp.ones((N, L))
     d = jnp.ones(N)
 
@@ -46,7 +46,7 @@ def test_Poisson(capsys):
     params = Params(C=C, d=d, R=jnp.zeros((N, N)), M=jnp.eye(L))
 
     j, J = vmap(Poisson.initialize_info, in_axes=(None, 0, 0, None, None))(
-        params, y, ymask, A, Q
+        params, y, valid_y, A, Q
     )
     chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
 
@@ -56,14 +56,14 @@ def test_Poisson(capsys):
     with capsys.disabled():
         chex.assert_equal_shape((y, m, V), dims=0)
         print(f"{y.shape=} {m.shape=}, {V.shape=}")
-        params, nell = Poisson.update_readout(params, y, ymask, m, V)
+        params, nell = Poisson.update_readout(params, y, valid_y, m, V)
 
         z = jnp.zeros((1, T, L))
         Z = jnp.expand_dims(jnp.tile(jnp.eye(L), (T, 1, 1)), 0)
         chex.assert_equal_shape((z, Z, j, J, y), dims=0)
 
         chex.assert_shape((z, Z), ((1, T, L), (1, T, L, L)))
-        j, J = Poisson.update_pseudo(params, y, ymask, z, Z, j, J, 0.1)
+        j, J = Poisson.update_pseudo(params, y, valid_y, z, Z, j, J, 0.1)
         chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
 
 
@@ -75,7 +75,7 @@ def test_Poisson(capsys):
 def test_gaussian_initialize_info_values(rng):
     """Gaussian.initialize_info produces j = H^T R^{-1}(y-d), J = H^T R^{-1} H.
 
-    Gaussian.initialize_info calls ``trial_info_repr(y, ymask, H, d, R)``
+    Gaussian.initialize_info calls ``trial_info_repr(y, valid_y, H, d, R)``
     which vmaps ``bin_info_repr`` over the time axis.  This test verifies
     the Gaussian observation information formula directly.
     """
@@ -88,7 +88,7 @@ def test_gaussian_initialize_info_values(rng):
     H = norm_loading(C_raw) @ M  # effective observation matrix
 
     y = jnp.array(rng.standard_normal((T, N)))  # single trial
-    ymask = jnp.ones(T)
+    valid_y = jnp.ones(T)
 
     # Compute expected values directly using the correct formula
     J_exp_single = H.T @ jnp.linalg.solve(R, H)  # (L, L)
@@ -96,7 +96,7 @@ def test_gaussian_initialize_info_values(rng):
     J_exp = jnp.tile(J_exp_single, (T, 1, 1))  # (T, L, L)
 
     # Apply mask
-    j_exp = jnp.where(jnp.expand_dims(ymask, -1), j_exp, 0)
+    j_exp = jnp.where(jnp.expand_dims(valid_y, -1), j_exp, 0)
 
     # Verify shapes
     chex.assert_shape([j_exp, J_exp], [(T, L), (T, L, L)])
@@ -120,12 +120,12 @@ def test_gaussian_initialize_info_shape():
     params = Params(C=C_raw, d=d, R=R, M=M)
 
     y = jnp.ones((1, T, N))
-    ymask = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T))
     A_dummy = jnp.eye(L)
     Q_dummy = jnp.eye(L)
 
     j, J = vmap(Gaussian.initialize_info, in_axes=(None, 0, 0, None, None))(
-        params, y, ymask, A_dummy, Q_dummy
+        params, y, valid_y, A_dummy, Q_dummy
     )
     chex.assert_shape([j, J], [(1, T, L), (1, T, L, L)])
 
@@ -139,10 +139,10 @@ def test_gaussian_update_pseudo_noop():
     z = jnp.zeros((1, T, L))
     Z = jnp.tile(jnp.eye(L), (1, T, 1, 1))
     y = jnp.zeros((1, T, 5))
-    ymask = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T))
     params = Params(C=jnp.ones((5, L)), d=jnp.zeros(5), R=jnp.eye(5), M=jnp.eye(L))
 
-    j_out, J_out = Gaussian.update_pseudo(params, y, ymask, z, Z, j, J, 0.1)
+    j_out, J_out = Gaussian.update_pseudo(params, y, valid_y, z, Z, j, J, 0.1)
     npt.assert_array_equal(np.asarray(j_out), np.asarray(j))
     npt.assert_array_equal(np.asarray(J_out), np.asarray(J))
 
@@ -158,7 +158,7 @@ def test_gaussian_infer_single_cvi_iter():
     j = jnp.zeros((1, T, L))
     J = jnp.tile(jnp.eye(L), (1, T, 1, 1))
     y = jnp.zeros((1, T, 4))
-    ymask = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T))
     z0 = jnp.zeros((1, L))
     Z0 = jnp.tile(jnp.eye(L), (1, 1, 1))
     params = Params(C=jnp.ones((4, L)), d=jnp.zeros(4), R=jnp.eye(4), M=jnp.eye(L))
@@ -167,7 +167,7 @@ def test_gaussian_infer_single_cvi_iter():
 
     # Pass cvi_iter=10, but Gaussian should force it to 1
     (z_out, Z_out), (j_out, J_out) = Gaussian.infer(
-        params, j, J, y, ymask, z0, Z0, mock_smooth, smooth_args, cvi_iter=10, lr=0.1
+        params, j, J, y, valid_y, z0, Z0, mock_smooth, smooth_args, cvi_iter=10, lr=0.1
     )
     # Gaussian.update_pseudo is a no-op so j_out == j, J_out == J
     npt.assert_array_equal(np.asarray(j_out), np.asarray(j))
@@ -209,7 +209,7 @@ def test_poisson_cvi_gradient_direction(rng):
     x = jnp.array(rng.standard_normal((1, T, L)) * 0.5)
     eta = x @ C_raw.T + d
     y = jnp.array(rng.poisson(np.exp(np.asarray(eta))).astype(float))
-    ymask = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T))
 
     # Initialize pseudo-obs
     H = norm_loading(C_raw) @ M
@@ -220,7 +220,7 @@ def test_poisson_cvi_gradient_direction(rng):
     Z = J + jnp.tile(jnp.eye(state_dim), (1, T, 1, 1))
 
     # One update
-    j_new, J_new = Poisson.update_pseudo(params, y, ymask, z, Z, j, J, lr=0.5)
+    j_new, J_new = Poisson.update_pseudo(params, y, valid_y, z, Z, j, J, lr=0.5)
 
     # j_new and J_new should differ from the initial values
     assert not jnp.allclose(j_new, j), "CVI update produced no change"

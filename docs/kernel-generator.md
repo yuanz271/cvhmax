@@ -118,7 +118,7 @@ model = CVHM(
     observation="Gaussian",
     max_iter=5,
 )
-model.fit(y, ymask=ymask, random_state=0)
+model.fit(y, valid_y=valid_y, random_state=0)
 ```
 
 ### Dispatch rules

@@ -3,7 +3,7 @@
 ## Shape Errors
 
 - Verify `y` is `(trials, time, features)` or `(time, features)`.
-- Ensure `ymask` is broadcastable to the first two axes of `y`.
+- Ensure `valid_y` is broadcastable to the first two axes of `y`.
 
 ## Numerical Instability
 

@@ -16,9 +16,9 @@ Public exports live in `src/cvhmax/__init__.py`:
 
 ## CVHM
 
-- `CVHM.fit(y, ymask=None, random_state=None)`
-- `CVHM.fit_transform(y, ymask)`
-- `CVHM.transform(y, ymask)` (currently not implemented)
+- `CVHM.fit(y, valid_y=None, random_state=None)`
+- `CVHM.fit_transform(y, valid_y)`
+- `CVHM.transform(y, valid_y)` (currently not implemented)
 
 Source: `src/cvhmax/cvhm.py`
 
@@ -68,7 +68,7 @@ See `kernel-generator.md` for usage examples and integration patterns.
 
 ## Utilities
 
-- `pad_trials(y_list, ymask_list=None)` → `(y, ymask, trial_lengths)`
+- `pad_trials(y_list, valid_y_list=None)` → `(y, valid_y, trial_lengths)`
   Pad variable-length trials into rectangular arrays.
 - `unpad_trials(arrays, trial_lengths)` → `list[Array]` or `list[tuple[Array, ...]]`
   Strip padding from rectangular arrays back to per-trial slices.

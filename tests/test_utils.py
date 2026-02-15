@@ -58,10 +58,10 @@ def test_filter_array(capsys):
     T = 50
     D = 5
     y = jrnd.normal(jrnd.key(0), shape=(S, T, D))
-    ymask = jrnd.bernoulli(jrnd.key(1), shape=(S, T))
+    valid_y = jrnd.bernoulli(jrnd.key(1), shape=(S, T))
 
-    filtered = utils.filter_array(y, ymask)
-    chex.assert_shape(filtered, (ymask.sum(), D))
+    filtered = utils.filter_array(y, valid_y)
+    chex.assert_shape(filtered, (valid_y.sum(), D))
 
 
 # ---------------------------------------------------------------------------
@@ -130,9 +130,9 @@ def test_trial_info_repr_analytic(rng):
     d = jnp.array(rng.standard_normal(N))
     R = jnp.eye(N) * 0.5
     y = jnp.array(rng.standard_normal((T, N)))
-    ymask = jnp.ones(T)
+    valid_y = jnp.ones(T)
 
-    j, J = trial_info_repr(y, ymask, C, d, R)
+    j, J = trial_info_repr(y, valid_y, C, d, R)
 
     # Expected
     Rinv = jnp.linalg.inv(R)
@@ -173,9 +173,9 @@ def test_trial_info_repr_mask(rng):
     y = jnp.array(rng.standard_normal((T, N)))
 
     # Mask out bins 0, 3, 7
-    ymask = jnp.ones(T).at[jnp.array([0, 3, 7])].set(0.0)
+    valid_y = jnp.ones(T).at[jnp.array([0, 3, 7])].set(0.0)
 
-    j, J = trial_info_repr(y, ymask, C, d, R)
+    j, J = trial_info_repr(y, valid_y, C, d, R)
 
     # Masked bins should be zero
     for t in [0, 3, 7]:
@@ -207,58 +207,58 @@ class TestPadTrials:
 
     def test_shapes(self):
         y_list = self._make_trials([300, 500, 250])
-        y, ymask, trial_lengths = pad_trials(y_list)
+        y, valid_y, trial_lengths = pad_trials(y_list)
         assert y.shape == (3, 500, 4)
-        assert ymask.shape == (3, 500)
+        assert valid_y.shape == (3, 500)
         assert trial_lengths.shape == (3,)
         npt.assert_array_equal(np.asarray(trial_lengths), [300, 500, 250])
 
     def test_padded_bins_masked(self):
         y_list = self._make_trials([10, 20])
-        y, ymask, _ = pad_trials(y_list)
+        y, valid_y, _ = pad_trials(y_list)
         # First trial is shorter; bins 10..19 should be masked
-        npt.assert_array_equal(np.asarray(ymask[0, 10:]), 0)
+        npt.assert_array_equal(np.asarray(valid_y[0, 10:]), 0)
         # Second trial fills entirely
-        npt.assert_array_equal(np.asarray(ymask[1, :]), 1)
+        npt.assert_array_equal(np.asarray(valid_y[1, :]), 1)
 
     def test_padded_values_zero(self):
         y_list = self._make_trials([10, 20])
         y, _, _ = pad_trials(y_list)
         npt.assert_array_equal(np.asarray(y[0, 10:]), 0.0)
 
-    def test_no_ymask_default(self):
+    def test_no_valid_y_default(self):
         y_list = self._make_trials([5, 8, 3])
-        _, ymask, _ = pad_trials(y_list)
+        _, valid_y, _ = pad_trials(y_list)
         for i, T_i in enumerate([5, 8, 3]):
-            npt.assert_array_equal(np.asarray(ymask[i, :T_i]), 1)
-            npt.assert_array_equal(np.asarray(ymask[i, T_i:]), 0)
+            npt.assert_array_equal(np.asarray(valid_y[i, :T_i]), 1)
+            npt.assert_array_equal(np.asarray(valid_y[i, T_i:]), 0)
 
     def test_preserves_original_mask(self):
         y_list = self._make_trials([10, 15])
         # Mark bins 0 and 3 as missing in trial 0
         mask0 = jnp.ones(10, dtype=jnp.uint8).at[0].set(0).at[3].set(0)
         mask1 = jnp.ones(15, dtype=jnp.uint8)
-        _, ymask, _ = pad_trials(y_list, ymask_list=[mask0, mask1])
+        _, valid_y, _ = pad_trials(y_list, valid_y_list=[mask0, mask1])
         # Original missing values preserved
-        assert int(ymask[0, 0]) == 0
-        assert int(ymask[0, 3]) == 0
+        assert int(valid_y[0, 0]) == 0
+        assert int(valid_y[0, 3]) == 0
         # Other original bins still observed
-        assert int(ymask[0, 1]) == 1
+        assert int(valid_y[0, 1]) == 1
         # Padded bins masked
-        npt.assert_array_equal(np.asarray(ymask[0, 10:]), 0)
+        npt.assert_array_equal(np.asarray(valid_y[0, 10:]), 0)
 
     def test_equal_lengths(self):
         y_list = self._make_trials([20, 20, 20])
-        y, ymask, trial_lengths = pad_trials(y_list)
+        y, valid_y, trial_lengths = pad_trials(y_list)
         assert y.shape == (3, 20, 4)
-        npt.assert_array_equal(np.asarray(ymask), 1)
+        npt.assert_array_equal(np.asarray(valid_y), 1)
         npt.assert_array_equal(np.asarray(trial_lengths), [20, 20, 20])
 
     def test_single_trial(self):
         y_list = self._make_trials([30])
-        y, ymask, trial_lengths = pad_trials(y_list)
+        y, valid_y, trial_lengths = pad_trials(y_list)
         assert y.shape == (1, 30, 4)
-        npt.assert_array_equal(np.asarray(ymask), 1)
+        npt.assert_array_equal(np.asarray(valid_y), 1)
 
     def test_unpad_roundtrip(self):
         lengths = [10, 20, 15]

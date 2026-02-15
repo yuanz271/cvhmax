@@ -112,7 +112,7 @@ class CVI:
         j: Array,
         J: Array,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         z0: Array,
         Z0: Array,
         smooth_fun: Callable,
@@ -131,7 +131,7 @@ class CVI:
             `(trials, time, state_dim (L))` and `(trials, time, state_dim (L), state_dim (L))`.
         y : Array
             Observation tensor shaped `(trials, time, obs_dim)`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`, typically `(trials, time)`.
         z0, Z0 : Array
             Initial state information parameters shaped `(trials, state_dim (L))`
@@ -157,7 +157,7 @@ class CVI:
         def step(i, carry) -> tuple[Array, Array]:
             j, J = carry
             z, Z = smooth_batch(j, J, z0, Z0)
-            j, J = cls.update_pseudo(params, y, ymask, z, Z, j, J, lr)
+            j, J = cls.update_pseudo(params, y, valid_y, z, Z, j, J, lr)
             return j, J
 
         j, J = lax.fori_loop(0, cvi_iter, step, (j, J))
@@ -178,7 +178,7 @@ class CVI:
             Current readout parameter state.
         y : Array
             Observations shaped `(trials, time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         m : Array
             Posterior means shaped `(trials, time, latent_dim (K))`.
@@ -197,7 +197,7 @@ class CVI:
         cls,
         params: Params,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         z: Array,
         Z: Array,
         j: Array,
@@ -212,7 +212,7 @@ class CVI:
             Current readout parameter state.
         y : Array
             Observations shaped `(trials, time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         z : Array
             Posterior information vectors shaped `(trials, time, state_dim (L))`.
@@ -234,7 +234,7 @@ class CVI:
     @classmethod
     @abstractmethod
     def initialize_info(
-        cls, params: Params, y: Array, ymask: Array, A: Array, Q: Array
+        cls, params: Params, y: Array, valid_y: Array, A: Array, Q: Array
     ) -> tuple[Array, Array]:
         """Initialise pseudo-observation natural parameters.
 
@@ -244,7 +244,7 @@ class CVI:
             Current readout parameter state.
         y : Array
             Observations shaped `(time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask, shape `(time,)`.
         A : Array
             Forward transition matrix shaped `(state_dim (L), state_dim (L))`.
@@ -263,7 +263,7 @@ class CVI:
     def initialize_params(
         cls,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         n_factors: int,
         lmask: Array,
         *,
@@ -280,7 +280,7 @@ class CVI:
         ----------
         y : Array
             Observations shaped `(trials, time, obs_dim)`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         n_factors : int
             Number of latent factors to initialize.
@@ -309,7 +309,7 @@ class Gaussian(CVI):
         j: Array,
         J: Array,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         z0: Array,
         Z0: Array,
         smooth_fun: Callable,
@@ -325,7 +325,7 @@ class Gaussian(CVI):
             Smoothed latents and pseudo-observations.
         """
         return super().infer(
-            params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr
+            params, j, J, y, valid_y, z0, Z0, smooth_fun, smooth_args, 1, lr
         )
 
     @classmethod
@@ -334,7 +334,7 @@ class Gaussian(CVI):
         cls,
         params: Params,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         z: Array,
         Z: Array,
         j: Array,
@@ -353,7 +353,7 @@ class Gaussian(CVI):
     @classmethod
     @override
     def initialize_info(
-        cls, params: Params, y: Array, ymask: Array, A: Array, Q: Array
+        cls, params: Params, y: Array, valid_y: Array, A: Array, Q: Array
     ) -> tuple[Array, Array]:
         """Compute Gaussian observation information from the readout.
 
@@ -363,7 +363,7 @@ class Gaussian(CVI):
             Current readout parameter state.
         y : Array
             Observation tensor shaped `(time, obs_dim)`.
-        ymask : Array
+        valid_y : Array
             Observation mask, shape `(time,)`.
         A : Array
             Forward transition matrix (unused, keeps API symmetry).
@@ -383,12 +383,12 @@ class Gaussian(CVI):
 
         H = C @ M
 
-        return trial_info_repr(y, ymask, H, d, R)
+        return trial_info_repr(y, valid_y, H, d, R)
 
     @classmethod
     @override
     def update_readout(
-        cls, params: Params, y: Array, ymask: Array, m: Array, P: Array
+        cls, params: Params, y: Array, valid_y: Array, m: Array, P: Array
     ) -> tuple[Params, float]:
         """Perform a ridge regression update of the Gaussian readout.
 
@@ -398,7 +398,7 @@ class Gaussian(CVI):
             Current readout parameter state.
         y : Array
             Observation tensor shaped `(trials, time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         m : Array
             Posterior means shaped `(trials, time, latent_dim (K))`.
@@ -411,9 +411,9 @@ class Gaussian(CVI):
             Updated parameters and the (unused) negative log-likelihood proxy.
         """
         y = y.reshape(-1, y.shape[-1])
-        ymask = ymask.ravel()
+        valid_y = valid_y.ravel()
         m = m.reshape(-1, m.shape[-1])
-        C, d, R = ridge_estimate(y, ymask, m, P)
+        C, d, R = ridge_estimate(y, valid_y, m, P)
         params = Params(C=C, d=d, R=R, M=params.M)
         return params, jnp.nan
 
@@ -422,7 +422,7 @@ class Gaussian(CVI):
     def initialize_params(
         cls,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         n_factors: int,
         lmask: Array,
         *,
@@ -435,7 +435,7 @@ class Gaussian(CVI):
         ----------
         y : Array
             Observation tensor shaped `(trials, time, obs_dim)`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         n_factors : int
             Number of latent factors.
@@ -454,7 +454,7 @@ class Gaussian(CVI):
         if params is not None:
             return params
 
-        y = filter_array(y, ymask)
+        y = filter_array(y, valid_y)
         _, C, d = fa_init(y, n_factors, random_state)
 
         return Params(C=C, d=d, R=jnp.eye(y.shape[-1]), M=lmask)
@@ -463,7 +463,7 @@ class Gaussian(CVI):
 def poisson_trial_nell(
     params: tuple[Array, Array],
     y: Array,
-    ymask: Array,
+    valid_y: Array,
     m: Array,
     V: Array,
     gamma: float = 10.0,
@@ -476,7 +476,7 @@ def poisson_trial_nell(
         Loading matrix and bias vector `(C, d)`.
     y : Array
         Observed counts with shape `(trial, time, obs_dim)`.
-    ymask : Array
+    valid_y : Array
         Observation mask aligned with `y`.
     m : Array
         Posterior means with matching leading dimensions.
@@ -491,7 +491,7 @@ def poisson_trial_nell(
         Trial-averaged negative expected log-likelihood.
     """
     C, d = params
-    n_valid_bins = jnp.sum(ymask)
+    n_valid_bins = jnp.sum(valid_y)
 
     def bin_nell(y_t, m_t, V_t):
         lin = C @ m_t + d
@@ -504,7 +504,7 @@ def poisson_trial_nell(
 
     C_reg = gamma * jnp.linalg.norm(C) / n_valid_bins
     bin_nells = vmap(bin_nell)(y, m, V)
-    bin_nells = jnp.where(ymask, bin_nells, 0)
+    bin_nells = jnp.where(valid_y, bin_nells, 0)
 
     return jnp.sum(bin_nells) / n_valid_bins + C_reg
 
@@ -513,7 +513,7 @@ def poisson_cvi_bin_stats(
     z: Array,
     Z: Array,
     y: Array,
-    ymask: Array,
+    valid_y: Array,
     H: Array,
     d: Array,
 ) -> tuple[Array, Array]:
@@ -527,7 +527,7 @@ def poisson_cvi_bin_stats(
         Information matrix.
     y : Array
         Observed counts for the bin.
-    ymask : Array
+    valid_y : Array
         Observation mask for one bin, shape ``()``. When zero, both ``k``
         and ``K`` are set to zero so the bin contributes no
         pseudo-observation gradient to the CVI update.
@@ -563,8 +563,8 @@ def poisson_cvi_bin_stats(
     K = -2 * grad_V
     k = grad_m - 2 * grad_V @ m
 
-    k = jnp.where(ymask, k, 0)
-    K = jnp.where(ymask, K, 0)
+    k = jnp.where(valid_y, k, 0)
+    K = jnp.where(valid_y, K, 0)
 
     return k, K
 
@@ -577,7 +577,7 @@ class Poisson(CVI):
         cls,
         params: Params,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         A: Array,
         Q: Array,
     ) -> tuple[Array, Array]:
@@ -589,7 +589,7 @@ class Poisson(CVI):
             Current readout parameter state.
         y : Array
             Observation tensor shaped `(time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask, shape `(time,)`.
         A : Array
             Forward transition matrix shaped `(state_dim (L), state_dim (L))`.
@@ -616,7 +616,7 @@ class Poisson(CVI):
             carry: tuple[Array, Array], ys: tuple[Array, Array]
         ) -> tuple[tuple[Array, Array], tuple[Array, Array]]:
             ztm1, Ztm1 = carry
-            yt, ytmask = ys
+            yt, valid_yt = ys
 
             # predict
             M = solve(A.T, solve(A.T, Ztm1.T).T)
@@ -626,7 +626,7 @@ class Poisson(CVI):
             Zp = multi_dot((L, M, L.T)) + multi_dot((G, P, G.T))
             zp = L @ solve(A.T, ztm1)
 
-            j, J = poisson_cvi_bin_stats(zp, Zp, yt, ytmask, H, d)
+            j, J = poisson_cvi_bin_stats(zp, Zp, yt, valid_yt, H, d)
 
             zt = zp + j
             Zt = Zp + J
@@ -634,7 +634,7 @@ class Poisson(CVI):
 
             return (zt, Zt), (j, J)
 
-        _, (j, J) = lax.scan(forward, (z0, Z0), (y, ymask))
+        _, (j, J) = lax.scan(forward, (z0, Z0), (y, valid_y))
 
         return j, J
 
@@ -643,7 +643,7 @@ class Poisson(CVI):
         cls,
         params: Params,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         m: Array,
         V: Array,
     ) -> tuple[Params, float]:
@@ -655,7 +655,7 @@ class Poisson(CVI):
             Current readout parameter state.
         y : Array
             Observation tensor shaped `(trials, time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         m : Array
             Posterior means shaped `(trials, time, latent_dim (K))`.
@@ -671,20 +671,20 @@ class Poisson(CVI):
         d = params.d
         R = params.R
 
-        # y = filter_array(y, ymask)
-        # m = filter_array(m, ymask)
-        # V = filter_array(V, ymask)
+        # y = filter_array(y, valid_y)
+        # m = filter_array(m, valid_y)
+        # V = filter_array(V, valid_y)
 
         y = y.reshape(-1, y.shape[-1])
-        ymask = ymask.ravel()
+        valid_y = valid_y.ravel()
         m = m.reshape(-1, m.shape[-1])
         V = V.reshape(-1, *V.shape[-2:])
 
         C, d = lbfgs_solve(
-            (C, d), partial(poisson_trial_nell, y=y, ymask=ymask, m=m, V=V)
+            (C, d), partial(poisson_trial_nell, y=y, valid_y=valid_y, m=m, V=V)
         )
 
-        nell = poisson_trial_nell((C, d), y=y, ymask=ymask, m=m, V=V, gamma=0.0)
+        nell = poisson_trial_nell((C, d), y=y, valid_y=valid_y, m=m, V=V, gamma=0.0)
         return Params(C=C, d=d, R=R, M=params.M), nell
 
     @classmethod
@@ -692,7 +692,7 @@ class Poisson(CVI):
         cls,
         params: Params,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         z: Array,
         Z: Array,
         j: Array,
@@ -707,7 +707,7 @@ class Poisson(CVI):
             Current readout parameter state.
         y : Array
             Observation tensor shaped `(trials, time, obs_dim (N))`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         z : Array
             Posterior information vectors shaped `(trials, time, state_dim (L))`.
@@ -729,9 +729,9 @@ class Poisson(CVI):
         M = params.lmask()
         H = C @ M
         d = params.d
-        # print(f"{z.shape=} {Z.shape=} {y.shape=}, {ymask.shape=}")
+        # print(f"{z.shape=} {Z.shape=} {y.shape=}, {valid_y.shape=}")
         k, K = vmap(vmap(partial(poisson_cvi_bin_stats, H=H, d=d)))(
-            z, Z, y, ymask
+            z, Z, y, valid_y
         )  # session
 
         j = (1 - lr) * j + lr * k
@@ -743,7 +743,7 @@ class Poisson(CVI):
     def initialize_params(
         cls,
         y: Array,
-        ymask: Array,
+        valid_y: Array,
         n_factors: int,
         lmask: Array,
         *,
@@ -756,7 +756,7 @@ class Poisson(CVI):
         ----------
         y : Array
             Flattened observation tensor shaped `(trials * time, obs_dim)`.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
         n_factors : int
             Number of latent factors.
@@ -775,7 +775,7 @@ class Poisson(CVI):
         if params is not None:
             return params
 
-        y = filter_array(y, ymask)
+        y = filter_array(y, valid_y)
         m, C, d = fa_init(y, n_factors, random_state)
 
         n_bins, n_obs = y.shape
@@ -783,7 +783,7 @@ class Poisson(CVI):
 
         C, d = lbfgs_solve(
             (C, d),
-            partial(poisson_trial_nell, y=y, ymask=jnp.ones(y.shape[:1]), m=m, V=V),
+            partial(poisson_trial_nell, y=y, valid_y=jnp.ones(y.shape[:1]), m=m, V=V),
         )
 
         return Params(C=C, d=d, R=None, M=lmask)

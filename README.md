@@ -57,7 +57,7 @@ from cvhmax.hm import HidaMatern
 
 # Observations shaped (trials, time, features)
 y = jnp.asarray(...)            # substitute your data
-ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
 
 n_latents = 2
 dt = 1.0
@@ -73,7 +73,7 @@ model = CVHM(
     observation="Poisson",  # or "Gaussian"
     max_iter=5,
 )
-model.fit(y, ymask=ymask, random_state=0)
+model.fit(y, valid_y=valid_y, random_state=0)
 m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
 ```
 
@@ -82,11 +82,11 @@ Use `model.fit_transform(...)` when you only need the posterior means. The `cvi`
 ## Data model
 
 - **Observations (`y`)** – array shaped `(trial, time, obs_dim (N))` or `(time, obs_dim (N))`. Single-trial data are automatically expanded to match the expected rank.
-- **Mask (`ymask`)** – binary array broadcastable over `y`. `1` marks observed entries, `0` marks missing/padded bins.
+- **Mask (`valid_y`)** – binary array broadcastable over `y`. `1` marks observed entries, `0` marks missing/padded bins.
 - **Posterior mean (`m`)** – returned via `model.posterior[0]`, shaped `(trial, time, latent_dim (K))`.
 - **Posterior covariance (`V`)** – returned via `model.posterior[1]`, shaped `(trial, time, latent_dim (K), latent_dim (K))`.
 
-Pad unequal trial lengths with zeros in `y`, mark them as missing in `ymask`, and the filters will skip them automatically.
+Pad unequal trial lengths with zeros in `y`, mark them as missing in `valid_y`, and the filters will skip them automatically.
 
 ## Project layout
 

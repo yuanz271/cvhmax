@@ -133,14 +133,14 @@ class CVHM:
 
         return M
 
-    def fit(self, y: Array, ymask: Array | None = None, *, random_state=None):
+    def fit(self, y: Array, valid_y: Array | None = None, *, random_state=None):
         """Fit the CVHM model to observations using CVI-EM.
 
         Parameters
         ----------
         y : Array
             Observations shaped `(trials, time, features)` or `(time, features)`.
-        ymask : Array, optional
+        valid_y : Array, optional
             Binary mask matching `y` that flags observed entries. Missing values
             default to all ones when omitted.
         random_state : int | None, optional
@@ -157,26 +157,26 @@ class CVHM:
         >>> from cvhmax.cvhm import CVHM
         >>> from cvhmax.hm import HidaMatern
         >>> y = jnp.asarray(...)  # (trials, time, features)
-        >>> ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+        >>> valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
         >>> kernels = [HidaMatern(order=0) for _ in range(2)]
         >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels, observation="Gaussian")
-        >>> model.fit(y, ymask=ymask, random_state=0)
+        >>> model.fit(y, valid_y=valid_y, random_state=0)
         """
-        if ymask is None:
-            ymask = jnp.ones(y.shape[:-1], dtype=jnp.uint)
+        if valid_y is None:
+            valid_y = jnp.ones(y.shape[:-1], dtype=jnp.uint)
 
         if y.ndim == 2:
             y = jnp.expand_dims(y, 0)
-            ymask = jnp.expand_dims(ymask, 0)
+            valid_y = jnp.expand_dims(valid_y, 0)
 
-        chex.assert_equal_shape_prefix((y, ymask), 2)
+        chex.assert_equal_shape_prefix((y, valid_y), 2)
 
         if random_state is None:
             random_state = secrets.randbits(32)
 
         params = self.params = self.cvi.initialize_params(
             y,
-            ymask,
+            valid_y,
             self.n_components,
             self.latent_mask(),
             random_state=random_state,
@@ -212,11 +212,11 @@ class CVHM:
         n_devices = len(jax.devices())
         mesh = jax.make_mesh((n_devices,), ("batch",))
         sharding = NamedSharding(mesh, P("batch"))
-        y, ymask, z, Z, m, V = to_device((y, ymask, z, Z, m, V), sharding)
+        y, valid_y, z, Z, m, V = to_device((y, valid_y, z, Z, m, V), sharding)
 
         # Initialize information update
         j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
-            params, y, ymask, Af, Qf
+            params, y, valid_y, Af, Qf
         )
 
         def em_step(iter, carry):
@@ -228,7 +228,7 @@ class CVHM:
                 j,
                 J,
                 y,
-                ymask,
+                valid_y,
                 z0,
                 Z0,
                 smooth_fun=bifilter,
@@ -240,7 +240,7 @@ class CVHM:
             # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
             m, V = sde2gp(z, Z, M)
 
-            params, nell = self.cvi.update_readout(params, y, ymask, m, V)
+            params, nell = self.cvi.update_readout(params, y, valid_y, m, V)
 
             # Refresh information from updated params.  For conjugate
             # (Gaussian) readouts the pseudo-observations are a
@@ -250,7 +250,7 @@ class CVHM:
             # already maintain pseudo-observations, so the refresh has
             # no effect beyond a warm restart.
             j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
-                params, y, ymask, Af, Qf
+                params, y, valid_y, Af, Qf
             )
 
             return params, z, Z, j, J, m, V, nell
@@ -285,14 +285,14 @@ class CVHM:
         self.posterior = (m, V)
         return self
 
-    def transform(self, y: Array, ymask: Array):
+    def transform(self, y: Array, valid_y: Array):
         """Infer latent trajectories for new data.
 
         Parameters
         ----------
         y : Array
             Observations to transform.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
 
         Raises
@@ -302,14 +302,14 @@ class CVHM:
         """
         raise NotImplementedError
 
-    def fit_transform(self, y: Array, ymask: Array) -> Array:
+    def fit_transform(self, y: Array, valid_y: Array) -> Array:
         """Fit the model and return the posterior mean in one call.
 
         Parameters
         ----------
         y : Array
             Observations to fit.
-        ymask : Array
+        valid_y : Array
             Observation mask aligned with `y`.
 
         Returns
@@ -323,12 +323,12 @@ class CVHM:
         >>> from cvhmax.cvhm import CVHM
         >>> from cvhmax.hm import HidaMatern
         >>> y = jnp.asarray(...)
-        >>> ymask = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+        >>> valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
         >>> kernels = [HidaMatern(order=0) for _ in range(2)]
         >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels)
-        >>> m = model.fit_transform(y, ymask)
+        >>> m = model.fit_transform(y, valid_y)
         """
-        self.fit(y, ymask)
+        self.fit(y, valid_y)
         return self.posterior[0]
 
 

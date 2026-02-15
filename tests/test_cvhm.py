@@ -104,7 +104,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
 
     def fake_initialize_params(
-        cls, y, ymask, n_factors, lmask, *, random_state, params=None
+        cls, y, valid_y, n_factors, lmask, *, random_state, params=None
     ) -> Params:
         obs_dim = y.shape[-1]
         C = jnp.zeros((obs_dim, n_factors), dtype=y.dtype)
@@ -112,7 +112,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
         R = jnp.zeros((obs_dim, obs_dim), dtype=y.dtype)
         return Params(C=C, d=d, R=R, M=lmask)
 
-    def fake_update_readout(cls, params, y, ymask, m, V) -> tuple[Params, float]:
+    def fake_update_readout(cls, params, y, valid_y, m, V) -> tuple[Params, float]:
         return params, jnp.nan
 
     monkeypatch.setattr(
@@ -146,7 +146,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     n_components = 1
 
     y = jnp.zeros((trials, T, obs_dim), dtype=jnp.float64)
-    ymask = jnp.ones((trials, T), dtype=jnp.uint8)
+    valid_y = jnp.ones((trials, T), dtype=jnp.uint8)
 
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
     model = CVHM(
@@ -157,7 +157,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
         max_iter=3,
     )
 
-    model.fit(y, ymask=ymask, random_state=0)
+    model.fit(y, valid_y=valid_y, random_state=0)
 
     assert any(call["ordered"] is True for call in recorded), recorded
 

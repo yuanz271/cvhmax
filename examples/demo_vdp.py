@@ -44,7 +44,7 @@ class FrozenPoisson(Poisson):
     """
 
     @classmethod
-    def update_readout(cls, params, y, ymask, m, V):
+    def update_readout(cls, params, y, valid_y, m, V):
         return params, jnp.nan
 
 
@@ -362,10 +362,10 @@ def run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng):
     print(f"Trial lengths: {trial_lengths_np}")
 
     # --- Pad to rectangular arrays ---
-    y_padded, ymask, trial_lengths = pad_trials(y_list)
-    print(f"Padded shape: y={y_padded.shape}, ymask={ymask.shape}")
+    y_padded, valid_y, trial_lengths = pad_trials(y_list)
+    print(f"Padded shape: y={y_padded.shape}, valid_y={valid_y.shape}")
 
-    # --- Fit (the filter skips padded bins automatically via ymask=0) ---
+    # --- Fit (the filter skips padded bins automatically via valid_y=0) ---
     kernels = [
         HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(n_latents)
     ]
@@ -377,7 +377,7 @@ def run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng):
         max_iter=50,
         cvi_iter=5,
     )
-    model.fit(y_padded, ymask=ymask, random_state=42)
+    model.fit(y_padded, valid_y=valid_y, random_state=42)
 
     # --- Unpad posterior back to per-trial arrays ---
     m_list = unpad_trials(model.posterior[0], trial_lengths)

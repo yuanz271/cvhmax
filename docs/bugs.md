@@ -24,7 +24,7 @@ outer vmap over the trial axis:
 
 ```python
 j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
-    params, y, ymask, Af, Qf
+    params, y, valid_y, Af, Qf
 )
 ```
 
@@ -34,7 +34,7 @@ each `initialize_info` call receives `y` of shape `(T, N)`.
 `Gaussian.initialize_info` (`cvi.py:385`) then applied a second vmap:
 
 ```python
-return vmap(partial(bin_info_repr, C=H, d=d, R=R))(y, ymask)
+return vmap(partial(bin_info_repr, C=H, d=d, R=R))(y, valid_y)
 ```
 
 This mapped over the leading axis of `(T, N)`, passing per-time-bin slices of
@@ -55,16 +55,16 @@ vmap in `cvhm.py:215`.
 
 Refactored the information-representation functions into a clear hierarchy:
 
-- `bin_info_repr(y, ymask, C, d, R)` — single bin, `y` shape `(N,)`
-- `trial_info_repr(y, ymask, C, d, R)` — vmaps `bin_info_repr` over time,
+- `bin_info_repr(y, valid_y, C, d, R)` — single bin, `y` shape `(N,)`
+- `trial_info_repr(y, valid_y, C, d, R)` — vmaps `bin_info_repr` over time,
   `y` shape `(T, N)`
-- `batch_info_repr(y, ymask, C, d, R)` — vmaps `trial_info_repr` over
+- `batch_info_repr(y, valid_y, C, d, R)` — vmaps `trial_info_repr` over
   trials, `y` shape `(trials, T, N)`
 
 `Gaussian.initialize_info` now calls `trial_info_repr` directly:
 
 ```python
-return trial_info_repr(y, ymask, H, d, R)
+return trial_info_repr(y, valid_y, H, d, R)
 ```
 
 ---
@@ -86,7 +86,7 @@ return trial_info_repr(y, ymask, H, d, R)
 via:
 
 ```python
-return CVI.infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr)
+return CVI.infer(params, j, J, y, valid_y, z0, Z0, smooth_fun, smooth_args, 1, lr)
 ```
 
 This called `CVI.infer` as an **unbound classmethod** with `params` as the
@@ -107,7 +107,7 @@ resolves to `Gaussian.update_pseudo`.
 Changed to `super().infer(...)` which preserves the correct `cls` binding:
 
 ```python
-return super().infer(params, j, J, y, ymask, z0, Z0, smooth_fun, smooth_args, 1, lr)
+return super().infer(params, j, J, y, valid_y, z0, Z0, smooth_fun, smooth_args, 1, lr)
 ```
 
 ---
@@ -254,7 +254,7 @@ The `d[:, None]` workarounds in tests have been removed.
 
 ---
 
-## BUG-6: `update_readout` uses `vstack` on `ymask` — FIXED
+## BUG-6: `update_readout` uses `vstack` on `valid_y` — FIXED
 
 | | |
 |---|---|
@@ -271,7 +271,7 @@ Both `Gaussian.update_readout` and `Poisson.update_readout` used
 
 ```python
 y = jnp.vstack(y)           # (trials, T, N) → (trials*T, N) ✓
-ymask = jnp.vstack(ymask)   # (trials, T) → (trials, T) ✗
+valid_y = jnp.vstack(valid_y)   # (trials, T) → (trials, T) ✗
 m = jnp.vstack(m)           # (trials, T, L) → (trials*T, L) ✓
 ```
 
@@ -279,7 +279,7 @@ m = jnp.vstack(m)           # (trials, T, L) → (trials*T, L) ✓
 and concatenates along axis 0 → correct 2D result. But `jnp.vstack` on
 a **2D** array treats the first axis as a list of 1D arrays, promotes
 each to 2D (adding a leading axis), then stacks — returning the **same
-2D shape**. For `ymask` with shape `(1, T)`, `vstack` returns `(1, T)`
+2D shape**. For `valid_y` with shape `(1, T)`, `vstack` returns `(1, T)`
 instead of the expected `(T,)`.
 
 When this `(1, T)` mask reached `ridge_estimate`, `expand_dims` produced
@@ -292,7 +292,7 @@ Replaced `vstack` with explicit `reshape`/`ravel`:
 
 ```python
 y = y.reshape(-1, y.shape[-1])
-ymask = ymask.ravel()
+valid_y = valid_y.ravel()
 m = m.reshape(-1, m.shape[-1])
 ```
 
@@ -313,11 +313,11 @@ m = m.reshape(-1, m.shape[-1])
 `poisson_trial_nell` applied the mask with:
 
 ```python
-bin_nells = jnp.where(jnp.expand_dims(ymask, -1), bin_nells, 0)
+bin_nells = jnp.where(jnp.expand_dims(valid_y, -1), bin_nells, 0)
 ```
 
-`bin_nells` is `(T,)` (one scalar per bin from `vmap`). With `ymask`
-shape `(T,)`, `expand_dims(ymask, -1)` produces `(T, 1)`. Broadcasting
+`bin_nells` is `(T,)` (one scalar per bin from `vmap`). With `valid_y`
+shape `(T,)`, `expand_dims(valid_y, -1)` produces `(T, 1)`. Broadcasting
 `(T, 1)` with `(T,)` yields `(T, T)` — a square matrix instead of a
 vector. With all-ones masks the numerical result was correct (all entries
 True → identity), but with partial masks the sum would be wrong.
@@ -327,7 +327,7 @@ True → identity), but with partial masks the sum would be wrong.
 Removed the unnecessary `expand_dims`:
 
 ```python
-bin_nells = jnp.where(ymask, bin_nells, 0)
+bin_nells = jnp.where(valid_y, bin_nells, 0)
 ```
 
 ---
@@ -415,7 +415,7 @@ Added a `initialize_info` call at the end of `em_step` to refresh
 
 ```python
 j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
-    params, y, ymask, Af, Qf
+    params, y, valid_y, Af, Qf
 )
 ```
 
@@ -523,7 +523,7 @@ to be underestimated in proportion to the fraction of masked bins.
 
 ### Example
 
-With `T = 100` bins and 50 masked (`ymask` has 50 ones), the sum of
+With `T = 100` bins and 50 masked (`valid_y` has 50 ones), the sum of
 squared residuals comes from 50 bins but is divided by 100, making `R`
 roughly half its true value.
 
@@ -550,17 +550,17 @@ Divisor should be the number of valid bins, not the total bin count.
 Replaced the divisor with the valid count:
 
 ```python
-n_valid = jnp.maximum(jnp.sum(ymask), 1.0)
+n_valid = jnp.maximum(jnp.sum(valid_y), 1.0)
 R = r.T @ r / n_valid
 ```
 
 `jnp.maximum(..., 1.0)` guards against division by zero when all bins
-are masked. At this point `ymask` has shape `(T, 1)` (from
-`expand_dims` on line 386), so `jnp.sum(ymask)` counts the valid bins.
+are masked. At this point `valid_y` has shape `(T, 1)` (from
+`expand_dims` on line 386), so `jnp.sum(valid_y)` counts the valid bins.
 
 ### Note
 
-With fully-observed data (`ymask` all ones), `n_valid == T` and the
+With fully-observed data (`valid_y` all ones), `n_valid == T` and the
 result is unchanged. This is likely why the bug was not caught — tests
 typically use fully-observed data.
 

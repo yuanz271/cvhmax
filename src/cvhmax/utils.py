@@ -119,7 +119,7 @@ def real_repr(c):
 
 
 def bin_info_repr(
-    y: Array, ymask: Array, C: Array, d: Array, R: Array
+    y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
     """Compute Gaussian observation information for a single bin.
 
@@ -130,7 +130,7 @@ def bin_info_repr(
     ----------
     y : Array
         Observations for one bin, shape ``(N,)``.
-    ymask : Array
+    valid_y : Array
         Observation mask for one bin, shape ``()``. When zero, both ``j``
         and ``J`` are set to zero so the bin contributes no information
         to the filter update.
@@ -149,14 +149,14 @@ def bin_info_repr(
     J = C.T @ jnp.linalg.solve(R, C)
     j = C.T @ jnp.linalg.solve(R, y - d)
 
-    j: Array = jnp.where(ymask, j, 0)
-    J: Array = jnp.where(ymask, J, 0)
+    j: Array = jnp.where(valid_y, j, 0)
+    J: Array = jnp.where(valid_y, J, 0)
 
     return j, J
 
 
 def trial_info_repr(
-    y: Array, ymask: Array, C: Array, d: Array, R: Array
+    y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
     """Compute Gaussian observation information for a single trial.
 
@@ -166,7 +166,7 @@ def trial_info_repr(
     ----------
     y : Array
         Observations for one trial, shape ``(T, N)``.
-    ymask : Array
+    valid_y : Array
         Observation mask for one trial, shape ``(T,)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
@@ -180,11 +180,11 @@ def trial_info_repr(
     tuple[Array, Array]
         ``(j, J)`` with shapes ``(T, L)`` and ``(T, L, L)``.
     """
-    return jax.vmap(partial(bin_info_repr, C=C, d=d, R=R))(y, ymask)
+    return jax.vmap(partial(bin_info_repr, C=C, d=d, R=R))(y, valid_y)
 
 
 def batch_info_repr(
-    y: Array, ymask: Array, C: Array, d: Array, R: Array
+    y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
     """Compute Gaussian observation information for multiple trials.
 
@@ -194,7 +194,7 @@ def batch_info_repr(
     ----------
     y : Array
         Observations, shape ``(trials, T, N)``.
-    ymask : Array
+    valid_y : Array
         Observation mask, shape ``(trials, T)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
@@ -209,7 +209,7 @@ def batch_info_repr(
         ``(j, J)`` with shapes ``(trials, T, L)`` and
         ``(trials, T, L, L)``.
     """
-    return jax.vmap(partial(trial_info_repr, C=C, d=d, R=R))(y, ymask)
+    return jax.vmap(partial(trial_info_repr, C=C, d=d, R=R))(y, valid_y)
 
 
 def conjtrans(x):
@@ -372,14 +372,14 @@ def training_progress():
     )
 
 
-def ridge_estimate(y, ymask, m, V, lam=0.1):
+def ridge_estimate(y, valid_y, m, V, lam=0.1):
     """Solve a ridge regression for the observation model.
 
     Parameters
     ----------
     y : Array
         Observations.
-    ymask : Array
+    valid_y : Array
         Observation mask aligned with `y`.
     m : Array
         Posterior means.
@@ -401,9 +401,9 @@ def ridge_estimate(y, ymask, m, V, lam=0.1):
 
     assert m1.shape == (T, z_dim + 1)
 
-    ymask = jnp.expand_dims(ymask, -1)  # (T, 1)
-    y = jnp.where(ymask, y, 0)  # apply mask to y
-    m1 = jnp.where(ymask, m1, 0)  # apply mask to m1
+    valid_y = jnp.expand_dims(valid_y, -1)  # (T, 1)
+    y = jnp.where(valid_y, y, 0)  # apply mask to y
+    m1 = jnp.where(valid_y, m1, 0)  # apply mask to m1
 
     zy = m1.T @ y  # (z + 1, t) (t, y) -> (z + 1, y)
     zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)
@@ -411,7 +411,7 @@ def ridge_estimate(y, ymask, m, V, lam=0.1):
     w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
 
     r = y - m1 @ w  # (t, y)
-    n_valid = jnp.maximum(jnp.sum(ymask), 1.0)
+    n_valid = jnp.maximum(jnp.sum(valid_y), 1.0)
     R = r.T @ r / n_valid  # (y, y)
 
     d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
@@ -443,21 +443,21 @@ def filter_array(arr: Array, mask: Array) -> Array:
 
 
 def pad_trials(
-    y_list: list[Array], ymask_list: list[Array] | None = None
+    y_list: list[Array], valid_y_list: list[Array] | None = None
 ) -> tuple[Array, Array, Array]:
     """Pad variable-length trials into rectangular arrays.
 
     Shorter trials are right-padded (zeros appended after the last
     time bin) and the corresponding mask entries are set to zero so
     that the information filter treats padded bins as missing data.
-    Any pre-existing missing values (``ymask == 0``) inside original
+    Any pre-existing missing values (``valid_y == 0``) inside original
     trials are preserved.
 
     Parameters
     ----------
     y_list : list[Array]
         Per-trial observations, each shaped ``(T_i, obs_dim (N))``.
-    ymask_list : list[Array] or None
+    valid_y_list : list[Array] or None
         Per-trial masks, each shaped ``(T_i,)``.
         If ``None``, all original bins are treated as observed.
 
@@ -465,7 +465,7 @@ def pad_trials(
     -------
     y : Array
         Padded observations, shape ``(n_trials, T_max, obs_dim (N))``.
-    ymask : Array
+    valid_y : Array
         Combined mask, shape ``(n_trials, T_max)``.  Padded positions and
         originally missing bins are zero.
     trial_lengths : Array
@@ -478,17 +478,17 @@ def pad_trials(
     n_trials = len(y_list)
 
     y = jnp.zeros((n_trials, T_max, N), dtype=y_list[0].dtype)
-    ymask = jnp.zeros((n_trials, T_max), dtype=jnp.uint8)
+    valid_y = jnp.zeros((n_trials, T_max), dtype=jnp.uint8)
 
     for i, y_i in enumerate(y_list):
         T_i = y_i.shape[0]
         y = y.at[i, :T_i].set(y_i)
-        if ymask_list is not None:
-            ymask = ymask.at[i, :T_i].set(ymask_list[i])
+        if valid_y_list is not None:
+            valid_y = valid_y.at[i, :T_i].set(valid_y_list[i])
         else:
-            ymask = ymask.at[i, :T_i].set(1)
+            valid_y = valid_y.at[i, :T_i].set(1)
 
-    return y, ymask, trial_lengths
+    return y, valid_y, trial_lengths
 
 
 def unpad_trials(arrays, trial_lengths):
