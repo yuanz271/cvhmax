@@ -74,7 +74,7 @@ Use `model.fit_transform(...)` when you only need the posterior means. For smoot
 - **Posterior mean (`m`)** -- `(trials, time, latent_dim)`.
 - **Posterior covariance (`V`)** -- `(trials, time, latent_dim, latent_dim)`.
 
-Use `pad_trials` / `unpad_trials` for variable-length trials. See `docs/data-model.md` for full details.
+JAX requires rectangular arrays for batched operations -- use `pad_trials` / `unpad_trials` for variable-length trials. See `docs/data-model.md` for details.
 
 ## License
 
