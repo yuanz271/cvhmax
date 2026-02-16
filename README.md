@@ -11,6 +11,7 @@ Variational latent-state inference with Hida-Matern kernels.
 - [Installation](#installation)
 - [Quickstart](#quickstart)
 - [Data model](#data-model)
+- [Citation](#citation)
 - [License](#license)
 
 ## Overview
@@ -75,6 +76,22 @@ Use `model.fit_transform(...)` when you only need the posterior means. For smoot
 - **Posterior covariance (`V`)** -- `(trials, time, latent_dim, latent_dim)`.
 
 JAX requires rectangular arrays for batched operations -- use `pad_trials` / `unpad_trials` for variable-length trials. See `docs/data-model.md` for details.
+
+## Citation
+
+This package is a JAX reimplementation of the methods described in:
+
+> Dowling, M., Zhao, Y., & Park, I. M. (2023). Linear Time GPs for Inferring Latent Trajectories from Neural Spike Trains. *Proceedings of the 40th International Conference on Machine Learning (ICML)*. \[[OpenReview](https://openreview.net/forum?id=1hWB5XEUMa)\] \[[arXiv](https://arxiv.org/abs/2306.01802)\]
+
+```bibtex
+@InProceedings{Dowling2023c,
+  author    = {Matthew Dowling and Yuan Zhao and Il Memming Park},
+  booktitle = {International Conference on Machine Learning (ICML)},
+  title     = {Linear time {GP}s for inferring latent trajectories from neural spike trains},
+  year      = {2023},
+  url       = {https://openreview.net/forum?id=1hWB5XEUMa},
+}
+```
 
 ## License
 
