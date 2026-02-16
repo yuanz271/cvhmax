@@ -8,6 +8,13 @@ This file is for coding agents working in this repo. Keep changes small, follow 
 - Avoid destructive git commands (`reset --hard`, force-push, rewriting history) unless explicitly requested.
 - Do not revert/overwrite unrelated local changes; work around them.
 
+## Branching Model (GitHub Flow)
+
+- `main` is the default branch and always deployable.
+- Create feature branches from `main` (e.g., `feature/add-poisson-cvi`).
+- Open a PR to merge feature branches back to `main`.
+- No long-lived `develop` branch; delete feature branches after merge.
+
 ## Overview
 
 Variational latent-state inference with Hida-Matern kernels in JAX. Uses information-form Kalman filtering + CVI-EM to smooth latent trajectories from Gaussian/Poisson observations.
