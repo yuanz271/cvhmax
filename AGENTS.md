@@ -28,7 +28,6 @@ cvhmax/
 |-- tests/                     # Mirrors src/ modules (test_<module>.py)
 |-- docs/                      # Local Markdown documentation
 |-- examples/                  # Demo scripts (e.g., demo_vdp.py)
-|-- CONTRIBUTING.md            # Developer workflow and guidelines
 `-- AGENTS.md                  # This file
 ```
 
@@ -95,6 +94,15 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 | Hyperparameter fitting | `src/cvhmax/hp.py` | `whittle()` |
 | Utilities | `src/cvhmax/utils.py` | Keep jittable + side-effect free |
 
+## Common Workflows
+
+### Adding a New Observation Model
+
+1. Add a new `CVI` subclass in `src/cvhmax/cvi.py`.
+2. Ensure it registers via `__init_subclass__`.
+3. Add tests under `tests/` mirroring the module layout.
+4. Update docstrings and `docs/api.md`.
+
 ## Docs Update Rule
 
 **Every code change must include matching documentation updates.** This is a hard rule, not a suggestion. Check the touchpoints table below after every change and update all affected files before considering the task complete.
@@ -106,7 +114,7 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 | Algorithms/logic changes | `docs/algorithms.md` + docstrings |
 | Kernel generator | `docs/kernel-generator.md` + `docs/algorithms.md` |
 | Examples / quickstart | `README.md` |
-| Dev workflow/tooling | `CONTRIBUTING.md` + `README.md` (if user-facing) |
+| Dev workflow/tooling | `AGENTS.md` + `README.md` (if user-facing) |
 
 ## Code Style Guidelines
 
