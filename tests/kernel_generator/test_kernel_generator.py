@@ -3,9 +3,6 @@
 Requires the ``kergen`` extra (sympy, sympy2jax).
 """
 
-import sys
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -22,32 +19,6 @@ from cvhmax.utils import real_repr, conjtrans  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
-# Reference code availability check
-# ---------------------------------------------------------------------------
-_REF_ROOT = Path(__file__).resolve().parent.parent / "hida_matern_gp_lvms"
-if _REF_ROOT.is_dir() and str(_REF_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REF_ROOT))
-
-
-def _torch_and_ref_available():
-    try:
-        import torch  # noqa: F401
-        from hida_matern_kernel_generator.hm_kernel_generator import (  # noqa: F401
-            HidaMaternKernelGenerator as _,
-        )
-
-        return True
-    except ImportError:
-        return False
-
-
-requires_ref = pytest.mark.skipif(
-    not _torch_and_ref_available(),
-    reason="torch or hida_matern_gp_lvms reference code not available",
-)
-
-
-# ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
@@ -58,6 +29,34 @@ _PARAM_GRID = [
     (1.5, 2.0, 3.0),
     (0.5, 0.3, 10.0),
 ]
+
+
+def _matern_closed_form(order, tau, sigma, rho):
+    r = jnp.abs(tau) / rho
+    if order == 1:
+        return sigma**2 * jnp.exp(-r)
+    if order == 2:
+        return sigma**2 * (1.0 + jnp.sqrt(3.0) * r) * jnp.exp(-jnp.sqrt(3.0) * r)
+    if order == 3:
+        return (
+            sigma**2
+            * (1.0 + jnp.sqrt(5.0) * r + (5.0 / 3.0) * r**2)
+            * jnp.exp(-jnp.sqrt(5.0) * r)
+        )
+    raise ValueError(f"Unsupported order {order} for closed-form Matérn")
+
+
+def _complex_kernel(order, tau, sigma, rho, omega):
+    base = _matern_closed_form(order, tau, sigma, rho)
+    return base * jnp.exp(1j * omega * tau)
+
+
+def _finite_diff_first(f, tau, h):
+    return (f(tau + h) - f(tau - h)) / (2.0 * h)
+
+
+def _finite_diff_second(f, tau, h):
+    return (f(tau + h) - 2.0 * f(tau) + f(tau - h)) / (h**2)
 
 
 @pytest.fixture(params=_ORDERS)
@@ -470,6 +469,116 @@ class TestBaseKernel:
 
 
 # ---------------------------------------------------------------------------
+# Mathematical correctness (paper-derived)
+# ---------------------------------------------------------------------------
+
+
+class TestMathematicalCorrectness:
+    """Tests derived from Hida-Matérn kernel definitions."""
+
+    @pytest.mark.parametrize("order", [1, 2, 3])
+    @pytest.mark.parametrize("tau_val", [0.1, 1.0])
+    def test_closed_form_matern(self, order, tau_val):
+        sigma = jnp.array(1.2)
+        rho = jnp.array(0.7)
+        omega = jnp.array(0.0)
+        gen = make_kernel(order)
+        expected = _matern_closed_form(order, tau_val, sigma, rho)
+        actual = gen.get_base_kernel(
+            jnp.array(tau_val), sigma, rho, omega
+        )
+        npt.assert_allclose(float(actual), float(expected), rtol=1e-10, atol=1e-12)
+
+    def test_derivative_construction(self):
+        """K_hat outer entries match kernel derivatives at tau>0."""
+        order = 3
+        gen = make_kernel(order)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        omega = jnp.array(0.7)
+        tau = 0.5
+        h = 1e-4
+
+        def k_fn(t):
+            return _complex_kernel(order, t, sigma, rho, omega)
+
+        derivs = [k_fn(tau), _finite_diff_first(k_fn, tau, h), _finite_diff_second(k_fn, tau, h)]
+        K_hat = gen.create_K_hat(jnp.array(tau), sigma, rho, omega)
+
+        for c in range(order):
+            expected = (-1.0) ** c * derivs[c]
+            actual = K_hat[0, c]
+            npt.assert_allclose(
+                np.asarray(actual),
+                np.asarray(expected),
+                rtol=1e-5,
+                atol=1e-6,
+                err_msg=f"Derivative mismatch at c={c}",
+            )
+
+    @pytest.mark.parametrize("tau_val", [0.1, 1.0])
+    def test_oscillation_phase_only_scalar(self, tau_val):
+        """Oscillation should modulate phase, not magnitude, for k(tau)."""
+        order = 2
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        gen = make_kernel(order)
+        k0 = gen.create_K_hat(jnp.array(tau_val), sigma, rho, jnp.array(0.0))[0, 0]
+        k1 = gen.create_K_hat(jnp.array(tau_val), sigma, rho, jnp.array(3.0))[0, 0]
+        npt.assert_allclose(
+            np.abs(np.asarray(k0)),
+            np.abs(np.asarray(k1)),
+            rtol=1e-10,
+            atol=1e-12,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Numerical stability
+# ---------------------------------------------------------------------------
+
+
+class TestNumericalStability:
+    """Stability checks for the generated kernels."""
+
+    @pytest.mark.parametrize("order", [2, 3])
+    def test_tau_zero_limit_consistency(self, order):
+        gen = make_kernel(order)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        omega = jnp.array(0.0)
+        K0 = gen.create_K_hat(jnp.array(0.0), sigma, rho, omega)
+        K_eps = gen.create_K_hat(jnp.array(1e-6), sigma, rho, omega)
+        diff = jnp.linalg.norm(K0 - K_eps)
+        denom = jnp.linalg.norm(K0)
+        rel = diff / denom
+        assert float(rel) < 1e-5
+
+    @pytest.mark.parametrize("rho", [0.5, 2.0])
+    @pytest.mark.parametrize("omega", [0.0, 2.0])
+    def test_high_order_finite_outputs(self, rho, omega):
+        gen = make_kernel(8)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(rho)
+        omega = jnp.array(omega)
+        K_hat = gen.create_K_hat(jnp.array(0.1), sigma, rho, omega)
+        moments = gen.get_moments(sigma, rho, omega)
+        assert jnp.all(jnp.isfinite(K_hat)), "K_hat contains NaN/Inf"
+        assert jnp.all(jnp.isfinite(moments)), "moments contain NaN/Inf"
+
+    def test_conditioning_sanity(self):
+        gen = make_kernel(3)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        omega = jnp.array(0.0)
+        K0 = gen.create_K_hat(jnp.array(0.0), sigma, rho, omega)
+        K0_real = real_repr(K0)
+        cond = jnp.linalg.cond(K0_real)
+        assert jnp.isfinite(cond)
+        assert float(cond) < 1e12
+
+
+# ---------------------------------------------------------------------------
 # JIT compatibility tests
 # ---------------------------------------------------------------------------
 
@@ -508,53 +617,3 @@ class TestJITCompatibility:
         assert bk.shape == ()
 
 
-# ---------------------------------------------------------------------------
-# Parity with PyTorch reference (conditional)
-# ---------------------------------------------------------------------------
-
-
-@requires_ref
-class TestParityPyTorchReference:
-    """Cross-implementation parity tests against the PyTorch reference.
-
-    These tests are only run when torch and the reference code are available.
-    """
-
-    @pytest.mark.parametrize("order", [1, 2, 3])
-    @pytest.mark.parametrize("tau_val", [0.0, 0.5, 1.0])
-    def test_K_hat_parity(self, order, tau_val):
-        """Generated K_hat should match PyTorch reference."""
-        import torch
-        import importlib
-
-        # Load PyTorch reference module
-        mod = importlib.import_module(
-            f"hida_matern_kernel_generator.hm_ss_kernels."
-            f"hida_M_{order}.hida_M_{order}_K_hat"
-        )
-
-        # PyTorch reference uses log-space + softplus
-        log_sigma = torch.tensor(0.0, dtype=torch.float64)  # softplus(0) ~ 0.693
-        log_ls = torch.tensor(0.0, dtype=torch.float64)
-        log_b = torch.tensor(0.0, dtype=torch.float64)
-
-        sigma_val = float(torch.nn.functional.softplus(log_sigma))
-        rho_val = float(torch.nn.functional.softplus(log_ls))
-        omega_val = float(torch.nn.functional.softplus(log_b))
-
-        K_ref = mod.create_K_hat(
-            tau_val, log_sigma, log_ls, log_b, dtype=torch.complex128
-        )
-        K_ref = K_ref.numpy()
-
-        # JAX implementation uses raw positive params
-        gen = make_kernel(order)
-        K_jax = gen.create_K_hat(
-            jnp.array(tau_val),
-            jnp.array(sigma_val),
-            jnp.array(rho_val),
-            jnp.array(omega_val),
-        )
-        K_jax = np.asarray(K_jax)
-
-        npt.assert_allclose(K_jax, K_ref, atol=1e-8)
