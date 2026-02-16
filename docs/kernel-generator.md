@@ -27,6 +27,51 @@ equals the generator order `nple = M = p + 1`.  The total state dimension
 across all `K` kernels is `L = 2 * sum(nple)` (factor of 2 from real-valued
 representation).
 
+### Background from the Hida-Matern paper
+
+The original Hida-Matern kernel paper (Dowling, Sokol, Park, 2021;
+arXiv:2107.07098) introduces the class as the **canonical family of
+stationary Gauss-Markov kernels**, extending Matérn kernels with
+oscillatory components.  Key implications for the generator:
+
+- **N-ple Markov property**: a Matérn-ν kernel with ν = p + 1/2 is
+  Markov in the space of its first `p` mean-square derivatives, yielding
+  an `M = p + 1` dimensional state-space model.
+- **Derivative construction**: the state-space covariance matrix
+  `K_hat(τ)` is built from the successive derivatives of `k(τ)`; this is
+  the core symbolic step implemented in `generator.py`.
+- **Oscillatory extension**: the factor `exp(i * omega * tau)` introduces
+  a phase rotation without changing the magnitude of the base Matérn
+  covariance.
+- **Numerical stability**: evaluating derivative limits at `τ → 0+`
+  avoids singularities in the state-space representation.
+
+### Reference implementation (hida_matern_gp_lvms)
+
+The PyTorch reference implementation in `hida_matern_gp_lvms/` follows the
+same derivative-based construction:
+
+- Symbolically differentiate `k(τ)` up to order `2M - 1`.
+- Fill the outer entries of `K_hat` with ± derivatives at `τ` and the
+  inner entries by antisymmetry: `K[r, c] = -K[r-1, c+1]`.
+- Use explicit limit expressions when `τ = 0`.
+- Define spectral moments as the even-order derivative limits at `τ = 0`.
+
+The JAX generator mirrors this logic but emits JIT-compatible functions
+via `sympy2jax` instead of writing out Python source files.
+
+### Matérn kernel special cases (reference)
+
+The scalar Matérn kernel has closed-form expressions for half-integer
+smoothness. For `r = |tau| / rho`:
+
+- ν = 1/2: `k(r) = σ² exp(-r)`
+- ν = 3/2: `k(r) = σ² (1 + √3 r) exp(-√3 r)`
+- ν = 5/2: `k(r) = σ² (1 + √5 r + 5 r² / 3) exp(-√5 r)`
+
+The generator's `matern_poly` produces these polynomials exactly for
+`order = 1, 2, 3` (i.e., `p = 0, 1, 2`).
+
 ### Order conventions
 
 The generator order `M` is the SSM state dimension. The `HidaMatern`
@@ -297,6 +342,42 @@ src/cvhmax/kernel_generator/
     matern.py         # symbolic Matern polynomial + Hida-Matern kernel
     generator.py      # core class: symbolic diff -> sympy2jax -> JAX callables
 ```
+
+## Testing roadmap
+
+The following tests are planned to extend coverage of the generator’s
+mathematical correctness and numerical stability:
+
+### Mathematical correctness
+
+1) **Closed-form Matérn checks (ω=0)**
+   - Validate `get_base_kernel(τ)` against half-integer Matérn formulas
+     for orders 1–3 using the same `r = |τ| / ρ` parameterization.
+
+2) **Derivative construction of `K_hat` (τ>0, complex kernel)**
+   - For `M=3`, verify `K_hat[0,c] = (-1)^c d^c k/dτ^c` for `c=0..2`
+     using the full complex kernel `k(τ)`.
+
+3) **Oscillation phase only (scalar kernel)**
+   - Check that `|k(τ; ω=0)| ≈ |k(τ; ω=3)|` for the scalar kernel
+     (`K_hat[0,0]`), not higher derivatives.
+
+### Numerical stability
+
+4) **τ→0 limit consistency**
+   - Compare `K_hat(0)` vs `K_hat(1e-6)` for orders 2–3, relative error
+     < 1e-6.
+
+5) **High-order finite outputs**
+   - For `M=8`, ensure `create_K_hat(0.1)` and `get_moments(...)` produce
+     no NaN/Inf under moderate parameters (σ=1, ρ ∈ {0.5, 2}, ω ∈ {0, 2}).
+
+6) **Conditioning sanity**
+   - Check `cond(real_repr(K_hat(0)))` is finite and < 1e12 for
+     `M=3, σ=1, ρ=1, ω=0`.
+
+These tests should live under `tests/kernel_generator/` and be guarded by
+`pytest.importorskip` for `sympy` and `sympy2jax`.
 
 ## See also
 

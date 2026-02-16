@@ -60,6 +60,34 @@ _PARAM_GRID = [
 ]
 
 
+def _matern_closed_form(order, tau, sigma, rho):
+    r = jnp.abs(tau) / rho
+    if order == 1:
+        return sigma**2 * jnp.exp(-r)
+    if order == 2:
+        return sigma**2 * (1.0 + jnp.sqrt(3.0) * r) * jnp.exp(-jnp.sqrt(3.0) * r)
+    if order == 3:
+        return (
+            sigma**2
+            * (1.0 + jnp.sqrt(5.0) * r + (5.0 / 3.0) * r**2)
+            * jnp.exp(-jnp.sqrt(5.0) * r)
+        )
+    raise ValueError(f"Unsupported order {order} for closed-form Matérn")
+
+
+def _complex_kernel(order, tau, sigma, rho, omega):
+    base = _matern_closed_form(order, tau, sigma, rho)
+    return base * jnp.exp(1j * omega * tau)
+
+
+def _finite_diff_first(f, tau, h):
+    return (f(tau + h) - f(tau - h)) / (2.0 * h)
+
+
+def _finite_diff_second(f, tau, h):
+    return (f(tau + h) - 2.0 * f(tau) + f(tau - h)) / (h**2)
+
+
 @pytest.fixture(params=_ORDERS)
 def gen(request):
     """Kernel generator for each test order."""
@@ -467,6 +495,116 @@ class TestBaseKernel:
         bk1 = gen.get_base_kernel(jnp.array(1.0), sigma, rho, omega)
         bk5 = gen.get_base_kernel(jnp.array(5.0), sigma, rho, omega)
         assert float(bk0) >= float(bk1) >= float(bk5)
+
+
+# ---------------------------------------------------------------------------
+# Mathematical correctness (paper-derived)
+# ---------------------------------------------------------------------------
+
+
+class TestMathematicalCorrectness:
+    """Tests derived from Hida-Matérn kernel definitions."""
+
+    @pytest.mark.parametrize("order", [1, 2, 3])
+    @pytest.mark.parametrize("tau_val", [0.1, 1.0])
+    def test_closed_form_matern(self, order, tau_val):
+        sigma = jnp.array(1.2)
+        rho = jnp.array(0.7)
+        omega = jnp.array(0.0)
+        gen = make_kernel(order)
+        expected = _matern_closed_form(order, tau_val, sigma, rho)
+        actual = gen.get_base_kernel(
+            jnp.array(tau_val), sigma, rho, omega
+        )
+        npt.assert_allclose(float(actual), float(expected), rtol=1e-10, atol=1e-12)
+
+    def test_derivative_construction(self):
+        """K_hat outer entries match kernel derivatives at tau>0."""
+        order = 3
+        gen = make_kernel(order)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        omega = jnp.array(0.7)
+        tau = 0.5
+        h = 1e-4
+
+        def k_fn(t):
+            return _complex_kernel(order, t, sigma, rho, omega)
+
+        derivs = [k_fn(tau), _finite_diff_first(k_fn, tau, h), _finite_diff_second(k_fn, tau, h)]
+        K_hat = gen.create_K_hat(jnp.array(tau), sigma, rho, omega)
+
+        for c in range(order):
+            expected = (-1.0) ** c * derivs[c]
+            actual = K_hat[0, c]
+            npt.assert_allclose(
+                np.asarray(actual),
+                np.asarray(expected),
+                rtol=1e-5,
+                atol=1e-6,
+                err_msg=f"Derivative mismatch at c={c}",
+            )
+
+    @pytest.mark.parametrize("tau_val", [0.1, 1.0])
+    def test_oscillation_phase_only_scalar(self, tau_val):
+        """Oscillation should modulate phase, not magnitude, for k(tau)."""
+        order = 2
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        gen = make_kernel(order)
+        k0 = gen.create_K_hat(jnp.array(tau_val), sigma, rho, jnp.array(0.0))[0, 0]
+        k1 = gen.create_K_hat(jnp.array(tau_val), sigma, rho, jnp.array(3.0))[0, 0]
+        npt.assert_allclose(
+            np.abs(np.asarray(k0)),
+            np.abs(np.asarray(k1)),
+            rtol=1e-10,
+            atol=1e-12,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Numerical stability
+# ---------------------------------------------------------------------------
+
+
+class TestNumericalStability:
+    """Stability checks for the generated kernels."""
+
+    @pytest.mark.parametrize("order", [2, 3])
+    def test_tau_zero_limit_consistency(self, order):
+        gen = make_kernel(order)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        omega = jnp.array(0.0)
+        K0 = gen.create_K_hat(jnp.array(0.0), sigma, rho, omega)
+        K_eps = gen.create_K_hat(jnp.array(1e-6), sigma, rho, omega)
+        diff = jnp.linalg.norm(K0 - K_eps)
+        denom = jnp.linalg.norm(K0)
+        rel = diff / denom
+        assert float(rel) < 1e-5
+
+    @pytest.mark.parametrize("rho", [0.5, 2.0])
+    @pytest.mark.parametrize("omega", [0.0, 2.0])
+    def test_high_order_finite_outputs(self, rho, omega):
+        gen = make_kernel(8)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(rho)
+        omega = jnp.array(omega)
+        K_hat = gen.create_K_hat(jnp.array(0.1), sigma, rho, omega)
+        moments = gen.get_moments(sigma, rho, omega)
+        assert jnp.all(jnp.isfinite(K_hat)), "K_hat contains NaN/Inf"
+        assert jnp.all(jnp.isfinite(moments)), "moments contain NaN/Inf"
+
+    def test_conditioning_sanity(self):
+        gen = make_kernel(3)
+        sigma = jnp.array(1.0)
+        rho = jnp.array(1.0)
+        omega = jnp.array(0.0)
+        K0 = gen.create_K_hat(jnp.array(0.0), sigma, rho, omega)
+        K0_real = real_repr(K0)
+        cond = jnp.linalg.cond(K0_real)
+        assert jnp.isfinite(cond)
+        assert float(cond) < 1e12
 
 
 # ---------------------------------------------------------------------------
