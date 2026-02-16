@@ -39,11 +39,33 @@ def _torch_and_ref_available():
 # ---------------------------------------------------------------------------
 # Markers
 # ---------------------------------------------------------------------------
+def pytest_addoption(parser):
+    parser.addoption(
+        "--run-slow",
+        action="store_true",
+        default=False,
+        help="Run tests marked as slow (e.g. benchmarks).",
+    )
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "parity: cross-implementation parity tests (require torch + ref code)",
     )
+    config.addinivalue_line(
+        "markers",
+        "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--run-slow"):
+        return
+    skip_slow = pytest.mark.skip(reason="need --run-slow option to run")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
 
 
 # convenience skip decorator used in test_parity.py

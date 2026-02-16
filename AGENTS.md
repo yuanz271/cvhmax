@@ -77,6 +77,9 @@ JAX_ENABLE_X64=1 pytest -x --maxfail=1
 JAX_ENABLE_X64=1 pytest --lf          # rerun last failures
 JAX_ENABLE_X64=1 pytest --ff          # run last failures first
 
+# Benchmark (slow, ~30 s; skipped by default)
+JAX_ENABLE_X64=1 pytest tests/test_benchmark.py --run-slow
+
 # Build (sdist/wheel)
 python -m build
 # (Alternative, if hatch is installed)
@@ -109,6 +112,19 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 2. Ensure it registers via `__init_subclass__`.
 3. Add tests under `tests/` mirroring the module layout.
 4. Update docstrings and `docs/api.md`.
+
+## Benchmark Regression Guard
+
+Any change that affects inference quality **must** pass the benchmark:
+
+```bash
+JAX_ENABLE_X64=1 pytest tests/test_benchmark.py --run-slow
+```
+
+The benchmark runs three Poisson-VdP scenarios (frozen readout, estimated
+readout, variable-length trials) and asserts R² ≥ 0.96.  Baseline R² is
+~0.972 on all three.  If a change drops below the floor, either fix the
+regression or update the floor with justification.
 
 ## Docs Update Rule
 
