@@ -24,11 +24,25 @@ Source: `src/cvhmax/cvhm.py`
 
 ## CVI and Readouts
 
-- `CVI`: registry-backed base class
-- `Gaussian`, `Poisson`: implementations of likelihood-specific updates
-- `Params`: container of `C`, `d`, `R`, `M`
+- `CVI`: registry-backed base class with stateless abstract methods
+  - `initialize_params(y, valid_y, n_factors, *, random_state)` — create params
+  - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
+  - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
+  - `update_readout(params, y, valid_y, m, V)` — M-step for observation params
+- `Gaussian`, `Poisson`: built-in readouts
+- `Params`: convenience container of `C`, `d`, `R` (no `M` — that lives in CVHM)
+
+CVI methods work entirely in latent space `(K)`. The params structure is
+opaque to CVHM — each subclass may use any pytree-compatible container.
 
 Source: `src/cvhmax/cvi.py`
+
+## Conversion Helpers
+
+- `lift(j_latent, J_latent, M)` — latent→state information
+- `project(z, Z, M)` — state→latent posterior (delegates to `sde2gp`)
+
+Source: `src/cvhmax/cvhm.py`
 
 ## Kernels
 

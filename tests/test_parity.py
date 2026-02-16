@@ -442,21 +442,19 @@ def test_poisson_cvi_step_parity():
     # Build params — cvhmax normalises C internally via norm_loading,
     # so H will differ from the reference H_np.  We test shapes + finiteness.
     C_jax = jnp.array(C_np)
-    params = Params(C=C_jax, d=jnp.array(d_np), R=None, M=jnp.array(M))
+    params = Params(C=C_jax, d=jnp.array(d_np), R=None)
     y_jax = jnp.array(y_np)
     valid_y_jax = jnp.ones((1, T))
 
-    j_jax, J_jax = vmap(Poisson.initialize_info, in_axes=(None, 0, 0, None, None))(
+    j_jax, J_jax = vmap(Poisson.initialize_info, in_axes=(None, 0, 0))(
         params,
         y_jax,
         valid_y_jax,
-        jnp.array(A_real),
-        jnp.array(Q_real),
     )
 
-    # Both should produce finite outputs of matching shape
-    assert j_jax.shape == (1, T, state_dim)
-    assert J_jax.shape == (1, T, state_dim, state_dim)
+    # initialize_info now returns latent-space arrays
+    assert j_jax.shape == (1, T, L)
+    assert J_jax.shape == (1, T, L, L)
     assert np.all(np.isfinite(np.asarray(j_jax))), "cvhmax j has non-finite values"
     assert np.all(np.isfinite(np.asarray(J_jax))), "cvhmax J has non-finite values"
     assert np.all(np.isfinite(h_obs_ref_np)), "ref h_obs has non-finite values"

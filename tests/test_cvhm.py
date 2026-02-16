@@ -3,7 +3,7 @@ import pytest
 import jax
 from jax import numpy as jnp, config
 
-from cvhmax.cvhm import CVHM
+from cvhmax.cvhm import CVHM, lift, project, sde2gp
 from cvhmax.hm import HidaMatern
 from cvhmax.hm import sample_matern
 
@@ -39,6 +39,94 @@ def test_latent_mask(orders):
     real_half = jnp.concatenate(parts)
     z = jnp.concatenate([real_half, jnp.zeros_like(real_half)])
     assert jnp.allclose(M @ z, jnp.ones(K))
+
+
+def test_lift_shapes():
+    """``lift`` maps latent-space info to state-space info with correct shapes."""
+    T, K, L = 20, 3, 8
+    M = jnp.zeros((K, L)).at[0, 0].set(1).at[1, 2].set(1).at[2, 4].set(1)
+    j_latent = jnp.ones((T, K))
+    J_latent = jnp.eye(K)[None, ...].repeat(T, axis=0)
+
+    j, J = lift(j_latent, J_latent, M)
+
+    assert j.shape == (T, L)
+    assert J.shape == (T, L, L)
+
+
+def test_lift_values():
+    """``lift`` correctly applies M to information parameters."""
+    K, L = 2, 4
+    M = jnp.zeros((K, L)).at[0, 0].set(1).at[1, 2].set(1)
+    j_latent = jnp.array([3.0, 5.0])
+    J_latent = jnp.array([[2.0, 1.0], [1.0, 4.0]])
+
+    j, J = lift(j_latent, J_latent, M)
+
+    # j = j_latent @ M
+    np.testing.assert_allclose(j, j_latent @ M)
+    # J = M.T @ J_latent @ M
+    np.testing.assert_allclose(J, M.T @ J_latent @ M)
+
+
+def test_lift_batched():
+    """``lift`` handles leading batch dimensions."""
+    trials, T, K, L = 2, 10, 2, 6
+    M = jnp.zeros((K, L)).at[0, 0].set(1).at[1, 2].set(1)
+    j_latent = jnp.ones((trials, T, K))
+    J_latent = jnp.eye(K)[None, None, ...].repeat(T, axis=1).repeat(trials, axis=0)
+
+    j, J = lift(j_latent, J_latent, M)
+
+    assert j.shape == (trials, T, L)
+    assert J.shape == (trials, T, L, L)
+    np.testing.assert_allclose(j[0, 0], j_latent[0, 0] @ M)
+    np.testing.assert_allclose(J[0, 0], M.T @ J_latent[0, 0] @ M)
+
+
+def test_project_roundtrip():
+    """``project`` recovers latent moments consistent with state embedding."""
+    K, L = 2, 4
+    M = jnp.zeros((K, L)).at[0, 0].set(1).at[1, 2].set(1)
+
+    # Start from known latent moments
+    m_true = jnp.array([[1.0, 2.0]])  # (1, K)
+    V_true = jnp.array([[[0.5, 0.1], [0.1, 0.3]]])  # (1, K, K)
+
+    # Build a full-rank state covariance embedding the latent moments
+    V_state = jnp.eye(L) * 0.1 + M.T @ V_true[0] @ M
+    Z_state = jnp.linalg.inv(V_state)
+    m_state = m_true[0] @ M  # (L,)
+    z_state = Z_state @ m_state  # (L,)
+
+    # Shape: (trials=1, time=1, ...)
+    z = z_state[None, None, :]
+    Z = Z_state[None, None, :, :]
+
+    m_rec, V_rec = project(z, Z, M)
+
+    # m_rec = solve(Z, z) @ M.T = m_state @ M.T = m_true
+    np.testing.assert_allclose(m_rec[0, 0], m_true[0], atol=1e-10)
+    # V_rec = M @ inv(Z) @ M.T
+    V_exp = M @ jnp.linalg.inv(Z_state) @ M.T
+    np.testing.assert_allclose(V_rec[0, 0], V_exp, atol=1e-10)
+
+
+def test_project_matches_sde2gp():
+    """``project`` delegates to ``sde2gp`` and returns identical results."""
+    T, K, L = 5, 2, 4
+    rng = np.random.default_rng(99)
+    M = jnp.zeros((K, L)).at[0, 0].set(1).at[1, 2].set(1)
+
+    z = jnp.array(rng.standard_normal((1, T, L)))
+    Z_raw = rng.standard_normal((1, T, L, L))
+    Z = jnp.einsum("...ij,...kj->...ik", Z_raw, Z_raw) + 10 * jnp.eye(L)
+
+    m1, V1 = project(z, Z, M)
+    m2, V2 = sde2gp(z, Z, M)
+
+    np.testing.assert_allclose(np.asarray(m1), np.asarray(m2), atol=1e-12)
+    np.testing.assert_allclose(np.asarray(V1), np.asarray(V2), atol=1e-12)
 
 
 def test_CVHM(capsys):
@@ -104,13 +192,13 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
 
     def fake_initialize_params(
-        cls, y, valid_y, n_factors, lmask, *, random_state, params=None
+        cls, y, valid_y, n_factors, *, random_state, params=None
     ) -> Params:
         obs_dim = y.shape[-1]
         C = jnp.zeros((obs_dim, n_factors), dtype=y.dtype)
         d = jnp.zeros(obs_dim, dtype=y.dtype)
         R = jnp.zeros((obs_dim, obs_dim), dtype=y.dtype)
-        return Params(C=C, d=d, R=R, M=lmask)
+        return Params(C=C, d=d, R=R)
 
     def fake_update_readout(cls, params, y, valid_y, m, V) -> tuple[Params, float]:
         return params, jnp.nan

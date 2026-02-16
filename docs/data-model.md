@@ -57,15 +57,16 @@ total state dimension is therefore `L = 2 * sum(kernel.nple)` over all
 
 ### Key matrix shapes
 
-| Matrix | Shape | Role |
-|--------|-------|------|
-| `y` | `(trials, T, N)` | observations |
-| `C` | `(N, K)` | loading matrix |
-| `M` | `(K, L)` | latent mask / selection matrix |
-| `H = C @ M` | `(N, L)` | effective observation matrix |
-| `Af`, `Qf`, etc. | `(L, L)` | SDE transition / process noise |
-| `z`, `Z` | `(trials, T, L)` / `(trials, T, L, L)` | information-form SDE state |
-| `m`, `V` | `(trials, T, K)` / `(trials, T, K, K)` | GP posterior mean / covariance |
+| Matrix | Shape | Space | Role |
+|--------|-------|-------|------|
+| `y` | `(trials, T, N)` | observation | observations |
+| `C` | `(N, K)` | latent | loading matrix |
+| `M` | `(K, L)` | bridge | latent mask / selection matrix (owned by CVHM) |
+| `Af`, `Qf`, etc. | `(L, L)` | state | SDE transition / process noise |
+| `j`, `J` (CVI) | `(trials, T, K)` / `(trials, T, K, K)` | latent | pseudo-observation info |
+| `j`, `J` (filter) | `(trials, T, L)` / `(trials, T, L, L)` | state | pseudo-observation info (after lift) |
+| `z`, `Z` | `(trials, T, L)` / `(trials, T, L, L)` | state | information-form SDE posterior |
+| `m`, `V` | `(trials, T, K)` / `(trials, T, K, K)` | latent | GP posterior mean / covariance |
 
 ## Latent Outputs
 
