@@ -9,9 +9,9 @@ from jax.sharding import PartitionSpec as P
 from jax.scipy.linalg import block_diag
 import chex
 
-from .cvi import CVI, Gaussian, Params
+from .cvi import CVI, Gaussian
 from .utils import real_repr, symm, cho_inv, training_progress, to_device
-from .filtering import bifilter
+from .filtering import bifilter, information_filter
 
 
 @dataclass
@@ -26,15 +26,15 @@ class CVHM:
         Time step used to discretize the latent SDE.
     kernels : Sequence[Any]
         Sequence of kernel objects providing SSM parameters.
-    params : Params | None, optional
-        Initial CVI parameter state. Defaults to `None`.
+    params : optional
+        Initial CVI parameter state. Defaults to ``None``.
     observation : str, default="Gaussian"
         Name of the CVI observation model registered in `CVI.registry`.
     lr : float, default=0.1
         Learning rate for pseudo-observation updates.
     max_iter : int, default=10
         Maximum number of outer EM iterations.
-    cvi_iter : int, default=3
+    cvi_iter : int, default=5
         Number of inner CVI smoothing iterations per EM step.
 
     Attributes
@@ -48,7 +48,7 @@ class CVHM:
     n_components: int
     dt: float
     kernels: Sequence[Any]
-    params: Params | None = None
+    params: Any = None
     observation: str = "Gaussian"
     lr: float = 0.1
     cvi: type[CVI] = field(init=False, default=Gaussian)
@@ -178,7 +178,6 @@ class CVHM:
             y,
             valid_y,
             self.n_components,
-            self.latent_mask(),
             random_state=random_state,
             params=self.params,
         )
@@ -214,46 +213,75 @@ class CVHM:
         sharding = NamedSharding(mesh, P("batch"))
         y, valid_y, z, Z, m, V = to_device((y, valid_y, z, Z, m, V), sharding)
 
-        # Initialize information update
-        j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
-            params, y, valid_y, Af, Qf
+        M = self.latent_mask()
+
+        # Initialize pseudo-observations in latent space
+        jl, Jl = vmap(
+            self.cvi.initialize_info, in_axes=(None, 0, 0)
+        )(params, y, valid_y)
+
+        smooth_batch = vmap(
+            lambda jk, Jk, zk0, Zk0: bifilter(jk, Jk, zk0, Zk0, Af, Pf, Ab, Pb)
+        )
+        fwd_batch = vmap(
+            lambda jk, Jk, zk0, Zk0: information_filter(
+                (zk0, Zk0), (jk, Jk), Af, Pf
+            )
         )
 
         def em_step(iter, carry):
-            params, _, _, j, J, *_ = carry
-            M = params.lmask()
+            params, _, _, jl, Jl, *_ = carry
 
-            (z, Z), (j, J) = self.cvi.infer(
-                params,
-                j,
-                J,
-                y,
-                valid_y,
-                z0,
-                Z0,
-                smooth_fun=bifilter,
-                smooth_args=(Af, Pf, Ab, Pb),
-                cvi_iter=self.cvi_iter,
-                lr=self.lr,
+            # Refresh pseudo-obs from current params.  For conjugate
+            # (Gaussian) readouts the pseudo-observations are a
+            # deterministic function of the readout parameters.  For
+            # non-conjugate (Poisson) readouts this provides a warm
+            # restart.
+            jl, Jl = vmap(
+                self.cvi.initialize_info, in_axes=(None, 0, 0)
+            )(params, y, valid_y)
+
+            # Forward-filter warm-up: lift the per-bin pseudo-obs to
+            # state space, run a forward information filter, project
+            # the *predicted* moments back to latent space, and refine
+            # the pseudo-obs.  This provides a sequentially coherent
+            # initialisation (owned by CVHM, not CVI) that replaces
+            # the forward-filter pass previously inside
+            # Poisson.initialize_info.  For conjugate readouts the
+            # update is idempotent.
+            j_w, J_w = lift(jl, Jl, M)
+            zp, Zp, _, _ = fwd_batch(j_w, J_w, z0, Z0)
+            m_w, V_w = project(zp, Zp, M)
+            jl, Jl = self.cvi.update_pseudo(
+                params, y, valid_y, m_w, V_w, jl, Jl, 1.0
             )
 
-            # to canonical form FutureWarning: jnp.linalg.solve: batched 1D solves with b.ndim > 1 are deprecated, and in the future will be treated as a batched 2D solve. Use solve(a, b[..., None])[..., 0] to avoid this warning.
-            m, V = sde2gp(z, Z, M)
+            # CVI iterations: CVI ↔ filtering via CVHM bridge
+            def cvi_step(i, carry_cvi):
+                jl, Jl = carry_cvi
+                # Lift latent → state
+                j, J = lift(jl, Jl, M)
+                # Filter in state space
+                z, Z = smooth_batch(j, J, z0, Z0)
+                # Project state → latent
+                m, V = project(z, Z, M)
+                # CVI update in latent space
+                jl, Jl = self.cvi.update_pseudo(
+                    params, y, valid_y, m, V, jl, Jl, self.lr
+                )
+                return jl, Jl
 
+            jl, Jl = jax.lax.fori_loop(0, self.cvi_iter, cvi_step, (jl, Jl))
+
+            # Final smooth after CVI converges
+            j, J = lift(jl, Jl, M)
+            z, Z = smooth_batch(j, J, z0, Z0)
+            m, V = project(z, Z, M)
+
+            # M-step: update observation model
             params, nell = self.cvi.update_readout(params, y, valid_y, m, V)
 
-            # Refresh information from updated params.  For conjugate
-            # (Gaussian) readouts the pseudo-observations are a
-            # deterministic function of the readout parameters, so they
-            # must be recomputed after each M-step.  For non-conjugate
-            # (Poisson) readouts the CVI iterations inside ``infer``
-            # already maintain pseudo-observations, so the refresh has
-            # no effect beyond a warm restart.
-            j, J = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0, None, None))(
-                params, y, valid_y, Af, Qf
-            )
-
-            return params, z, Z, j, J, m, V, nell
+            return params, z, Z, jl, Jl, m, V, nell
 
         with training_progress() as pbar:
             task_id = pbar.add_task("Training", total=self.max_iter, nell=jnp.nan)
@@ -273,13 +301,11 @@ class CVHM:
                 )
                 return carry
 
-            carry = (params, z, Z, j, J, m, V, jnp.nan)
+            carry = (params, z, Z, jl, Jl, m, V, jnp.nan)
 
-            # for em_it in range(self.max_iter):
-            # carry = step(em_it, carry)
             carry = jax.lax.fori_loop(0, self.max_iter, step, carry)
 
-        params, z, Z, j, J, m, V, _ = carry
+        params, z, Z, jl, Jl, m, V, _ = carry
         self.params = params
         self.latent = (z, Z)
         self.posterior = (m, V)
@@ -330,6 +356,55 @@ class CVHM:
         """
         self.fit(y, valid_y)
         return self.posterior[0]
+
+
+def lift(j_latent: Array, J_latent: Array, M: Array) -> tuple[Array, Array]:
+    """Lift latent-space information to state-space.
+
+    Parameters
+    ----------
+    j_latent : Array
+        Information vectors in latent space, shape ``(..., latent_dim (K))``.
+    J_latent : Array
+        Information matrices in latent space,
+        shape ``(..., latent_dim (K), latent_dim (K))``.
+    M : Array
+        Selection mask shaped ``(latent_dim (K), state_dim (L))``.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        Information vectors and matrices in state space with trailing
+        dimensions ``(state_dim (L),)`` and ``(state_dim (L), state_dim (L))``.
+    """
+    j = j_latent @ M
+    J = M.T @ J_latent @ M
+    return j, J
+
+
+def project(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:
+    """Project state-space information posterior to latent-space moments.
+
+    Converts information-form state ``(z, Z)`` to moment-form latent
+    ``(m, V)`` by selecting the components indicated by ``M``.
+
+    Parameters
+    ----------
+    z : Array
+        Information vectors shaped ``(trials, time, state_dim (L))``.
+    Z : Array
+        Information matrices shaped
+        ``(trials, time, state_dim (L), state_dim (L))``.
+    M : Array
+        Selection mask shaped ``(latent_dim (K), state_dim (L))``.
+
+    Returns
+    -------
+    tuple[Array, Array]
+        Posterior means ``(trials, time, latent_dim (K))`` and covariances
+        ``(trials, time, latent_dim (K), latent_dim (K))`` in latent space.
+    """
+    return sde2gp(z, Z, M)
 
 
 def sde2gp(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:

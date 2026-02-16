@@ -309,9 +309,6 @@ def main():
         C=jnp.asarray(C_true),
         d=jnp.asarray(d_true),
         R=None,
-        M=CVHM(
-            n_components=n_latents, dt=dt, kernels=kernels, observation="FrozenPoisson"
-        ).latent_mask(),
     )
     run_case(
         y,

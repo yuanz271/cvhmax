@@ -1,4 +1,4 @@
-from .cvhm import CVHM
+from .cvhm import CVHM, lift, project
 from .cvi import CVI, Gaussian, Poisson, Params
 from .hm import HidaMatern
 from .utils import pad_trials, unpad_trials
@@ -10,6 +10,8 @@ __all__ = [
     "Poisson",
     "Params",
     "HidaMatern",
+    "lift",
+    "project",
     "pad_trials",
     "unpad_trials",
 ]

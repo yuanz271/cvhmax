@@ -6,14 +6,41 @@ This page outlines the core algorithms used by cvhmax.
 > `K` (latent dimension, number of GP kernels), and `L` (state dimension,
 > SDE state = `2 * sum(nple)`).  See `data-model.md` for the full glossary.
 
+## Three-Way Separation
+
+CVI works in latent space `(K)`, filtering works in state space `(L)`,
+and CVHM bridges the two via the selection mask `M`.  See
+`architecture.md` for the full design rationale, data flow diagram, and
+conversion formulas.
+
 ## CVI-EM Loop
 
 The `CVHM.fit` method alternates between:
 
-1) CVI smoothing: update pseudo-observations and smooth latents
-2) Readout update: refit the observation model parameters
+1) CVI pseudo-observation refresh: `initialize_info` in latent space
+2) Forward-filter warm-up: lift → forward filter → project predictions → `update_pseudo`
+3) CVI iterations: lift → bifilter → project → `update_pseudo` (repeated)
+4) Readout update: `update_readout` in latent space
 
-The inner loop performs several CVI iterations before each outer EM update.
+```
+CVHM loop:
+    j, J = CVI.initialize_info(params, y, valid_y)              # latent (per-bin)
+    j_s, J_s = lift(j, J, M)                                    # latent → state
+    zp, Zp = forward_filter(j_s, J_s, ...)                      # state (predicted)
+    m_w, V_w = project(zp, Zp, M)                               # state → latent
+    j, J = CVI.update_pseudo(params, y, valid_y, m_w, V_w, ...) # warm-up
+    for each CVI iteration:
+        j_s, J_s = lift(j, J, M)                                # latent → state
+        z, Z = bifilter(j_s, J_s, ...)                          # state
+        m, V = project(z, Z, M)                                  # state → latent
+        j, J = CVI.update_pseudo(params, y, valid_y, m, V, ...) # latent
+    params = CVI.update_readout(params, y, valid_y, m, V)        # latent
+```
+
+The forward-filter warm-up provides sequentially coherent initial
+pseudo-observations — each bin's starting point incorporates causal
+information from all prior bins.  This is a state-space operation owned
+by CVHM, keeping CVI free of dynamics knowledge.
 
 ## Gaussian Parameterizations
 
