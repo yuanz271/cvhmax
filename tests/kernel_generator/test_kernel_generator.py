@@ -24,18 +24,19 @@ from cvhmax.utils import real_repr, conjtrans  # noqa: E402
 # ---------------------------------------------------------------------------
 # Reference code availability check
 # ---------------------------------------------------------------------------
-_REF_ROOT = Path(__file__).resolve().parent.parent / "hida_matern_gp_lvms"
+_REF_ROOT = Path(__file__).resolve().parents[2] / "hida_matern_gp_lvms"
 if _REF_ROOT.is_dir() and str(_REF_ROOT) not in sys.path:
     sys.path.insert(0, str(_REF_ROOT))
 
 
 def _torch_and_ref_available():
     try:
+        import importlib
         import torch  # noqa: F401
-        from hida_matern_kernel_generator.hm_kernel_generator import (  # noqa: F401
-            HidaMaternKernelGenerator as _,
-        )
 
+        importlib.import_module(
+            "hida_matern_kernel_generator.hm_ss_kernels.hida_M_1.hida_M_1_K_hat"
+        )
         return True
     except ImportError:
         return False
