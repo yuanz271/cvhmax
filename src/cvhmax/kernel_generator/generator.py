@@ -200,15 +200,13 @@ def _compute_partials(
     tuple[list[sym.Expr], list[sym.Expr]]
         Lists of derivative expressions and their limits at ``dx = 0``.
     """
-    derivs = [None] * n
-    limits = [None] * n
+    derivs: list[sym.Expr] = [sym.simplify(kernel)]
+    limits: list[sym.Expr] = [sym.simplify(kernel.limit(dx, 0, "+"))]
 
-    derivs[0] = sym.simplify(kernel)
-    limits[0] = sym.simplify(kernel.limit(dx, 0, "+"))
-
-    for p in range(1, n):
-        derivs[p] = sym.simplify(derivs[p - 1].diff(dx))
-        limits[p] = sym.simplify(derivs[p].limit(dx, 0, "+"))
+    for _ in range(1, n):
+        deriv = sym.simplify(derivs[-1].diff(dx))
+        derivs.append(deriv)
+        limits.append(sym.simplify(deriv.limit(dx, 0, "+")))
 
     return derivs, limits
 

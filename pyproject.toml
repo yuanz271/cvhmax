@@ -43,3 +43,7 @@ dev = [
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.ty.src]
+include = ["src/**"]
+exclude = ["hida_matern_gp_lvms/**"]

@@ -280,6 +280,8 @@ class Gaussian(CVI):
         C = params.loading()
         d = params.d
         R = params.R
+        if R is None:
+            raise ValueError("Gaussian readout requires a noise covariance R.")
 
         return trial_info_repr(y, valid_y, C, d, R)
 
