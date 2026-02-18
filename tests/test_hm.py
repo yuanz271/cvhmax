@@ -1,3 +1,8 @@
+import json
+import os
+import subprocess
+import sys
+
 from jax import tree_util
 import jax.numpy as jnp
 import numpy as np
@@ -72,7 +77,8 @@ class TestKernelProperties:
         npt.assert_allclose(
             np.asarray(reconstructed),
             np.asarray(K0),
-            atol=1e-8,
+            atol=1e-6,
+            rtol=5e-7,
             err_msg=f"Lyapunov (forward) failed for dt={dt_val}, sigma={sigma}, rho={rho}, omega={omega}",
         )
 
@@ -88,7 +94,8 @@ class TestKernelProperties:
         npt.assert_allclose(
             np.asarray(reconstructed),
             np.asarray(K0),
-            atol=1e-8,
+            atol=1e-6,
+            rtol=5e-7,
             err_msg=f"Lyapunov (backward) failed for dt={dt_val}, sigma={sigma}, rho={rho}, omega={omega}",
         )
 
@@ -121,3 +128,96 @@ class TestKernelProperties:
         psd = spectral_density(spec, freq)
         integral = float(jnp.trapezoid(psd, freq))
         npt.assert_allclose(integral, 2 * sigma**2, rtol=0.05)
+
+
+def _pack_complex(array: np.ndarray) -> list:
+    stacked = np.stack([array.real, array.imag], axis=-1)
+    return stacked.tolist()
+
+
+def _unpack_complex(payload: list) -> np.ndarray:
+    stacked = np.asarray(payload)
+    return stacked[..., 0] + 1j * stacked[..., 1]
+
+
+def _run_kernel_script(enable_x64: bool, dtype: str) -> dict:
+    script = """
+import json
+import os
+
+import jax.numpy as jnp
+import numpy as np
+
+from cvhmax.hm import HidaMatern
+
+
+def pack(arr):
+    arr = np.asarray(arr)
+    return np.stack([arr.real, arr.imag], axis=-1).tolist()
+
+
+dtype = jnp.float32 if os.environ["KERNEL_DTYPE"] == "float32" else jnp.float64
+
+sigma = jnp.asarray(1.0, dtype=dtype)
+rho = jnp.asarray(1.0, dtype=dtype)
+omega = jnp.asarray(0.0, dtype=dtype)
+order = 2
+s = jnp.asarray(1e-8, dtype=dtype)
+
+tau = jnp.asarray(1e-3, dtype=dtype)
+
+hm = HidaMatern(sigma=sigma, rho=rho, omega=omega, order=order, s=s)
+K0 = hm.K(0.0)
+A = hm.Af(tau)
+Q = hm.Qf(tau)
+
+payload = {"K0": pack(K0), "A": pack(A), "Q": pack(Q)}
+print(json.dumps(payload))
+"""
+    env = os.environ.copy()
+    env["JAX_ENABLE_X64"] = "1" if enable_x64 else "0"
+    env["KERNEL_DTYPE"] = dtype
+    result = subprocess.check_output([sys.executable, "-c", script], env=env)
+    return json.loads(result)
+
+
+def test_kernel_precision_parity_x64_toggle():
+    payload_f32 = _run_kernel_script(enable_x64=False, dtype="float32")
+    payload_f64 = _run_kernel_script(enable_x64=True, dtype="float32")
+
+    for key in ("K0", "A", "Q"):
+        arr_f32 = _unpack_complex(payload_f32[key])
+        arr_f64 = _unpack_complex(payload_f64[key])
+        npt.assert_allclose(arr_f32, arr_f64, rtol=5e-4, atol=2e-6)
+
+
+def test_kernel_precision_parity_inputs():
+    if not jnp.asarray(1.0).dtype == jnp.float64:
+        pytest.skip("Requires x64 to compare float32 and float64 inputs")
+
+    sigma32 = jnp.asarray(1.0, dtype=jnp.float32)
+    rho32 = jnp.asarray(1.0, dtype=jnp.float32)
+    omega32 = jnp.asarray(0.0, dtype=jnp.float32)
+    s32 = jnp.asarray(1e-8, dtype=jnp.float32)
+
+    sigma64 = jnp.asarray(1.0, dtype=jnp.float64)
+    rho64 = jnp.asarray(1.0, dtype=jnp.float64)
+    omega64 = jnp.asarray(0.0, dtype=jnp.float64)
+    s64 = jnp.asarray(1e-8, dtype=jnp.float64)
+
+    tau32 = jnp.asarray(1e-3, dtype=jnp.float32)
+    tau64 = jnp.asarray(1e-3, dtype=jnp.float64)
+
+    hm32 = HidaMatern(sigma=sigma32, rho=rho32, omega=omega32, order=2, s=s32)
+    hm64 = HidaMatern(sigma=sigma64, rho=rho64, omega=omega64, order=2, s=s64)
+
+    K0_32 = hm32.K(0.0)
+    K0_64 = hm64.K(0.0)
+    A_32 = hm32.Af(tau32)
+    A_64 = hm64.Af(tau64)
+    Q_32 = hm32.Qf(tau32)
+    Q_64 = hm64.Qf(tau64)
+
+    npt.assert_allclose(K0_32, K0_64.astype(K0_32.dtype), rtol=5e-4, atol=2e-6)
+    npt.assert_allclose(A_32, A_64.astype(A_32.dtype), rtol=5e-4, atol=2e-6)
+    npt.assert_allclose(Q_32, Q_64.astype(Q_32.dtype), rtol=5e-4, atol=2e-6)

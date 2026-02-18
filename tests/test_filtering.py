@@ -1,8 +1,12 @@
+import jax
 from jax import numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
 from cvhmax.filtering import predict, bifilter, information_filter
+
+X64_ENABLED = jax.config.read("jax_enable_x64")
+RTOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
 
 
 def test_predict_1d_ar1():
@@ -29,9 +33,9 @@ def test_predict_1d_ar1():
     m_pred = a * m_prev
     z_pred_expected = Z_pred_expected * m_pred
 
-    npt.assert_allclose(np.asarray(Zp).item(), Z_pred_expected, rtol=1e-10)
+    npt.assert_allclose(np.asarray(Zp).item(), Z_pred_expected, rtol=RTOL_TIGHT)
     npt.assert_allclose(
-        np.asarray(zp).item(), np.asarray(z_pred_expected).item(), rtol=1e-10
+        np.asarray(zp).item(), np.asarray(z_pred_expected).item(), rtol=RTOL_TIGHT
     )
 
 

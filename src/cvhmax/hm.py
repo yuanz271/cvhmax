@@ -16,9 +16,47 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from cvhmax.utils import gamma
+from cvhmax.utils import EPS, gamma
 
 from .utils import conjtrans
+
+
+def _kernel_compute_dtype() -> jnp.dtype:
+    """Return the dtype used for numerically sensitive kernel computations."""
+    return jnp.float64
+
+
+def _kernel_output_dtype(*values) -> jnp.dtype:
+    """Infer the desired output dtype from the input values."""
+    arrays = [jnp.asarray(v) for v in values if v is not None]
+    if not arrays:
+        return jnp.float32
+    return jnp.result_type(*arrays)
+
+
+def _kernel_complex_dtype(output_dtype: jnp.dtype) -> jnp.dtype:
+    """Map a real-valued output dtype to the matching complex dtype."""
+    return jnp.result_type(jnp.complex64, output_dtype)
+
+
+def _cast_kernel_inputs(dtype: jnp.dtype, *values):
+    """Cast kernel inputs to the desired compute dtype."""
+    return [jnp.asarray(v, dtype=dtype) for v in values]
+
+
+def _hermitian(x: jnp.ndarray) -> jnp.ndarray:
+    """Return the Hermitian-symmetrized version of a matrix."""
+    return 0.5 * (x + conjtrans(x))
+
+
+def _stabilize_covariance(
+    Q: jnp.ndarray, *, jitter: jnp.ndarray, output_dtype: jnp.dtype
+) -> jnp.ndarray:
+    """Hermitian-symmetrize and add jitter in float32/complex64 outputs."""
+    Q = _hermitian(Q)
+    if jnp.dtype(_kernel_complex_dtype(output_dtype)) == jnp.dtype(jnp.complex64):
+        Q = Q + jnp.eye(Q.shape[-1], dtype=Q.dtype) * jitter
+    return Q
 
 # TODO: see sympy2jax, equinox
 # NOTE: cos(x) = (exp(j * x) + exp(-j * x)) / 2 = Real[exp(j * x)]
@@ -176,25 +214,39 @@ class HidaMatern:
     def cov(self, tau=0.0):
         raise NotImplementedError
 
-    def K(self, tau=0.0):
+    def K(self, tau=0.0, *, compute_dtype: jnp.dtype | None = None, output_dtype: jnp.dtype | None = None):
         """Return the state-space covariance block at lag ``tau``.
 
         Parameters
         ----------
         tau : float, default=0.0
             Time lag at which the block is evaluated.
+        compute_dtype : jnp.dtype | None, default=None
+            Internal dtype used for numerically sensitive computations.
+        output_dtype : jnp.dtype | None, default=None
+            Output dtype returned to callers.
 
         Returns
         -------
         Array
             Complex state covariance for the requested lag.
         """
+        compute_dtype = compute_dtype or _kernel_compute_dtype()
+        output_dtype = output_dtype or _kernel_output_dtype(
+            tau, self.sigma, self.rho, self.omega, self.s
+        )
+        tau_c, sigma_c, rho_c, omega_c, s_c = _cast_kernel_inputs(
+            compute_dtype, tau, self.sigma, self.rho, self.omega, self.s
+        )
+
         # TODO: confusing with covariance matrix
         # somehow not decorable by cache or cached_property
         if self.order == 0:
-            K = Ks0(tau, self.sigma, self.rho, self.omega) + jnp.eye(self.nple) * self.s
+            K = Ks0(tau_c, sigma_c, rho_c, omega_c)
+            K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
         elif self.order == 1:
-            K = Ks1(tau, self.sigma, self.rho, self.omega) + jnp.eye(self.nple) * self.s
+            K = Ks1(tau_c, sigma_c, rho_c, omega_c)
+            K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
         else:
             try:
                 from .kernel_generator import make_kernel
@@ -206,17 +258,15 @@ class HidaMatern:
 
             # Generator order M = self.order + 1 (SSM state dimension)
             gen = make_kernel(self.nple)
-            K = (
-                gen.create_K_hat(
-                    jnp.asarray(tau, dtype=float),
-                    jnp.asarray(self.sigma, dtype=float),
-                    jnp.asarray(self.rho, dtype=float),
-                    jnp.asarray(self.omega, dtype=float),
-                )
-                + jnp.eye(self.nple) * self.s
+            K = gen.create_K_hat(
+                tau_c,
+                sigma_c,
+                rho_c,
+                omega_c,
             )
+            K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
 
-        return K
+        return K.astype(_kernel_complex_dtype(output_dtype))
 
     @property
     def nple(self) -> int:
@@ -235,10 +285,13 @@ class HidaMatern:
         Array
             Real-valued transition matrix.
         """
-        Kt = self.K(tau)
-        K0 = self.K()
+        compute_dtype = _kernel_compute_dtype()
+        output_dtype = _kernel_output_dtype(tau, self.sigma, self.rho, self.omega, self.s)
+
+        Kt = self.K(tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+        K0 = self.K(0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
         A = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))  # K(t)K(0)^-1
-        return A
+        return A.astype(_kernel_complex_dtype(output_dtype))
 
     def Qf(self, tau):
         """Forward dynamics state noise covariance.
@@ -253,10 +306,17 @@ class HidaMatern:
         Array
             Real-valued process noise covariance.
         """
-        Kt = self.K(tau)
-        K0 = self.K()
+        compute_dtype = _kernel_compute_dtype()
+        output_dtype = _kernel_output_dtype(tau, self.sigma, self.rho, self.omega, self.s)
+
+        Kt = self.K(tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+        K0 = self.K(0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
         Q = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))  # K(0) - K(t) K(0)^-1 K(t)'
-        return Q
+        jitter = jnp.maximum(
+            jnp.asarray(self.s, dtype=Q.dtype), jnp.asarray(EPS, dtype=Q.dtype)
+        )
+        Q = _stabilize_covariance(Q, jitter=jitter, output_dtype=output_dtype)
+        return Q.astype(_kernel_complex_dtype(output_dtype))
 
     def Ab(self, tau):
         """Backward dynamics transition.
@@ -271,10 +331,13 @@ class HidaMatern:
         Array
             Real-valued transition matrix for the reverse-time model.
         """
-        Kt = self.K(tau)
-        K0 = self.K()
+        compute_dtype = _kernel_compute_dtype()
+        output_dtype = _kernel_output_dtype(tau, self.sigma, self.rho, self.omega, self.s)
+
+        Kt = self.K(tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+        K0 = self.K(0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
         A = conjtrans(jnp.linalg.solve(conjtrans(K0), Kt))  # K(t)'K(0)^-1
-        return A
+        return A.astype(_kernel_complex_dtype(output_dtype))
 
     def Qb(self, tau):
         """Backward dynamics state noise covariance.
@@ -289,10 +352,17 @@ class HidaMatern:
         Array
             Real-valued process noise covariance for the reverse-time model.
         """
-        Kt = self.K(tau)
-        K0 = self.K()
+        compute_dtype = _kernel_compute_dtype()
+        output_dtype = _kernel_output_dtype(tau, self.sigma, self.rho, self.omega, self.s)
+
+        Kt = self.K(tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+        K0 = self.K(0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
         Q = K0 - conjtrans(Kt) @ jnp.linalg.solve(K0, Kt)  # K(0) - K(t)' K(0)^-1 K(t)
-        return Q
+        jitter = jnp.maximum(
+            jnp.asarray(self.s, dtype=Q.dtype), jnp.asarray(EPS, dtype=Q.dtype)
+        )
+        Q = _stabilize_covariance(Q, jitter=jitter, output_dtype=output_dtype)
+        return Q.astype(_kernel_complex_dtype(output_dtype))
 
     def spectral(self):
         raise NotImplementedError
@@ -318,7 +388,7 @@ class HidaMatern:
 # paramdef, paramflat = tree_util.tree_flatten(params)
 
 
-def Ks(kernelparam, tau):
+def Ks(kernelparam, tau, *, compute_dtype: jnp.dtype | None = None, output_dtype: jnp.dtype | None = None):
     """Look up the complex-valued HM state covariance block.
 
     Parameters
@@ -327,6 +397,10 @@ def Ks(kernelparam, tau):
         Kernel hyperparameters containing `sigma`, `rho`, `omega`, and `order`.
     tau : float
         Time lag at which the block is evaluated.
+    compute_dtype : jnp.dtype | None, default=None
+        Internal dtype used for numerically sensitive computations.
+    output_dtype : jnp.dtype | None, default=None
+        Output dtype returned to callers.
 
     Returns
     -------
@@ -334,10 +408,16 @@ def Ks(kernelparam, tau):
         Complex state covariance block.
     """
     sigma, rho, omega, order = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
+    compute_dtype = compute_dtype or _kernel_compute_dtype()
+    output_dtype = output_dtype or _kernel_output_dtype(tau, sigma, rho, omega)
+    tau_c, sigma_c, rho_c, omega_c = _cast_kernel_inputs(
+        compute_dtype, tau, sigma, rho, omega
+    )
+
     if order == 0:
-        return Ks0(tau, sigma, rho, omega)
+        K = Ks0(tau_c, sigma_c, rho_c, omega_c)
     elif order == 1:
-        return Ks1(tau, sigma, rho, omega)
+        K = Ks1(tau_c, sigma_c, rho_c, omega_c)
     else:
         try:
             from .kernel_generator import make_kernel
@@ -349,12 +429,14 @@ def Ks(kernelparam, tau):
 
         # Generator order M = order + 1 (SSM state dimension)
         gen = make_kernel(order + 1)
-        return gen.create_K_hat(
-            jnp.asarray(tau, dtype=float),
-            jnp.asarray(sigma, dtype=float),
-            jnp.asarray(rho, dtype=float),
-            jnp.asarray(omega, dtype=float),
+        K = gen.create_K_hat(
+            tau_c,
+            sigma_c,
+            rho_c,
+            omega_c,
         )
+
+    return K.astype(_kernel_complex_dtype(output_dtype))
 
 
 def Af(kernelparam, tau):
@@ -372,10 +454,14 @@ def Af(kernelparam, tau):
     Array
         Real-valued transition matrix.
     """
-    Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.0)
+    sigma, rho, omega, _ = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
+    compute_dtype = _kernel_compute_dtype()
+    output_dtype = _kernel_output_dtype(tau, sigma, rho, omega)
+
+    Kt = Ks(kernelparam, tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+    K0 = Ks(kernelparam, 0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
     A = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))  # K(t)K(0)^-1
-    return A
+    return A.astype(_kernel_complex_dtype(output_dtype))
 
 
 def Qf(kernelparam, tau):
@@ -393,10 +479,16 @@ def Qf(kernelparam, tau):
     Array
         Real-valued process noise covariance.
     """
-    Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.0)
+    sigma, rho, omega, _ = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
+    compute_dtype = _kernel_compute_dtype()
+    output_dtype = _kernel_output_dtype(tau, sigma, rho, omega)
+
+    Kt = Ks(kernelparam, tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+    K0 = Ks(kernelparam, 0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
     Q = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))  # K(0) - K(t) K(0)^-1 K(t)'
-    return Q
+    jitter = jnp.asarray(EPS, dtype=Q.dtype)
+    Q = _stabilize_covariance(Q, jitter=jitter, output_dtype=output_dtype)
+    return Q.astype(_kernel_complex_dtype(output_dtype))
 
 
 def Ab(kernelparam, tau):
@@ -414,20 +506,30 @@ def Ab(kernelparam, tau):
     Array
         Real-valued transition matrix for the reverse-time model.
     """
-    Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.0)
+    sigma, rho, omega, _ = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
+    compute_dtype = _kernel_compute_dtype()
+    output_dtype = _kernel_output_dtype(tau, sigma, rho, omega)
+
+    Kt = Ks(kernelparam, tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+    K0 = Ks(kernelparam, 0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
     A = conjtrans(jnp.linalg.solve(conjtrans(K0), Kt))  # K(t)'K(0)^-1
-    return A
+    return A.astype(_kernel_complex_dtype(output_dtype))
 
 
 def Qb(kernelparam, tau):
     """
     Backward dynamics state noise covariance
     """
-    Kt = Ks(kernelparam, tau)
-    K0 = Ks(kernelparam, 0.0)
+    sigma, rho, omega, _ = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
+    compute_dtype = _kernel_compute_dtype()
+    output_dtype = _kernel_output_dtype(tau, sigma, rho, omega)
+
+    Kt = Ks(kernelparam, tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
+    K0 = Ks(kernelparam, 0.0, compute_dtype=compute_dtype, output_dtype=compute_dtype)
     Q = K0 - conjtrans(Kt) @ jnp.linalg.solve(K0, Kt)  # K(0) - K(t)' K(0)^-1 K(t)
-    return Q
+    jitter = jnp.asarray(EPS, dtype=Q.dtype)
+    Q = _stabilize_covariance(Q, jitter=jitter, output_dtype=output_dtype)
+    return Q.astype(_kernel_complex_dtype(output_dtype))
 
 
 def ssm_repr(kernelparams, tau):

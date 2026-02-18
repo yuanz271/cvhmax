@@ -4,7 +4,7 @@ These tests reproduce the three demo scenarios from ``examples/demo_vdp.py``
 and assert that R² stays above a hard floor.  They are marked ``slow``
 (~40 s each) and skipped by default — run with::
 
-    JAX_ENABLE_X64=1 pytest tests/test_benchmark.py --run-slow
+    pytest tests/test_benchmark.py --run-slow
 
 Baseline R² (recorded on the ``refactor/latent-space-cvi`` branch):
 

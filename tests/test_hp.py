@@ -1,22 +1,27 @@
 import numpy as np
 import numpy.testing as npt
-from jax import config
+import jax
 from jax import numpy as jnp
 
 from cvhmax import hm, hp
 from cvhmax.hm import sample_matern
 from cvhmax.hp import bound, unbound
 
-config.update("jax_enable_x64", True)
+X64_ENABLED = jax.config.read("jax_enable_x64")
+RTOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
 
 
 def test_bound_unbound_roundtrip():
     """softplus(inv_softplus(x)) should recover x for positive values."""
-    for x in [0.01, 0.1, 1.0, 10.0, 100.0]:
+    values = [0.01, 0.1, 1.0, 10.0, 100.0]
+    if not X64_ENABLED:
+        values = [0.01, 0.1, 1.0, 10.0]
+    for x in values:
         x_jnp = jnp.array(x)
         recovered = bound(unbound(x_jnp))
         npt.assert_allclose(
-            float(recovered), x, rtol=1e-10, err_msg=f"Roundtrip failed for x={x}"
+            float(recovered), x, rtol=RTOL_TIGHT, err_msg=f"Roundtrip failed for x={x}"
         )
 
     # Also test the reverse direction
@@ -26,7 +31,7 @@ def test_bound_unbound_roundtrip():
         npt.assert_allclose(
             float(recovered),
             u,
-            atol=1e-10,
+            atol=ATOL_TIGHT,
             err_msg=f"Reverse roundtrip failed for u={u}",
         )
 

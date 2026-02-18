@@ -334,6 +334,21 @@ error (1e-9 at M=5, 1e-7 at M=8). This is inherent to the matrix
 algebra, not the symbolic generation. For most practical applications,
 orders up to 5 or 6 are sufficient.
 
+**Mixed precision (GPU).** The kernel blocks `K(0)`, `A`, and `Q` are
+computed in float64 and then cast back to the caller’s dtype so the rest
+of the pipeline can remain float32. To actually get float64 kernels,
+users must enable `jax_enable_x64`; otherwise JAX will downcast to
+float32. If float64 is disabled, increase the kernel jitter
+(`HidaMatern.s`) to avoid PSD loss in `Q = K(0) - K(t) K(0)^{-1} K(t)^H`.
+
+**Test tolerances.** Float32 vs float64 parity tests accept relative
+error up to `5e-4` and absolute error up to `2e-6` for `K(0)`, `A`, and
+`Q`. Lyapunov consistency checks use `rtol=5e-7`, `atol=1e-6` to account
+for expected float32 roundoff. Kernel-generator and cross-implementation
+parity tests use relaxed tolerances when `jax_enable_x64` is disabled,
+and high-order generator checks fall back to lower orders to avoid
+int32 overflow in symbolic constants.
+
 ## Module layout
 
 ```

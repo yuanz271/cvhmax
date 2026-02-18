@@ -1,13 +1,15 @@
 import numpy as np
 import pytest
 import jax
-from jax import numpy as jnp, config
+from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM, lift, project, sde2gp
 from cvhmax.hm import HidaMatern
 from cvhmax.hm import sample_matern
 
-config.update("jax_enable_x64", True)
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+ATOL_MED = 1e-12 if X64_ENABLED else 1e-6
 
 
 @pytest.mark.parametrize(
@@ -106,10 +108,10 @@ def test_project_roundtrip():
     m_rec, V_rec = project(z, Z, M)
 
     # m_rec = solve(Z, z) @ M.T = m_state @ M.T = m_true
-    np.testing.assert_allclose(m_rec[0, 0], m_true[0], atol=1e-10)
+    np.testing.assert_allclose(m_rec[0, 0], m_true[0], atol=ATOL_TIGHT)
     # V_rec = M @ inv(Z) @ M.T
     V_exp = M @ jnp.linalg.inv(Z_state) @ M.T
-    np.testing.assert_allclose(V_rec[0, 0], V_exp, atol=1e-10)
+    np.testing.assert_allclose(V_rec[0, 0], V_exp, atol=ATOL_TIGHT)
 
 
 def test_project_matches_sde2gp():
@@ -125,8 +127,8 @@ def test_project_matches_sde2gp():
     m1, V1 = project(z, Z, M)
     m2, V2 = sde2gp(z, Z, M)
 
-    np.testing.assert_allclose(np.asarray(m1), np.asarray(m2), atol=1e-12)
-    np.testing.assert_allclose(np.asarray(V1), np.asarray(V2), atol=1e-12)
+    np.testing.assert_allclose(np.asarray(m1), np.asarray(m2), atol=ATOL_MED)
+    np.testing.assert_allclose(np.asarray(V1), np.asarray(V2), atol=ATOL_MED)
 
 
 def test_CVHM(capsys):

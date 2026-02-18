@@ -1,10 +1,15 @@
 import numpy as np
+import jax
 from jax import random as jrnd
 import jax.numpy as jnp
 import chex
 import numpy.testing as npt
 
 from cvhmax import utils
+
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_TINY = 1e-14 if X64_ENABLED else 1e-6
+ATOL_MED = 1e-10 if X64_ENABLED else 1e-6
 from cvhmax.utils import (
     real_repr,
     symm,
@@ -47,17 +52,17 @@ def test_real_repr_structure(rng):
     C = jnp.array([[a + b * 1j]])
     R = real_repr(C)
     expected = jnp.array([[a, -b], [b, a]])
-    npt.assert_allclose(np.asarray(R), np.asarray(expected), atol=1e-14)
+    npt.assert_allclose(np.asarray(R), np.asarray(expected), atol=ATOL_TINY)
 
     # 2x2 case
     vals = rng.standard_normal((2, 2)) + 1j * rng.standard_normal((2, 2))
     C2 = jnp.array(vals)
     R2 = real_repr(C2)
     assert R2.shape == (4, 4)
-    npt.assert_allclose(np.asarray(R2[:2, :2]), np.asarray(C2.real), atol=1e-14)
-    npt.assert_allclose(np.asarray(R2[:2, 2:]), -np.asarray(C2.imag), atol=1e-14)
-    npt.assert_allclose(np.asarray(R2[2:, :2]), np.asarray(C2.imag), atol=1e-14)
-    npt.assert_allclose(np.asarray(R2[2:, 2:]), np.asarray(C2.real), atol=1e-14)
+    npt.assert_allclose(np.asarray(R2[:2, :2]), np.asarray(C2.real), atol=ATOL_TINY)
+    npt.assert_allclose(np.asarray(R2[:2, 2:]), -np.asarray(C2.imag), atol=ATOL_TINY)
+    npt.assert_allclose(np.asarray(R2[2:, :2]), np.asarray(C2.imag), atol=ATOL_TINY)
+    npt.assert_allclose(np.asarray(R2[2:, 2:]), np.asarray(C2.real), atol=ATOL_TINY)
 
 
 def test_real_repr_preserves_eigenvalues(rng):
@@ -69,7 +74,7 @@ def test_real_repr_preserves_eigenvalues(rng):
 
     # real_repr doubles dimension; eigenvalues appear as conjugate pairs
     expected = np.sort_complex(np.concatenate([eigs_c, eigs_c.conj()]))
-    npt.assert_allclose(eigs_r, expected, atol=1e-10)
+    npt.assert_allclose(eigs_r, expected, atol=ATOL_MED)
 
 
 def test_symm_produces_symmetric(rng):
@@ -83,7 +88,7 @@ def test_conjtrans_involution(rng):
     """conjtrans is an involution: applying it twice returns the original."""
     vals = rng.standard_normal((3, 4)) + 1j * rng.standard_normal((3, 4))
     X = jnp.array(vals)
-    npt.assert_allclose(np.asarray(conjtrans(conjtrans(X))), np.asarray(X), atol=1e-14)
+    npt.assert_allclose(np.asarray(conjtrans(conjtrans(X))), np.asarray(X), atol=ATOL_TINY)
 
 
 def test_norm_loading_unit_rows(rng):
@@ -112,8 +117,8 @@ def test_trial_info_repr_analytic(rng):
     J_exp = C.T @ Rinv @ C  # (L, L)
     J_exp_tiled = jnp.tile(J_exp, (T, 1, 1))
 
-    npt.assert_allclose(np.asarray(j), np.asarray(j_exp), atol=1e-10)
-    npt.assert_allclose(np.asarray(J), np.asarray(J_exp_tiled), atol=1e-10)
+    npt.assert_allclose(np.asarray(j), np.asarray(j_exp), atol=ATOL_MED)
+    npt.assert_allclose(np.asarray(J), np.asarray(J_exp_tiled), atol=ATOL_MED)
 
 
 def test_bin_info_repr_mask(rng):
@@ -158,8 +163,8 @@ def test_trial_info_repr_mask(rng):
     J_exp = C.T @ Rinv @ C
     for t in [1, 2, 4, 5, 6, 8, 9]:
         j_exp_t = C.T @ Rinv @ (y[t] - d)
-        npt.assert_allclose(np.asarray(j[t]), np.asarray(j_exp_t), atol=1e-10)
-        npt.assert_allclose(np.asarray(J[t]), np.asarray(J_exp), atol=1e-10)
+        npt.assert_allclose(np.asarray(j[t]), np.asarray(j_exp_t), atol=ATOL_MED)
+        npt.assert_allclose(np.asarray(J[t]), np.asarray(J_exp), atol=ATOL_MED)
 
 
 # ---------------------------------------------------------------------------

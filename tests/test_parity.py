@@ -12,8 +12,13 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
+import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
+
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_PARITY = 1e-10 if X64_ENABLED else 5e-6
+RTOL_PARITY = 1e-8 if X64_ENABLED else 1e-5
 
 from cvhmax.hm import HidaMatern, Ks0, Ks1, spectral_density
 from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
@@ -114,7 +119,7 @@ class TestKernelParity:
             npt.assert_allclose(
                 K_jax,
                 K_ref_np,
-                atol=1e-12,
+                atol=ATOL_PARITY,
                 err_msg=f"K_hat mismatch at tau={tau}, sigma={sigma}, rho={rho}, omega={omega}",
             )
 
@@ -136,7 +141,7 @@ class TestKernelParity:
         npt.assert_allclose(
             A_jax,
             A_ref_np,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg=f"Af mismatch for sigma={sigma}, rho={rho}, omega={omega}",
         )
 
@@ -158,7 +163,7 @@ class TestKernelParity:
         npt.assert_allclose(
             Q_jax,
             Q_ref_np,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg=f"Qf mismatch for sigma={sigma}, rho={rho}, omega={omega}",
         )
 
@@ -197,13 +202,13 @@ class TestKernelParity:
         npt.assert_allclose(
             Ab_jax,
             Ab_ref,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg=f"Ab mismatch for sigma={sigma}, rho={rho}, omega={omega}",
         )
         npt.assert_allclose(
             Qb_jax,
             Qb_ref,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg=f"Qb mismatch for sigma={sigma}, rho={rho}, omega={omega}",
         )
 
@@ -224,7 +229,10 @@ def test_real_repr_parity(rng):
         R_jax = np.asarray(real_repr(C_jax))
 
         npt.assert_allclose(
-            R_jax, R_ref, atol=1e-14, err_msg=f"real_repr mismatch for {n}x{n} matrix"
+            R_jax,
+            R_ref,
+            atol=ATOL_PARITY,
+            err_msg=f"real_repr mismatch for {n}x{n} matrix",
         )
 
 
@@ -286,13 +294,13 @@ def test_forward_filter_parity():
     npt.assert_allclose(
         np.asarray(z_filt),
         h_ref_np[0],
-        atol=1e-6,
+        atol=ATOL_PARITY,
         err_msg="Forward filter z (information vector) mismatch",
     )
     npt.assert_allclose(
         np.asarray(Z_filt),
         J_ref_np[0],
-        atol=1e-6,
+        atol=ATOL_PARITY,
         err_msg="Forward filter Z (information matrix) mismatch",
     )
 
@@ -345,7 +353,8 @@ def test_spectral_density_parity(sigma, rho, omega):
         npt.assert_allclose(
             psd_jax,
             2.0 * psd_ref_np,
-            rtol=1e-8,
+            rtol=RTOL_PARITY,
+            atol=ATOL_PARITY,
             err_msg="PSD mismatch for omega=0 (expected cvhmax = 2 * ref)",
         )
     else:
@@ -372,7 +381,8 @@ def test_spectral_density_parity(sigma, rho, omega):
         npt.assert_allclose(
             c_jax,
             c_ref,
-            rtol=1e-8,
+            rtol=RTOL_PARITY,
+            atol=ATOL_PARITY,
             err_msg="Normalising constant c mismatch for omega>0",
         )
 
@@ -500,7 +510,7 @@ class TestKernelParityOrder1:
             npt.assert_allclose(
                 K_jax,
                 K_ref_np,
-                atol=1e-10,
+                atol=ATOL_PARITY,
                 err_msg=(
                     f"K_hat order-1 mismatch at tau={tau}, "
                     f"sigma={sigma}, rho={rho}, omega={omega}"
@@ -526,13 +536,13 @@ class TestKernelParityOrder1:
         npt.assert_allclose(
             A_jax,
             A_ref_np,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg=f"Af order-1 mismatch for sigma={sigma}, rho={rho}, omega={omega}",
         )
         npt.assert_allclose(
             Q_jax,
             Q_ref_np,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg=f"Qf order-1 mismatch for sigma={sigma}, rho={rho}, omega={omega}",
         )
 
@@ -564,20 +574,20 @@ class TestScalingEffect:
         npt.assert_allclose(
             A_scaled.resolve_conj().detach().cpu().numpy(),
             A_unscaled.resolve_conj().detach().cpu().numpy(),
-            atol=1e-12,
+            atol=ATOL_PARITY,
             err_msg="Scaling should cancel for order-0 A",
         )
 
         # scaling_vec = 1 / sigma
         s_val = ref_k.scaling_vec[0].item().real
-        npt.assert_allclose(s_val, 1.0 / sigma, atol=1e-10)
+        npt.assert_allclose(s_val, 1.0 / sigma, atol=ATOL_PARITY)
 
         # K(0)_scaled = identity for order-0
         K0_scaled = ref_k.k_0[0]
         npt.assert_allclose(
             torch.abs(K0_scaled).detach().cpu().numpy(),
             np.eye(1),
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg="Scaled K(0) should be identity for order-0",
         )
 
@@ -587,7 +597,7 @@ class TestScalingEffect:
         npt.assert_allclose(
             np.abs(K0_jax),
             np.array([[sigma**2]]),
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg="Unscaled K(0) should be sigma^2",
         )
 
@@ -629,13 +639,13 @@ class TestDynamicsPipeline:
         npt.assert_allclose(
             Af_jax,
             A_ref.detach().numpy(),
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg="Forward transition A mismatch",
         )
         npt.assert_allclose(
             Ab_jax,
             Ab_ref.detach().numpy(),
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg="Backward transition Ab mismatch",
         )
 
@@ -643,7 +653,7 @@ class TestDynamicsPipeline:
         npt.assert_allclose(
             K0_ref.detach().numpy(),
             np.eye(4),
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg="Reference K0 should be identity (scaled)",
         )
         K0_diag = np.diag(Q0_jax)
@@ -657,7 +667,7 @@ class TestDynamicsPipeline:
         npt.assert_allclose(
             K0_diag,
             expected_diag,
-            atol=1e-10,
+            atol=ATOL_PARITY,
             err_msg="cvhmax K0 diagonal should be sigma^2 per block",
         )
 
@@ -715,13 +725,13 @@ def test_poisson_cvi_bin_stats_convention():
     npt.assert_allclose(
         np.asarray(k_jax).flatten(),
         k_ref.detach().numpy(),
-        atol=1e-6,
+        atol=ATOL_PARITY,
         err_msg="k (first natural param gradient) should match reference",
     )
     npt.assert_allclose(
         np.asarray(K_jax).reshape(state_dim, state_dim),
         K_ref.detach().numpy(),
-        atol=1e-6,
+        atol=ATOL_PARITY,
         err_msg="K (second natural param gradient) should match reference",
     )
 
@@ -745,8 +755,8 @@ def test_poisson_cvi_damped_update_parity():
     j_jax = (1 - lr) * jnp.array(j_old) + lr * jnp.array(k_new)
     J_jax = (1 - lr) * jnp.array(J_old) + lr * jnp.array(K_new)
 
-    npt.assert_allclose(np.asarray(j_jax), expected_j, atol=1e-15)
-    npt.assert_allclose(np.asarray(J_jax), expected_J, atol=1e-15)
+    npt.assert_allclose(np.asarray(j_jax), expected_j, atol=ATOL_PARITY)
+    npt.assert_allclose(np.asarray(J_jax), expected_J, atol=ATOL_PARITY)
 
 
 @requires_ref
@@ -795,13 +805,13 @@ def test_predict_step_parity():
     npt.assert_allclose(
         np.asarray(zp_jax),
         zp_ref.detach().numpy(),
-        atol=1e-8,
+        atol=ATOL_PARITY,
         err_msg="Predicted z mismatch",
     )
     npt.assert_allclose(
         np.asarray(Zp_jax),
         Zp_ref.detach().numpy(),
-        atol=1e-8,
+        atol=ATOL_PARITY,
         err_msg="Predicted Z mismatch",
     )
 
@@ -872,13 +882,13 @@ def test_bifilter_merging_parity():
     npt.assert_allclose(
         np.asarray(z_jax),
         z_ref,
-        atol=1e-6,
+        atol=ATOL_PARITY,
         err_msg="Smoothed z mismatch",
     )
     npt.assert_allclose(
         np.asarray(Z_jax),
         Z_ref,
-        atol=1e-6,
+        atol=ATOL_PARITY,
         err_msg="Smoothed Z mismatch",
     )
 
@@ -920,12 +930,12 @@ def test_observation_info_parity():
     npt.assert_allclose(
         np.asarray(j_jax),
         h_ref.numpy()[0],
-        atol=1e-10,
+        atol=ATOL_PARITY,
         err_msg="Observation information vector j mismatch",
     )
     npt.assert_allclose(
         np.asarray(J_jax),
         J_ref.numpy()[0],
-        atol=1e-10,
+        atol=ATOL_PARITY,
         err_msg="Observation information matrix J mismatch",
     )

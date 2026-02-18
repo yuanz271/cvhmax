@@ -6,12 +6,16 @@ Requires torch and the reference code under hida_matern_gp_lvms/.
 import sys
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 import pytest
 
 from cvhmax.kernel_generator import make_kernel
+
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_PARITY = 1e-8 if X64_ENABLED else 1e-5
 
 
 _REF_ROOT = Path(__file__).resolve().parents[2] / "hida_matern_gp_lvms"
@@ -76,4 +80,4 @@ class TestParityPyTorchReference:
         )
         K_jax = np.asarray(K_jax)
 
-        npt.assert_allclose(K_jax, K_ref, atol=1e-8)
+        npt.assert_allclose(K_jax, K_ref, atol=ATOL_PARITY)

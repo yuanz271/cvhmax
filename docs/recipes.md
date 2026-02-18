@@ -33,7 +33,7 @@ See `data-model.md` for the full workflow and API details.
 
 - Reduce `max_iter` and `cvi_iter` to test workflows quickly.
 - Start with fewer latent components (`K`) or shorter sequences.
-- Ensure `JAX_ENABLE_X64=1` is set.
+- Enable 64-bit precision in JAX if you need maximum numerical stability.
 
 ## Performance Tips
 

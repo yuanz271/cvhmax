@@ -7,7 +7,9 @@
 
 ## Numerical Instability
 
-- Enable 64-bit precision: `export JAX_ENABLE_X64=1`.
+- Enable 64-bit precision in JAX for maximum stability (kernel blocks are
+  computed in float64 and then cast back).
+- If float64 is disabled, increase kernel jitter via `HidaMatern(s=...)`.
 - Start with smaller `max_iter`/`cvi_iter` and gradually increase.
 
 ## JAX Warnings
