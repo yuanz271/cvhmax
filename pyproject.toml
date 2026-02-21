@@ -1,6 +1,6 @@
 [project]
 name = "cvhmax"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Add your description here"
 authors = [
     { name = "yuanz", email = "yuanz271@gmail.com" }
@@ -26,7 +26,7 @@ kergen = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [tool.ruff.lint]
@@ -40,6 +40,12 @@ dev = [
     "torch>=2.1.0",
     "einops>=0.8.2",
 ]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/cvhmax/_version.py"
 
 [tool.hatch.metadata]
 allow-direct-references = true

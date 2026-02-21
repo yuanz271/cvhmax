@@ -1,3 +1,4 @@
+from ._version import __version__, __version_tuple__  # noqa: F401
 from .cvhm import CVHM, lift, project
 from .cvi import CVI, Gaussian, Poisson, Params
 from .hm import HidaMatern
