@@ -5,3 +5,5 @@ outputs
 *.npz
 hida_matern_gp_lvms/
 uv.lock
+# hatch-vcs generated
+src/cvhmax/_version.py
