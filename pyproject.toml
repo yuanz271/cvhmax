@@ -6,7 +6,6 @@ authors = [
     { name = "yuanz", email = "yuanz271@gmail.com" }
 ]
 dependencies = [
-    "jax==0.4.38;platform_machine == 'x86_64'",
     "jax>=0.4.38",
     "jaxlib>=0.4.13",
     "numpy>=1.24.4",
