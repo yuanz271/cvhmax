@@ -20,28 +20,7 @@ This file is for coding agents working in this repo. Keep changes small, follow 
 - Open a PR to merge feature branches back to `main`.
 - No long-lived `develop` branch; delete feature branches after merge.
 
-## Overview
 
-Variational latent-state inference with Hida-Matern kernels in JAX. Uses information-form Kalman filtering + CVI-EM to smooth latent trajectories from Gaussian/Poisson observations.
-
-## Repository Layout
-
-```
-cvhmax/
-|-- src/cvhmax/
-|   |-- __init__.py            # Public exports
-|   |-- cvhm.py                # CVHM wrapper + EM loop
-|   |-- cvi.py                 # CVI base + Gaussian/Poisson readouts
-|   |-- filtering.py           # Information-form forward/backward filtering (bifilter)
-|   |-- hm.py                  # HidaMatern kernel (SSM blocks)
-|   |-- hp.py                  # Whittle spectral hyperparameter fitting
-|   |-- utils.py               # Linear algebra + opt + progress utilities
-|   `-- kernel_generator/      # Arbitrary-order kernels via SymPy + sympy2jax
-|-- tests/                     # Mirrors src/ modules (test_<module>.py)
-|-- docs/                      # Local Markdown documentation
-|-- examples/                  # Demo scripts (e.g., demo_vdp.py)
-`-- AGENTS.md                  # This file
-```
 
 ## Build / Lint / Test Commands
 
@@ -190,9 +169,3 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 - Masking: use `jnp.where` with broadcastable masks; keep masks as integer/bool arrays.
 - Be careful with dtype: tests assume 64-bit; avoid accidental `float32` constants (`1.0` is ok with x64 enabled).
 - Prefer `vmap` over Python loops for per-trial/per-time computations; use `lax.scan` for recurrences.
-
-## Notes / Gotchas
-
-- The test suite uses `chex` for shape assertions.
-- `CVI` subclasses are looked up by class name via `CVI.registry`; keep names stable.
-- Public exports live in `src/cvhmax/__init__.py`; update `__all__` when adding user-facing APIs.
