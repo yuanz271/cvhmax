@@ -17,7 +17,9 @@ state shape must remain static under JAX transformations, use `make_Ks(order)`
 to close over the integer order.
 
 Orders 0, 1, and 2 currently use built-in closed-form implementations.
-The kernel generator removes the remaining order limitation.
+The kernel generator supports higher orders when the `kergen` extra is
+installed. The supported numerical path is x64 with CVHM correlation scaling;
+very high-order symbolic construction can overflow in x32.
 
 ## Background
 
@@ -188,13 +190,14 @@ model.fit(y, valid_y=valid_y, random_state=0)
 | >= 3 | `kernel_generator.make_kernel(order + 1)` | (order+1) x (order+1) |
 
 `Ks(kernelparam, tau)` is the single raw functional entry point. The class
-method `HidaMatern.K(tau)` delegates to it and may add the object's diagonal
-jitter. Functional dynamics accept explicit `jitter=` and class dynamics pass
-`HidaMatern.s`; this stabilization is needed because process-noise subtraction
-and covariance solves can be ill-conditioned at small lags and high orders.
-The built-in implementations are internal dispatch targets rather than
-separate user-facing APIs. Future optimized orders should be registered in
-one dispatcher and share generic derivative/state assembly where possible.
+method `HidaMatern.K(tau)` delegates to it and adds the object's instantaneous
+component only at zero lag. Functional dynamics accept explicit `jitter=` and
+class dynamics pass `HidaMatern.s`; the stationary solve uses Cholesky with a
+bounded machine-scale fallback. The built-in implementations are internal
+dispatch targets rather than separate user-facing APIs. Future optimized
+orders should be registered in one dispatcher and share generic
+derivative/state assembly where possible. Use `make_Ks(order)` when JAX
+requires static state-shape metadata.
 
 ## Using the generator directly
 
@@ -229,12 +232,15 @@ eigvals = jnp.linalg.eigvalsh(real_repr(K0))
 assert jnp.all(eigvals > 0)
 ```
 
-The SSM dynamics matrices are derived from `K_hat`:
+The SSM dynamics matrices are derived from `K_hat`. In the public dynamics
+path, an instantaneous component is applied only to the stationary block;
+positive-lag cross-covariance remains raw. Stationary solves use Cholesky
+factorization, with a bounded machine-scale fallback ladder.
 
 ```python
 from cvhmax.utils import conjtrans
 
-K0 = gen.create_K_hat(jnp.array(0.0), sigma, rho, omega)
+K0 = gen.create_K_hat(jnp.array(0.0), sigma, rho, omega) + 1e-5 * jnp.eye(gen.order)
 Kt = gen.create_K_hat(jnp.array(1.0), sigma, rho, omega)
 
 # Forward transition: A = K(t) @ K(0)^{-1}
@@ -243,7 +249,7 @@ A = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))
 # Process noise: Q = K(0) - K(t) @ K(0)^{-1} @ K(t)^H
 Q = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))
 
-# Lyapunov equation holds: A @ K(0) @ A^H + Q == K(0)
+# Lyapunov equation holds: A @ K0 @ A^H + Q == K0
 assert jnp.allclose(A @ K0 @ conjtrans(A) + Q, K0, atol=1e-10)
 ```
 
@@ -354,12 +360,12 @@ error (1e-9 at M=5, 1e-7 at M=8). This is inherent to the matrix
 algebra, not the symbolic generation. For most practical applications,
 orders up to 5 or 6 are sufficient.
 
-**Mixed precision (GPU).** The kernel blocks `K(0)`, `A`, and `Q` are
-computed in float64 and then cast back to the caller’s dtype so the rest
-of the pipeline can remain float32. To actually get float64 kernels,
-users must enable `jax_enable_x64`; otherwise JAX will downcast to
-float32. If float64 is disabled, increase the kernel jitter
-(`HidaMatern.s`) to avoid PSD loss in `Q = K(0) - K(t) K(0)^{-1} K(t)^H`.
+**Mixed precision (GPU).** The supported high-order path enables
+`jax_enable_x64`; otherwise JAX downcasts kernel blocks to float32 and small-
+lag cancellation is larger. The default instantaneous component
+`HidaMatern(s=1e-5)` is conservative, but increasing it is not a substitute
+for correlation scaling. Very high-order symbolic construction may overflow
+in x32; use x64 or a lower order.
 
 **Test tolerances.** Float32 vs float64 parity tests accept relative
 error up to `5e-4` and absolute error up to `2e-6` for `K(0)`, `A`, and
@@ -380,8 +386,11 @@ src/cvhmax/kernel_generator/
 
 ## Testing roadmap
 
-The following tests are planned to extend coverage of the generator’s
-mathematical correctness and numerical stability:
+The generator’s mathematical correctness and numerical stability are
+covered by the test suite (`tests/kernel_generator/test_kernel_generator.py`),
+including closed-form parity, derivative construction, PSD checks, Lyapunov
+consistency, and dtype behavior. The following optional extensions remain
+useful for future work:
 
 ### Mathematical correctness
 
@@ -411,8 +420,8 @@ mathematical correctness and numerical stability:
    - Check `cond(real_repr(K_hat(0)))` is finite and < 1e12 for
      `M=3, σ=1, ρ=1, ω=0`.
 
-These tests should live under `tests/kernel_generator/` and be guarded by
-`pytest.importorskip` for `sympy` and `sympy2jax`.
+Additional tests should live under `tests/kernel_generator/` and be guarded
+by `pytest.importorskip` for `sympy` and `sympy2jax`.
 
 ## See also
 

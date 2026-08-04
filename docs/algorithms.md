@@ -175,7 +175,10 @@ the stationary variances, reducing the condition number of `K(0)` before
 filtering. Without this scaling, high-order derivative covariance matrices can
 be badly conditioned even in the complex representation. `CVHM` applies this transform when constructing its filtering dynamics and
 stationary prior. The standalone `HidaMatern.Af/Qf/Ab/Qb/K` methods remain
-unscaled so they continue to expose the raw kernel state coordinates.
+unscaled so they continue to expose the raw kernel state coordinates. Their
+dynamics use the jittered stationary block and raw positive-lag block; the
+Cholesky fallback is a numerical safeguard, not a replacement for correlation
+scaling.
 
 The kernel order determines the per-kernel complex state dimension
 `nple = order + 1`. The total state dimension is `L = 2 * sum(nple)`
@@ -194,12 +197,13 @@ The kernel API has two layers with deliberately different roles:
   cross-covariance. Cholesky solves are used for the stationary block, with a
   bounded machine-scale fallback ladder. Derived process-noise blocks are
   Hermitian-symmetrized but are not eigenvalue-clipped. Correlation scaling
-  remains the primary high-order conditioning mechanism.
+  remains the primary high-order conditioning mechanism. The default practical
+  path is `JAX_ENABLE_X64=1`, correlation scaling, and `s=1e-5`.
 
 Orders 0, 1, and 2 use built-in closed-form implementations. Higher orders are
 handled by the `kernel_generator` subpackage, which symbolically differentiates
 the kernel and converts the result to JAX functions at runtime via `sympy2jax`.
-The implementation should maintain one internal raw-covariance dispatcher;
+The implementation maintains one internal raw-covariance dispatcher;
 future optimized orders should register there rather than add branches to both
 public APIs. The long-term organization is to share derivative/state assembly
 across orders and reserve hand-coded code for order-specific polynomial data.

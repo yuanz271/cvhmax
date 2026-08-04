@@ -11,6 +11,7 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `Gaussian`, `Poisson`: built-in readouts
 - `Params`: readout parameter container
 - `HidaMatern`: kernel class for state-space dynamics
+- `Ks`, `make_Ks`: raw functional kernel API and static-order JAX wrapper
 - `HidaMaternKernelGenerator`, `make_kernel`: kernel generator for arbitrary orders
 - `pad_trials`, `unpad_trials`: utilities for variable-length trials
 
@@ -50,7 +51,8 @@ Source: `src/cvhmax/cvhm.py`
   state block `K(tau)`, and `Af/Qf/Ab/Qb` convenience methods.
 - `Ks(kernelparam, tau)`: canonical JAX-compatible functional API for the
   raw, jitter-free complex state covariance. Dictionary parameter containers
-  are pytrees and can be passed through `jax.jit`, `jax.vmap`, and `jax.scan`.
+  are pytrees and can be passed through `jax.jit`, `jax.vmap`, and `jax.scan`;
+  use `make_Ks(order)` when the state shape must be static.
 - `matern(tau, rho=..., order=...)` and `hm(tau, sigma=..., rho=...,
   order=..., omega=...)`: scalar real-valued covariance helpers.
 
@@ -67,8 +69,10 @@ For JAX transformations where the matrix shape must be static, use
 `make_Ks(order)` to close over the integer order and pass only numerical
 `sigma`, `rho`, and `omega` leaves in the parameter mapping.
 
-Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) currently use built-in
-closed-form implementations. Higher orders require the `kergen` extra.
+Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) use built-in closed-form
+implementations. Higher orders require the `kergen` extra. The supported
+numerical path is x64 with CVHM correlation scaling; very high-order symbolic
+construction can overflow in x32.
 
 Source: `src/cvhmax/hm.py`
 

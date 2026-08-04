@@ -68,6 +68,19 @@ m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
 
 Use `model.fit_transform(...)` when you only need the posterior means. For smoother latent trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
+## Numerical stability
+
+The recommended inference path is `JAX_ENABLE_X64=1` with CVHM correlation
+scaling. `HidaMatern(s=1e-5)` is the conservative default: it represents a
+small instantaneous state-space covariance component added at zero lag and
+also regularizes the stationary solve. Positive-lag cross-covariances remain
+raw. Dynamics use Cholesky-based stationary solves with a bounded numerical
+fallback; derived process noise is symmetrized rather than eigenvalue-clipped.
+
+For static-shape JAX transformations, use `make_Ks(order)` and close over the
+integer state order. Very high-order symbolic generator construction can
+overflow in x32, so use x64 or a lower order in that regime.
+
 ## Data model
 
 - **Observations (`y`)** -- `(trials, time, obs_dim)` or `(time, obs_dim)`.

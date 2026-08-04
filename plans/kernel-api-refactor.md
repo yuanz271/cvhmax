@@ -8,14 +8,11 @@ the current numerical behavior.
 
 ## Plan status
 
-The plan is in progress. Phases 1–2 are implemented. The stabilization
-stage has now implemented zero-lag instantaneous jitter semantics,
-Cholesky-based stationary solves with a bounded machine-scale fallback ladder,
-static-order `make_Ks`, parameter validation, generator dtype handling, and
-focused regression coverage. Remaining work is deciding whether
-high-order/float32 workloads justify the optional square-root path.
-Do not treat the later phases as prerequisites for the current low-order x64
-CVHM path.
+The required covariance-form plan is complete. Phases 1–7 are implemented,
+validated, and documented. The square-root/QR implementation is deliberately
+an optional follow-up, not a prerequisite for the current supported x64,
+correlation-scaled CVHM path. The known limitation is very high-order symbolic
+generator construction under x32.
 
 ## Design decision
 
@@ -155,6 +152,9 @@ semantics:
 
 ### Phase 4 — Generalize hand-coded orders
 
+Status: implemented. Built-in orders use shared polynomial, derivative, and
+state-covariance assembly with one registry.
+
 - Refactor `Ks0`, `Ks1`, and `Ks2` toward shared polynomial/derivative/state
   assembly.
 - Keep only order-specific polynomial coefficients or small optimized kernels.
@@ -232,10 +232,11 @@ Update:
 Remove stale claims that generator dispatch starts at order 2. The current
 built-in boundary is order 2; generator fallback starts at order 3.
 
-### Phase 8 — Optional square-root path
+### Phase 8 — Optional square-root path (deferred follow-up)
 
-Only undertake this phase if the covariance-form implementation remains
-insufficient for high-order or float32 workloads:
+Only undertake this phase if future workloads require support beyond the
+validated covariance-form regime (for example, reliable very-high-order or
+float32 inference):
 
 - Implement square-root/QR conditional-covariance construction to avoid direct
   subtraction of nearly equal covariance matrices.
