@@ -4,8 +4,13 @@ This file is for coding agents working in this repo. Keep changes small, follow 
 
 ## Hard Rules (Git + Safety)
 
-- Never run `git commit` or `git push` without explicit user approval.
-- Avoid destructive git commands (`reset --hard`, force-push, rewriting history) unless explicitly requested.
+- Commits are allowed autonomously at meaningful milestones, when a plan is
+  complete, or when the task is being closed; do not commit every individual
+  edit. Before each commit, inspect `git status` and the relevant diff, and
+  commit only the scoped changes for the milestone.
+- Never run `git push` without explicit user approval.
+- Avoid destructive git commands (`reset --hard`, force-push, rewriting history)
+  unless explicitly requested.
 - Do not revert/overwrite unrelated local changes; work around them.
 
 ## Branching Model (GitHub Flow)
