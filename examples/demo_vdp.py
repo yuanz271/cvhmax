@@ -1,26 +1,27 @@
 """Van der Pol oscillator demo: CVHM inference with frozen and estimated readout.
 
 Synthesises 2-D latent trajectories from the Van der Pol oscillator, generates
-Poisson spike counts through a known loading matrix, then runs three inference
+Poisson spike counts through a known loading matrix, then runs five inference
 cases:
 
-1. **Frozen readout** — loading and bias are fixed at their true values,
-   isolating filtering quality from readout estimation.
+1. **Frozen readout, orders 0, 1, and 2** — loading and bias are fixed at
+   their true values while only the Matérn kernel order changes. This isolates
+   the effect of smoothness: Matérn-1/2, Matérn-3/2, and Matérn-5/2.
 2. **Estimated readout** — loading and bias are initialised via factor
-   analysis and refined by LBFGS at each EM M-step.
+   analysis and refined by LBFGS at each EM M-step, using order 1.
 3. **Variable-length trials** — trials are truncated to different lengths,
    padded with :func:`~cvhmax.utils.pad_trials`, fitted as usual, and
-   unpadded with :func:`~cvhmax.utils.unpad_trials`.
+   unpadded with :func:`~cvhmax.utils.unpad_trials`, using order 1.
 
 Usage::
 
     JAX_ENABLE_X64=1 python examples/demo_vdp.py
 """
 
-import numpy as np
 import matplotlib.pyplot as plt
-
-from jax import config, numpy as jnp
+import numpy as np
+from jax import config
+from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params, Poisson
@@ -101,6 +102,20 @@ def simulate_vdp(n_trials, T, dt, mu=1.0, noise_std=0.05, rng=None):
             state = state + drift * dt + noise_std * sqrt_dt * rng.standard_normal(2)
 
     return trajectories
+
+
+def make_kernels(n_latents, order, *, sigma=1.0, rho=1.0, omega=0.0, s=1e-5):
+    """Construct identical latent kernels except for their Matérn order."""
+    return [
+        HidaMatern(
+            sigma=sigma,
+            rho=rho,
+            omega=omega,
+            order=order,
+            s=s,
+        )
+        for _ in range(n_latents)
+    ]
 
 
 def standardize(x):
@@ -298,33 +313,44 @@ def main():
 
     print(f"Latents: {x_std.shape}  Observations: {y.shape}")
 
-    # --- Shared kernels ---
-    kernels = [
-        HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(n_latents)
-    ]
+    # --- Shared kernel hyperparameters ---
+    # The frozen-readout comparison changes only order; all other kernel and
+    # optimization hyperparameters, data, readout, and random seed are fixed.
+    kernel_hyperparams = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "s": 1e-5}
 
-    # --- Case 1: Frozen readout (true C and d) ---
-    print("\n--- Frozen readout ---")
+    # --- Cases 1-3: Frozen readout, varying kernel order ---
+    print("\n--- Frozen readout: kernel-order comparison ---")
     true_params = Params(
         C=jnp.asarray(C_true),
         d=jnp.asarray(d_true),
         R=None,
     )
-    run_case(
-        y,
-        x_std,
-        kernels,
-        dt,
-        observation="FrozenPoisson",
-        title="CVHM on Van der Pol latents (frozen readout)",
-        out_path="examples/demo_vdp_frozen.pdf",
-        params=true_params,
-        max_iter=50,
-        cvi_iter=5,
+    frozen_r2 = {}
+    for order in (0, 1, 2):
+        print(f"\n  Matérn order={order}")
+        frozen_r2[order] = run_case(
+            y,
+            x_std,
+            make_kernels(n_latents, order, **kernel_hyperparams),
+            dt,
+            observation="FrozenPoisson",
+            title=(
+                "CVHM on Van der Pol latents "
+                f"(frozen readout, Matérn order={order})"
+            ),
+            out_path=f"examples/demo_vdp_frozen_order{order}.pdf",
+            params=true_params,
+            max_iter=50,
+            cvi_iter=5,
+        )
+    print(
+        "Frozen-readout R² by order: "
+        + ", ".join(f"{order}: {r2:.4f}" for order, r2 in frozen_r2.items())
     )
 
-    # --- Case 2: Estimated readout (C and d learned from data) ---
-    print("\n--- Estimated readout ---")
+    # --- Case 4: Estimated readout (C and d learned from data) ---
+    print("\n--- Estimated readout (order=1) ---")
+    kernels = make_kernels(n_latents, order=1, **kernel_hyperparams)
     run_case(
         y,
         x_std,
@@ -337,12 +363,12 @@ def main():
         cvi_iter=5,
     )
 
-    # --- Case 3: Variable-length trials (pad/unpad showcase) ---
+    # --- Case 5: Variable-length trials (pad/unpad showcase) ---
     run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng)
 
 
 def run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng):
-    """Case 3: variable-length trials with pad/unpad workflow.
+    """Case 5: variable-length trials with pad/unpad workflow.
 
     Truncates existing equal-length trials to random lengths, pads them
     into a rectangular array, fits the model, and unpads the posterior.

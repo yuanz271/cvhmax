@@ -68,6 +68,17 @@ m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
 
 Use `model.fit_transform(...)` when you only need the posterior means. For smoother latent trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
+The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen
+readout, holding the data, readout, and other kernel hyperparameters fixed:
+
+```console
+JAX_ENABLE_X64=1 python examples/demo_vdp.py
+```
+
+It writes `examples/demo_vdp_frozen_order0.pdf`,
+`examples/demo_vdp_frozen_order1.pdf`, and
+`examples/demo_vdp_frozen_order2.pdf`, and reports pooled R² for each case.
+
 ## Numerical stability
 
 The recommended inference path is `JAX_ENABLE_X64=1` with CVHM correlation
