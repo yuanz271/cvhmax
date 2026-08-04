@@ -29,45 +29,37 @@ Assume Python >= 3.12 (`pyproject.toml`). JAX tests expect 64-bit.
 ```bash
 # Install (dev)
 uv sync --group dev
-# or
-python -m pip install -e .
-python -m pip install -r requirements-dev.lock  # if present
-
-# (Optional) build frontend tooling
-python -m pip install build
 
 # Lint
-ruff check src tests
-ruff check src tests --fix
+uv run ruff check src tests examples
+uv run ruff check src tests examples --fix
 
 # Format (optional; only run if the repo already uses it)
-ruff format src tests
+uv run ruff format src tests examples
 
 # Test (full)
-JAX_ENABLE_X64=1 pytest
+JAX_ENABLE_X64=1 uv run pytest
 
 # Test (single file)
-JAX_ENABLE_X64=1 pytest tests/test_hp.py
+JAX_ENABLE_X64=1 uv run pytest tests/test_hp.py
 
 # Test (single test function)
-JAX_ENABLE_X64=1 pytest tests/test_hp.py::test_whittle
+JAX_ENABLE_X64=1 uv run pytest tests/test_hp.py::test_whittle
 
 # Test (by substring match)
-JAX_ENABLE_X64=1 pytest -k whittle
+JAX_ENABLE_X64=1 uv run pytest -k whittle
 
 # Fast iteration options
-JAX_ENABLE_X64=1 pytest -q
-JAX_ENABLE_X64=1 pytest -x --maxfail=1
-JAX_ENABLE_X64=1 pytest --lf          # rerun last failures
-JAX_ENABLE_X64=1 pytest --ff          # run last failures first
+JAX_ENABLE_X64=1 uv run pytest -q
+JAX_ENABLE_X64=1 uv run pytest -x --maxfail=1
+JAX_ENABLE_X64=1 uv run pytest --lf          # rerun last failures
+JAX_ENABLE_X64=1 uv run pytest --ff          # run last failures first
 
-# Benchmark (slow, ~30 s; skipped by default)
-JAX_ENABLE_X64=1 pytest tests/test_benchmark.py --run-slow
+# Benchmark (slow, skipped by default)
+JAX_ENABLE_X64=1 uv run pytest tests/test_benchmark.py --run-slow
 
-# Build (sdist/wheel)
-python -m build
-# (Alternative, if hatch is installed)
-# hatch build
+# Build (sdist/wheel; build is supplied ephemerally)
+uv run --with build python -m build
 ```
 
 Useful debugging env vars:
@@ -102,13 +94,16 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 Any change that affects inference quality **must** pass the benchmark:
 
 ```bash
-JAX_ENABLE_X64=1 pytest tests/test_benchmark.py --run-slow
+JAX_ENABLE_X64=1 uv run pytest tests/test_benchmark.py --run-slow
 ```
 
-The benchmark runs three Poisson-VdP scenarios (frozen readout, estimated
-readout, variable-length trials) and asserts R² ≥ 0.96.  Baseline R² is
-~0.972 on all three.  If a change drops below the floor, either fix the
-regression or update the floor with justification.
+The benchmark runs three order-1 Poisson-VdP scenarios (frozen readout,
+estimated readout, and variable-length trials) and asserts R² ≥ 0.96.
+Baseline R² is approximately 0.972 on all three. The standalone VdP demo also
+compares frozen-readout kernel orders 0, 1, and 2; that smoothness comparison
+is illustrative and is not the benchmark regression floor. If a benchmark
+change drops below the floor, either fix the regression or update the floor
+with justification.
 
 ## Docs Update Rule
 
