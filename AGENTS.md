@@ -1,6 +1,6 @@
 # Agent Guide (cvhmax)
 
-This file is for coding agents working in this repo. Keep changes small, follow existing JAX patterns, and prefer pure/jittable code.
+This file is for coding agents working in this repo. Keep changes small, follow existing JAX patterns, and prefer pure/jittable code. For project context, design specifications, API details, and other agent-agnostic information, consult `README.md`, `docs/`, source docstrings, and repository metadata as needed; do not duplicate that information here.
 
 ## Hard Rules (Git + Safety)
 
