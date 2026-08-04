@@ -42,6 +42,12 @@ pip install "cvhmax[cuda12]"
 
 With `uv`, use `uv sync --extra cuda12` for a checkout. The extra uses JAX's pip-managed CUDA 12 plugin and runtime libraries. See the [official JAX installation guide](https://docs.jax.dev/en/latest/installation.html) for driver and platform requirements.
 
+Run the opt-in GPU integration test with CUDA enforced (to prevent CPU fallback):
+
+```console
+JAX_ENABLE_X64=1 JAX_PLATFORMS=cuda,cpu uv run pytest tests/test_gpu.py --run-gpu -q
+```
+
 ## Quickstart
 
 ```python

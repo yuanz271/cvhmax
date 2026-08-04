@@ -44,6 +44,12 @@ def pytest_addoption(parser):
         default=False,
         help="Run tests marked as slow (e.g. benchmarks).",
     )
+    parser.addoption(
+        "--run-gpu",
+        action="store_true",
+        default=False,
+        help="Run tests marked as gpu (requires a CUDA JAX backend).",
+    )
 
 
 def pytest_configure(config):
@@ -55,6 +61,10 @@ def pytest_configure(config):
         "markers",
         "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     )
+    config.addinivalue_line(
+        "markers",
+        "gpu: marks tests requiring a CUDA JAX backend (use --run-gpu)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -64,6 +74,13 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "slow" in item.keywords:
             item.add_marker(skip_slow)
+
+    if config.getoption("--run-gpu"):
+        return
+    skip_gpu = pytest.mark.skip(reason="need --run-gpu option to run")
+    for item in items:
+        if "gpu" in item.keywords:
+            item.add_marker(skip_gpu)
 
 
 # convenience skip decorator used in test_parity.py

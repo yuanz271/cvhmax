@@ -6,15 +6,14 @@ from typing import Any, NamedTuple
 
 import chex
 import jax
-from jax import Array, NamedSharding, vmap
+from jax import Array, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
-from jax.sharding import PartitionSpec as P
 
 from .cvi import CVI, Gaussian
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
-from .utils import cho_inv, real_repr, symm, to_device, training_progress
+from .utils import cho_inv, real_repr, symm, training_progress
 
 
 class _ScaledDynamics(NamedTuple):
@@ -245,11 +244,6 @@ class CVHM:
         m = jnp.zeros((n_trials, n_bins, self.n_components))
         V = jnp.zeros((n_trials, n_bins, self.n_components, self.n_components))
         # <<<
-
-        n_devices = len(jax.devices())
-        mesh = jax.make_mesh((n_devices,), ("batch",))
-        sharding = NamedSharding(mesh, P("batch"))
-        y, valid_y, z, Z, m, V = to_device((y, valid_y, z, Z, m, V), sharding)
 
         M = self.latent_mask()
 
