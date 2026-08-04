@@ -17,14 +17,12 @@ The hard floor is set to 0.96 to allow minor platform/JAX-version jitter.
 
 import numpy as np
 import pytest
-
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import Params
+from cvhmax.cvi import Params, Poisson
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_trials, unpad_trials
-
 
 # ---------------------------------------------------------------------------
 # Shared constants & helpers
@@ -92,16 +90,38 @@ def _make_data(rng):
     return y, y_np, x_std, C_true, d_true
 
 
-def _kernels():
-    return [HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1) for _ in range(N_LATENTS)]
+def _kernels(s=1e-5):
+    return [
+        HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=s)
+        for _ in range(N_LATENTS)
+    ]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("s", [0.0, 1e-5])
+def test_benchmark_jitter_regression(s):
+    """The conservative instantaneous component is neutral on VdP data."""
+    rng = np.random.default_rng(2024)
+    y, _, x_std, C_true, d_true = _make_data(rng)
+    true_params = Params(C=jnp.asarray(C_true), d=jnp.asarray(d_true), R=None)
+    model = CVHM(
+        n_components=N_LATENTS,
+        dt=DT,
+        kernels=_kernels(s),
+        observation="FrozenPoisson",
+        max_iter=50,
+        cvi_iter=5,
+    )
+    model.params = true_params
+    model.fit(y, random_state=42)
+    r2 = _r2(np.asarray(model.posterior[0]), x_std)
+    assert np.isfinite(r2)
+    assert r2 >= R2_FLOOR
 
 
 # ---------------------------------------------------------------------------
 # Frozen-readout Poisson subclass (same as demo)
 # ---------------------------------------------------------------------------
-
-from cvhmax.cvi import Poisson  # noqa: E402
-
 
 class FrozenPoisson(Poisson):
     @classmethod
@@ -152,7 +172,7 @@ def test_benchmark_estimated_readout():
 @pytest.mark.slow
 def test_benchmark_variable_length():
     rng = np.random.default_rng(2024)
-    y, y_np, x_std, _, _ = _make_data(rng)
+    _, y_np, x_std, _, _ = _make_data(rng)
     kernels = _kernels()
 
     trial_lengths_np = rng.integers(250, 501, size=N_TRIALS)

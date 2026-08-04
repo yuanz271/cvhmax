@@ -7,13 +7,14 @@ resulting expressions into JAX functions that are compatible with
 `jax.jit`, `jax.vmap`, and `jax.grad`.
 
 The public kernel API has two layers. `Ks(kernelparam, tau)` is the
-canonical JAX-compatible functional path; `HidaMatern.K(tau)` is a thin
+canonical raw JAX-compatible functional path; `HidaMatern.K(tau)` is a thin
 convenience wrapper that packs the dataclass fields, delegates to `Ks`, and
-applies optional object-level covariance jitter. Functional dynamics expose
-explicit `jitter=` stabilization, while class dynamics pass `HidaMatern.s`.
-The kernel generator is an internal fallback for orders without a built-in
-implementation. This separation keeps JAX transformations on pytrees while
-avoiding duplicate order dispatch.
+applies the optional instantaneous state-space component `s I` only at zero
+lag. Functional dynamics use the jittered stationary block and raw positive-
+lag cross-covariance, with Cholesky stationary solves. The kernel generator is
+an internal fallback for orders without a built-in implementation. When the
+state shape must remain static under JAX transformations, use `make_Ks(order)`
+to close over the integer order.
 
 Orders 0, 1, and 2 currently use built-in closed-form implementations.
 The kernel generator removes the remaining order limitation.

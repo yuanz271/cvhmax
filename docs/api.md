@@ -55,12 +55,17 @@ Source: `src/cvhmax/cvhm.py`
   order=..., omega=...)`: scalar real-valued covariance helpers.
 
 `HidaMatern.K(tau)` is a thin wrapper around `Ks`: it packs the object fields
-and applies the object's optional diagonal jitter `s`. It contains no
-order-specific dispatch. With `s=0`, it agrees with `Ks` up to dtype.
-The functional dynamics helpers accept an explicit `jitter=` argument;
-`HidaMatern.Af/Qf/Ab/Qb` pass the object's `s` to stabilize consequential
-linear-algebra operations. The raw state covariance is positive-lag oriented;
-`kernel(tau)` is the real, even scalar covariance.
+and applies the object's instantaneous state-space component `s I` only at
+zero lag. Positive-lag cross-covariances remain raw, and with `s=0` the result
+agrees with `Ks` up to dtype. Functional dynamics use the jittered stationary
+block and raw positive-lag cross-covariance, with Cholesky-based stationary
+solves. `HidaMatern.Af/Qf/Ab/Qb` pass the object's `s` to that policy. The raw
+state covariance is positive-lag oriented; `kernel(tau)` is the real, even
+scalar covariance.
+
+For JAX transformations where the matrix shape must be static, use
+`make_Ks(order)` to close over the integer order and pass only numerical
+`sigma`, `rho`, and `omega` leaves in the parameter mapping.
 
 Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) currently use built-in
 closed-form implementations. Higher orders require the `kergen` extra.
@@ -90,11 +95,11 @@ Matern smoothness is `nu = (M - 1) + 0.5`:
 | N | (2N-1)/2 | N-1 |
 
 `Ks()` is the canonical raw functional dispatch path. `HidaMatern.K()`
-delegates to `Ks()` and adds the object's configured covariance jitter.
-Functional `Af/Qf/Ab/Qb` accept explicit stabilization jitter, and class
-methods pass `HidaMatern.s` to those helpers. Orders 0, 1, and 2 use built-in
-implementations; generator dispatch starts at order 3, so higher-order kernels
-work transparently throughout the pipeline.
+delegates to `Ks()` and adds its configured instantaneous component only at
+zero lag. Functional `Af/Qf/Ab/Qb` use the jittered stationary block, raw
+positive-lag cross-covariance, and Cholesky stationary solves. Orders 0, 1,
+and 2 use built-in implementations; generator dispatch starts at order 3, so
+higher-order kernels work transparently throughout the pipeline.
 
 Source: `src/cvhmax/kernel_generator/`
 

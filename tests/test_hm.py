@@ -3,16 +3,16 @@ import os
 import subprocess
 import sys
 
-from jax import tree_util
+import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
-
 import pytest
+from jax import tree_util
 
 from cvhmax import hm
-from cvhmax.hm import HidaMatern, matern, spectral_density
-from cvhmax.utils import real_repr, conjtrans
+from cvhmax.hm import HidaMatern, Ks, make_Ks, matern, spectral_density
+from cvhmax.utils import conjtrans, real_repr
 
 
 @pytest.mark.parametrize("order,expected_nple", [(0, 1), (1, 2), (2, 3)])
@@ -21,6 +21,14 @@ def test_Ks(order, expected_nple):
     spec = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": order}
     K = hm.Ks(spec, 1.0)
     assert K.shape == (expected_nple, expected_nple)
+
+
+def test_make_Ks_closes_over_static_order_under_jit():
+    kernel = make_Ks(1)
+    jit_kernel = jax.jit(kernel)
+    params = {"sigma": 1.2, "rho": 0.7, "omega": 2.0}
+    expected = Ks({**params, "order": 1}, 0.3)
+    npt.assert_allclose(jit_kernel(params, 0.3), expected)
 
 
 @pytest.mark.parametrize(
@@ -52,13 +60,17 @@ def test_HidaMatern_kernel_is_jitter_free_at_zero():
     npt.assert_allclose(model.kernel(0.0), 1.5**2)
 
 
-def test_Ks_is_raw_and_HidaMatern_K_is_stabilized():
+def test_Ks_is_raw_and_HidaMatern_K_has_instantaneous_jitter():
     params = {"sigma": 1.5, "rho": 0.8, "omega": 2.0, "order": 2}
     model = HidaMatern(**params, s=1e-3)
-    raw = np.asarray(hm.Ks(params, 0.4))
-    stabilized = np.asarray(model.K(0.4))
-    expected = raw + 1e-3 * np.eye(model.nple)
-    npt.assert_allclose(stabilized, expected, atol=1e-12)
+    raw_zero = np.asarray(hm.Ks(params, 0.0))
+    raw_lag = np.asarray(hm.Ks(params, 0.4))
+    stabilized_zero = np.asarray(model.K(0.0))
+    stabilized_lag = np.asarray(model.K(0.4))
+    npt.assert_allclose(
+        stabilized_zero, raw_zero + 1e-3 * np.eye(model.nple), atol=1e-12
+    )
+    npt.assert_allclose(stabilized_lag, raw_lag, atol=1e-12)
 
 
 def test_dynamics_jitter_is_explicit_and_effective():
@@ -73,6 +85,26 @@ def test_dynamics_jitter_is_explicit_and_effective():
     )
 
 
+def test_dynamics_use_raw_positive_lag_covariance():
+    params = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 0}
+    tau = 0.4
+    K0 = np.asarray(hm.Ks(params, 0.0)) + 1e-3 * np.eye(1)
+    Kt = np.asarray(hm.Ks(params, tau))
+    expected = K0 - Kt @ np.linalg.solve(K0, Kt.conj().T)
+    actual = np.asarray(hm.Qf(params, tau, jitter=1e-3))
+    npt.assert_allclose(actual, expected, atol=1e-12)
+
+
+def test_zero_step_dynamics_are_identity_and_noiseless():
+    params = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}
+    K0 = np.asarray(hm.Ks(params, 0.0)) + 1e-3 * np.eye(2)
+    npt.assert_allclose(hm.Af(params, 0.0, jitter=1e-3), np.eye(2), atol=1e-12)
+    npt.assert_allclose(hm.Ab(params, 0.0, jitter=1e-3), np.eye(2), atol=1e-12)
+    npt.assert_allclose(hm.Qf(params, 0.0, jitter=1e-3), 0.0, atol=1e-12)
+    npt.assert_allclose(hm.Qb(params, 0.0, jitter=1e-3), 0.0, atol=1e-12)
+    npt.assert_allclose(hm.Ks(params, 0.0), K0 - 1e-3 * np.eye(2), atol=1e-12)
+
+
 def test_HidaMatern_kernel_matches_generator_real_part():
     from cvhmax.kernel_generator import make_kernel
 
@@ -84,9 +116,15 @@ def test_HidaMatern_kernel_matches_generator_real_part():
     npt.assert_allclose(model.kernel(tau), generated)
 
 
-def test_matern_rejects_negative_order():
+def test_matern_rejects_invalid_parameters():
     with pytest.raises(ValueError, match="non-negative"):
         matern(0.0, rho=1.0, order=-1)
+    with pytest.raises(ValueError, match="positive"):
+        matern(0.0, rho=0.0, order=0)
+    with pytest.raises(TypeError, match="static integer"):
+        HidaMatern(order=1.5)
+    with pytest.raises(ValueError, match="positive"):
+        HidaMatern(rho=0.0)
 
 
 def test_ssm_repr():
@@ -98,8 +136,8 @@ def test_ssm_repr():
             {"sigma": 1.0, "rho": 1.0, "omega": 1.0, "order": 1},
         ],
     ]
-    Af, Qf, Ab, Qb = hm.ssm_repr(kernelparams, dt)
-    paramflat, paramdef = tree_util.tree_flatten(Af)
+    Af, _, _, _ = hm.ssm_repr(kernelparams, dt)
+    paramflat, _ = tree_util.tree_flatten(Af)
     assert len(paramflat) == 3
 
 
@@ -254,13 +292,15 @@ def test_kernel_precision_parity_x64_toggle():
     for key in ("K0", "A", "Q"):
         arr_f32 = _unpack_complex(payload_f32[key])
         arr_f64 = _unpack_complex(payload_f64[key])
-        # Raw dynamics no longer include user jitter ``s``. Float32 covariance
-        # subtraction at very small lags can differ from x64 by a few ulps.
-        npt.assert_allclose(arr_f32, arr_f64, rtol=5e-4, atol=3e-6)
+        # Float32 covariance subtraction at small lags is roundoff-limited;
+        # the x32 path is checked for finite, bounded output rather than x64
+        # ulp-level parity.
+        npt.assert_allclose(arr_f32, arr_f64, rtol=5e-4, atol=1e-5)
+        assert np.all(np.isfinite(arr_f32))
 
 
 def test_kernel_precision_parity_inputs():
-    if not jnp.asarray(1.0).dtype == jnp.float64:
+    if jnp.asarray(1.0).dtype != jnp.float64:
         pytest.skip("Requires x64 to compare float32 and float64 inputs")
 
     sigma32 = jnp.asarray(1.0, dtype=jnp.float32)

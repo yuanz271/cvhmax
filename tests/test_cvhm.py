@@ -1,11 +1,10 @@
+import jax
 import numpy as np
 import pytest
-import jax
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM, lift, project, sde2gp
-from cvhmax.hm import HidaMatern
-from cvhmax.hm import sample_matern
+from cvhmax.hm import HidaMatern, sample_matern
 from cvhmax.utils import real_repr
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
@@ -231,7 +230,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
 
         def add_task(self, description, total, **fields):
             self.add_task_calls.append(
-                dict(description=description, total=total, fields=fields)
+                {"description": description, "total": total, "fields": fields}
             )
             return 123
 
@@ -269,15 +268,14 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
         callback, *args, ordered=False, partitioned=False, **kwargs
     ):
         recorded.append(
-            dict(
-                callback=callback,
-                args=args,
-                ordered=ordered,
-                partitioned=partitioned,
-                kwargs=kwargs,
-            )
+            {
+                "callback": callback,
+                "args": args,
+                "ordered": ordered,
+                "partitioned": partitioned,
+                "kwargs": kwargs,
+            }
         )
-        return None
 
     monkeypatch.setattr(jdebug, "callback", record_debug_callback)
 
@@ -308,13 +306,17 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
 
     cb = cb_calls[0]["callback"]
     cb(0, 1.23)
+    cb(1, np.nan)
     cb(2, 4.56)
 
     assert fake_pbar.add_task_calls, "Expected add_task() to be called"
     assert fake_pbar.update_calls, "Expected update() to be called"
+    assert fake_pbar.add_task_calls[0]["fields"]["nell_display"] == "n/a"
 
     for _, kwargs in fake_pbar.update_calls:
         assert "completed" in kwargs
         assert "advance" not in kwargs
         assert 1 <= kwargs["completed"] <= 3
         assert isinstance(kwargs.get("nell"), float)
+        expected_display = "n/a" if not np.isfinite(kwargs["nell"]) else f"{kwargs['nell']:.3f}"
+        assert kwargs["nell_display"] == expected_display

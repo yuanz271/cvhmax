@@ -10,11 +10,12 @@ from __future__ import annotations
 from functools import lru_cache
 
 import jax.numpy as jnp
-from jax import Array
 import sympy as sym
 import sympy2jax
+from jax import Array
 
-from .matern import hida_matern_kernel, tau as _tau
+from .matern import hida_matern_kernel
+from .matern import tau as _tau
 
 
 class HidaMaternKernelGenerator:
@@ -72,11 +73,13 @@ class HidaMaternKernelGenerator:
         # Build moments (limits at tau=0)
         self._moments_values = _build_moments_symbolic(limits, order)
         self._moments_module = sympy2jax.SymbolicModule(
-            expressions=self._moments_values
+            expressions=self._moments_values, make_array=False
         )
 
         # Build base kernel module
-        self._base_kernel_module = sympy2jax.SymbolicModule(expressions=[kernel_expr])
+        self._base_kernel_module = sympy2jax.SymbolicModule(
+            expressions=[kernel_expr], make_array=False
+        )
 
     def create_K_hat(self, tau: Array, sigma: Array, rho: Array, omega: Array) -> Array:
         """Evaluate the M x M complex state-space covariance at lag *tau*.
@@ -109,7 +112,13 @@ class HidaMaternKernelGenerator:
         # Use limit values when tau == 0
         is_zero = jnp.equal(tau_abs, 0.0)
 
-        K_hat = jnp.zeros((M, M), dtype=jnp.complex128)
+        real_dtype = jnp.result_type(sigma, rho, omega)
+        output_dtype = (
+            jnp.complex128
+            if jnp.dtype(real_dtype) == jnp.dtype(jnp.float64)
+            else jnp.complex64
+        )
+        K_hat = jnp.zeros((M, M), dtype=output_dtype)
 
         idx = 0
         # Fill outer entries (row 0 and last column)
@@ -274,12 +283,16 @@ def _build_K_hat_module(
     # or absent consistently). Since limits are already evaluated at tau->0,
     # we just need to make sure tau isn't a free symbol.
     # For the general module, tau is present.
-    general_mod = sympy2jax.SymbolicModule(expressions=general_entries)
+    general_mod = sympy2jax.SymbolicModule(
+        expressions=general_entries, make_array=False
+    )
 
     # Limit entries should not contain tau (they're limits), but let's be safe
     # and substitute in case sympy left residual tau references
     clean_limits = [expr.subs(_tau, 0) for expr in limit_entries]
-    limit_mod = sympy2jax.SymbolicModule(expressions=clean_limits)
+    limit_mod = sympy2jax.SymbolicModule(
+        expressions=clean_limits, make_array=False
+    )
 
     return {"general": general_mod, "limit": limit_mod}
 

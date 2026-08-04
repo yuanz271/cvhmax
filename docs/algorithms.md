@@ -166,8 +166,11 @@ matrices to an equivalent real block representation for real-valued filtering.
 The numerical benefit comes from the resulting algebraic structure and from
 state scaling, rather than from complex arithmetic by itself. The covariance
 blocks are Hermitian and obey conjugate-symmetry constraints, which avoids
-redundant calculations and enables structure-preserving operations. The paper
-also proposes a correlation transform that normalizes derivative states using
+redundant calculations and enables structure-preserving operations. The
+stationary block is factored with Cholesky before dynamics are derived; a
+bounded machine-scale jitter ladder is used only if that factorization is not
+finite. The paper also proposes a correlation transform that normalizes
+derivative states using
 the stationary variances, reducing the condition number of `K(0)` before
 filtering. Without this scaling, high-order derivative covariance matrices can
 be badly conditioned even in the complex representation. `CVHM` applies this transform when constructing its filtering dynamics and
@@ -184,13 +187,14 @@ The kernel API has two layers with deliberately different roles:
   parameter container is a pytree, so it is suitable for `jax.jit`, `jax.vmap`,
   and `jax.scan`. It returns the raw complex state covariance.
 - `HidaMatern.K(tau)` is a convenience wrapper. It packs the dataclass fields,
-  delegates to `Ks`, and adds the object's optional diagonal covariance jitter
-  `s`. It contains no order-specific mathematical dispatch. With `s=0`, it
-  agrees with `Ks` up to dtype.
-- Functional dynamics accept explicit `jitter=`. The class dynamics methods
-  pass `HidaMatern.s` because covariance subtraction and matrix solves can be
-  numerically singular even when the raw covariance is mathematically valid.
-  Correlation scaling remains the primary high-order conditioning mechanism.
+  delegates to `Ks`, and adds the object's optional instantaneous state-space
+  component `s I` only at zero lag. Positive-lag cross-covariances remain raw;
+  with `s=0`, it agrees with `Ks` up to dtype.
+- Functional dynamics use the jittered stationary block and raw positive-lag
+  cross-covariance. Cholesky solves are used for the stationary block, with a
+  bounded machine-scale fallback ladder. Derived process-noise blocks are
+  Hermitian-symmetrized but are not eigenvalue-clipped. Correlation scaling
+  remains the primary high-order conditioning mechanism.
 
 Orders 0, 1, and 2 use built-in closed-form implementations. Higher orders are
 handled by the `kernel_generator` subpackage, which symbolically differentiates

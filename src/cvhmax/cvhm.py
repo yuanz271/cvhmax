@@ -1,17 +1,20 @@
+import math
+import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
-import secrets
 
-import jax
-from jax import Array, NamedSharding, numpy as jnp, vmap
-from jax.sharding import PartitionSpec as P
-from jax.scipy.linalg import block_diag
 import chex
+import jax
+from jax import Array, NamedSharding, vmap
+from jax import numpy as jnp
+from jax.scipy.linalg import block_diag
+from jax.sharding import PartitionSpec as P
 
 from .cvi import CVI, Gaussian
-from .utils import conjtrans, real_repr, symm, cho_inv, training_progress, to_device
 from .filtering import bifilter, information_filter
+from .hm import _dynamics_from_covariances
+from .utils import cho_inv, real_repr, symm, to_device, training_progress
 
 
 class _ScaledDynamics(NamedTuple):
@@ -71,28 +74,34 @@ class CVHM:
         self.cvi = CVI.registry.get(self.observation, Gaussian)
 
     def _scaled_kernel_dynamics(self, tau):
-        """Return correlation-scaled, numerically stabilized dynamics."""
+        """Return correlation-scaled, Cholesky-stabilized dynamics."""
         dynamics = []
         for kernel in self.kernels:
+            scale = kernel.state_scale()
             K0 = kernel.K(0.0)
             Kt = kernel.K(tau)
-            scale = kernel.state_scale()
             K0 = scale[:, None] * K0 * scale[None, :]
             Kt = scale[:, None] * Kt * scale[None, :]
-            forward = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))
-            forward_noise = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))
-            backward = conjtrans(jnp.linalg.solve(conjtrans(K0), Kt))
-            backward_noise = K0 - conjtrans(Kt) @ jnp.linalg.solve(K0, Kt)
+            raw = _dynamics_from_covariances(K0, Kt)
             dynamics.append(
                 _ScaledDynamics(
                     stationary=K0,
-                    forward=forward,
-                    forward_noise=forward_noise,
-                    backward=backward,
-                    backward_noise=backward_noise,
+                    forward=raw.forward,
+                    forward_noise=raw.forward_noise,
+                    backward=raw.backward,
+                    backward_noise=raw.backward_noise,
                 )
             )
         return dynamics
+
+    def _matrices_from_dynamics(self, dynamics):
+        """Assemble real block matrices from one prepared dynamics bundle."""
+        Af = real_repr(block_diag(*[item.forward for item in dynamics]))
+        Qf = symm(real_repr(block_diag(*[item.forward_noise for item in dynamics])))
+        Ab = real_repr(block_diag(*[item.backward for item in dynamics]))
+        Qb = symm(real_repr(block_diag(*[item.backward_noise for item in dynamics])))
+        Q0 = symm(real_repr(block_diag(*[item.stationary for item in dynamics])))
+        return Af, Qf, Ab, Qb, Q0
 
     def Af(self):
         """Forward transition matrix for the normalized latent SSM.
@@ -102,10 +111,7 @@ class CVHM:
         Array
             Block-diagonal real-valued transition matrix.
         """
-        C = block_diag(
-            *[dynamics.forward for dynamics in self._scaled_kernel_dynamics(self.dt)]
-        )
-        return real_repr(C)
+        return self._matrices_from_dynamics(self._scaled_kernel_dynamics(self.dt))[0]
 
     def Qf(self):
         """Forward process noise covariance for the latent SSM.
@@ -115,13 +121,7 @@ class CVHM:
         Array
             Block-diagonal process noise covariance.
         """
-        C = block_diag(
-            *[
-                dynamics.forward_noise
-                for dynamics in self._scaled_kernel_dynamics(self.dt)
-            ]
-        )
-        return symm(real_repr(C))
+        return self._matrices_from_dynamics(self._scaled_kernel_dynamics(self.dt))[1]
 
     def Ab(self):
         """Backward transition matrix for the latent SSM.
@@ -131,10 +131,7 @@ class CVHM:
         Array
             Block-diagonal real-valued transition matrix.
         """
-        C = block_diag(
-            *[dynamics.backward for dynamics in self._scaled_kernel_dynamics(self.dt)]
-        )
-        return real_repr(C)
+        return self._matrices_from_dynamics(self._scaled_kernel_dynamics(self.dt))[2]
 
     def Qb(self):
         """Backward process noise covariance for the latent SSM.
@@ -144,13 +141,7 @@ class CVHM:
         Array
             Block-diagonal process noise covariance.
         """
-        C = block_diag(
-            *[
-                dynamics.backward_noise
-                for dynamics in self._scaled_kernel_dynamics(self.dt)
-            ]
-        )
-        return symm(real_repr(C))
+        return self._matrices_from_dynamics(self._scaled_kernel_dynamics(self.dt))[3]
 
     def Q0(self):
         """Stationary prior covariance of the latent process.
@@ -160,10 +151,7 @@ class CVHM:
         Array
             Block-diagonal stationary covariance.
         """
-        C = block_diag(
-            *[dynamics.stationary for dynamics in self._scaled_kernel_dynamics(0.0)]
-        )
-        return symm(real_repr(C))
+        return self._matrices_from_dynamics(self._scaled_kernel_dynamics(0.0))[4]
 
     def latent_mask(self):
         """Construct the block-diagonal selection matrix from latent to state space.
@@ -235,11 +223,8 @@ class CVHM:
             params=self.params,
         )
 
-        Af = self.Af()
-        Qf = self.Qf()
-        Ab = self.Ab()
-        Qb = self.Qb()
-        Q0 = self.Q0()
+        dynamics = self._scaled_kernel_dynamics(self.dt)
+        Af, Qf, Ab, Qb, Q0 = self._matrices_from_dynamics(dynamics)
 
         Pf = cho_inv(Qf)
         Pb = cho_inv(Qb)
@@ -337,7 +322,9 @@ class CVHM:
             return params, z, Z, jl, Jl, m, V, nell
 
         with training_progress() as pbar:
-            task_id = pbar.add_task("Training", total=self.max_iter, nell=jnp.nan)
+            task_id = pbar.add_task(
+                "Training", total=self.max_iter, nell=jnp.nan, nell_display="n/a"
+            )
 
             def step(i, carry):
                 carry = em_step(i, carry)
@@ -347,6 +334,9 @@ class CVHM:
                         task_id,
                         completed=int(step_i) + 1,
                         nell=float(x),
+                        nell_display=(
+                            f"{float(x):.3f}" if math.isfinite(float(x)) else "n/a"
+                        ),
                     ),
                     i,
                     nell,

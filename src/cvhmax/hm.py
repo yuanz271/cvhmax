@@ -15,9 +15,10 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import jax.scipy as jsp
 import numpy as np
 
-from cvhmax.utils import EPS, gamma
+from cvhmax.utils import gamma
 
 from .utils import conjtrans
 
@@ -50,17 +51,40 @@ def _hermitian(x: jnp.ndarray) -> jnp.ndarray:
     return 0.5 * (x + conjtrans(x))
 
 
-def _stabilize_covariance(
-    Q: jnp.ndarray, *, jitter: jnp.ndarray, output_dtype: jnp.dtype
-) -> jnp.ndarray:
-    """Hermitian-symmetrize and add jitter in float32/complex64 outputs."""
-    Q = _hermitian(Q)
-    if jnp.dtype(_kernel_complex_dtype(output_dtype)) == jnp.dtype(jnp.complex64):
-        Q = Q + jnp.eye(Q.shape[-1], dtype=Q.dtype) * jitter
-    return Q
+def _stabilize_covariance(Q: jnp.ndarray) -> jnp.ndarray:
+    """Return the Hermitian part of a derived covariance block.
+
+    Numerical regularization belongs on the stationary covariance before
+    solves and conditional-covariance subtraction. Adding a correction after
+    deriving ``Q`` would hide cancellation and break the covariance identity.
+    """
+    return _hermitian(Q)
 
 # TODO: see sympy2jax, equinox
 # NOTE: cos(x) = (exp(j * x) + exp(-j * x)) / 2 = Real[exp(j * x)]
+
+
+def _validate_order(order) -> int:
+    """Validate static state-space order metadata."""
+    if not isinstance(order, (int, np.integer)) or isinstance(order, bool):
+        raise TypeError(f"Matérn order must be a static integer, got {order!r}")
+    order = int(order)
+    if order < 0:
+        raise ValueError(f"Matérn order must be non-negative, got {order}")
+    return order
+
+
+def _validate_scalar_parameters(sigma, rho, omega, s=0.0):
+    """Validate scalar kernel parameters at the object/API boundary."""
+    values = {"sigma": sigma, "rho": rho, "omega": omega, "s": s}
+    for name, value in values.items():
+        array = np.asarray(value)
+        if array.ndim != 0 or not np.isfinite(array):
+            raise ValueError(f"{name} must be a finite scalar, got {value!r}")
+    if float(np.asarray(rho)) <= 0:
+        raise ValueError(f"rho must be positive, got {rho!r}")
+    if float(np.asarray(s)) < 0:
+        raise ValueError(f"s must be non-negative, got {s!r}")
 
 
 def matern(tau: float, *, rho: float, order: int):
@@ -83,9 +107,17 @@ def matern(tau: float, *, rho: float, order: int):
     Array
         Matérn covariance with value one at zero lag.
     """
-    if order < 0:
-        raise ValueError(f"Matérn order must be non-negative, got {order}")
-
+    order = _validate_order(order)
+    try:
+        rho_array = np.asarray(rho)
+    except (TypeError, ValueError):
+        rho_array = None
+    if rho_array is not None and (
+        rho_array.ndim != 0
+        or not np.isfinite(rho_array)
+        or float(rho_array) <= 0
+    ):
+        raise ValueError(f"rho must be positive and finite, got {rho!r}")
     d = jnp.abs(tau)
     x = d / rho
     prefactor = factorial(order) / factorial(2 * order)
@@ -199,23 +231,54 @@ class _Dynamics(NamedTuple):
     backward_noise: jnp.ndarray
 
 
-def _dynamics_from_covariances(K0, Kt, *, output_dtype):
-    """Derive stabilized forward/backward dynamics from covariance blocks."""
-    forward = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))
-    forward_noise = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))
-    backward = conjtrans(jnp.linalg.solve(conjtrans(K0), Kt))
-    backward_noise = K0 - conjtrans(Kt) @ jnp.linalg.solve(K0, Kt)
-    forward_noise = _stabilize_covariance(
-        forward_noise,
-        jitter=jnp.asarray(EPS, dtype=forward_noise.dtype),
-        output_dtype=output_dtype,
+def _adaptive_cholesky(K0, *, jitter):
+    """Factor a stationary covariance, escalating only when necessary.
+
+    The candidate ladder is fixed so this helper remains compatible with JAX
+    transformations. The first candidate is the requested covariance; later
+    candidates add machine-scale multiples of the stationary diagonal scale.
+    A failed ladder returns the final factor, whose non-finite entries make
+    the failure visible to downstream numerical checks rather than clipping a
+    derived process-noise matrix.
+    """
+    K0 = _hermitian(K0)
+    dtype = K0.real.dtype
+    diagonal_scale = jnp.maximum(jnp.max(jnp.abs(jnp.real(jnp.diag(K0)))), 1.0)
+    base = jnp.asarray(jitter, dtype=dtype)
+    machine = jnp.finfo(dtype).eps * diagonal_scale
+    candidates = jnp.concatenate(
+        [
+            base[None],
+            base + machine * (10.0 ** jnp.arange(5, dtype=dtype)),
+        ]
     )
-    backward_noise = _stabilize_covariance(
-        backward_noise,
-        jitter=jnp.asarray(EPS, dtype=backward_noise.dtype),
-        output_dtype=output_dtype,
+    eye = jnp.eye(K0.shape[-1], dtype=K0.dtype)
+    factors = jnp.stack(
+        [jnp.linalg.cholesky(K0 + candidate * eye) for candidate in candidates]
     )
-    return _Dynamics(forward, forward_noise, backward, backward_noise)
+    valid = jnp.all(jnp.isfinite(factors), axis=(1, 2))
+    selected = jnp.argmax(valid)
+    # If every candidate failed, use the last factor so NaNs propagate and the
+    # caller can diagnose the invalid covariance; never eigenvalue-clip here.
+    selected = jnp.where(jnp.any(valid), selected, len(candidates) - 1)
+    return factors[selected], K0 + candidates[selected] * eye
+
+
+def _dynamics_from_covariances(K0, Kt, *, jitter=0.0):
+    """Derive dynamics using a Cholesky solve and conditional covariance."""
+    K0 = _hermitian(K0)
+    chol, K0 = _adaptive_cholesky(K0, jitter=jitter)
+    solve_K0 = lambda rhs: jsp.linalg.cho_solve((chol, True), rhs)
+    forward = conjtrans(solve_K0(conjtrans(Kt)))
+    forward_noise = K0 - Kt @ solve_K0(conjtrans(Kt))
+    backward = conjtrans(solve_K0(Kt))
+    backward_noise = K0 - conjtrans(Kt) @ solve_K0(Kt)
+    return _Dynamics(
+        forward,
+        _stabilize_covariance(forward_noise),
+        backward,
+        _stabilize_covariance(backward_noise),
+    )
 
 
 @dataclass
@@ -247,6 +310,10 @@ class HidaMatern:
     omega: float = 0.0
     order: int = 0
     s: float = 1e-5
+
+    def __post_init__(self):
+        self.order = _validate_order(self.order)
+        _validate_scalar_parameters(self.sigma, self.rho, self.omega, self.s)
 
     def cov(self, tau=0.0):
         raise NotImplementedError
@@ -283,7 +350,13 @@ class HidaMatern:
         Returns
         -------
         Array
-            Complex state covariance for the requested lag.
+            Complex state covariance for the requested scalar lag.
+
+        Notes
+        -----
+        ``s`` is an instantaneous state-space component: it is added to the
+        stationary block at zero lag and is absent from positive-lag
+        cross-covariances.
         """
         compute_dtype = compute_dtype or _kernel_compute_dtype()
         output_dtype = output_dtype or _kernel_output_dtype(
@@ -292,6 +365,8 @@ class HidaMatern:
         tau_c, sigma_c, rho_c, omega_c, s_c = _cast_kernel_inputs(
             compute_dtype, tau, self.sigma, self.rho, self.omega, self.s
         )
+        if tau_c.ndim != 0:
+            raise ValueError(f"state covariance tau must be scalar, got shape {tau_c.shape}")
 
         params = {
             "sigma": sigma_c,
@@ -305,7 +380,8 @@ class HidaMatern:
             compute_dtype=compute_dtype,
             output_dtype=compute_dtype,
         )
-        K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
+        zero_lag = jnp.equal(tau_c, 0.0)
+        K = K + jnp.eye(self.nple, dtype=K.dtype) * jnp.where(zero_lag, s_c, 0.0)
         return K.astype(_kernel_complex_dtype(output_dtype))
 
     @property
@@ -313,15 +389,17 @@ class HidaMatern:
         return self.order + 1
 
     def state_scale(self):
-        """Return the diagonal correlation scaling for the stabilized state.
+        """Return diagonal correlation scaling for the stabilized state.
 
         The scaling is ``D_ii = 1 / sqrt(real(K_ii(0)))``. The configured
-        jitter is included because the same stabilized stationary covariance
-        is used by the state-space solves. Applying ``D`` on both sides
-        normalizes each state to unit marginal variance.
+        instantaneous component is included because the same stationary
+        covariance is used by the state-space solves.
         """
         K0 = self.K(0.0)
-        return 1.0 / jnp.sqrt(jnp.real(jnp.diag(K0)))
+        diagonal = jnp.real(jnp.diag(K0))
+        if not bool(jnp.all(jnp.isfinite(diagonal) & (diagonal > 0))):
+            raise ValueError("stationary state covariance has invalid diagonal")
+        return 1.0 / jnp.sqrt(diagonal)
 
     def Af(self, tau):
         """Forward dynamics transition.
@@ -440,6 +518,7 @@ def Ks(kernelparam, tau, *, compute_dtype: jnp.dtype | None = None, output_dtype
         Complex state covariance block.
     """
     sigma, rho, omega, order = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
+    order = _validate_order(order)
     compute_dtype = compute_dtype or _kernel_compute_dtype()
     output_dtype = output_dtype or _kernel_output_dtype(tau, sigma, rho, omega)
     tau_c, sigma_c, rho_c, omega_c = _cast_kernel_inputs(
@@ -469,26 +548,64 @@ def Ks(kernelparam, tau, *, compute_dtype: jnp.dtype | None = None, output_dtype
     return K.astype(_kernel_complex_dtype(output_dtype))
 
 
+def make_Ks(order: int):
+    """Create a JAX-compatible raw kernel function with static ``order``.
+
+    ``order`` determines the returned matrix shape and is therefore closed
+    over when tracing. The returned function accepts a mapping containing only
+    numerical ``sigma``, ``rho``, and ``omega`` leaves.
+    """
+    order = _validate_order(order)
+
+    def kernel(kernelparam, tau, *, compute_dtype=None, output_dtype=None):
+        params = {
+            "sigma": kernelparam["sigma"],
+            "rho": kernelparam["rho"],
+            "omega": kernelparam["omega"],
+            "order": order,
+        }
+        return Ks(
+            params,
+            tau,
+            compute_dtype=compute_dtype,
+            output_dtype=output_dtype,
+        )
+
+    return kernel
+
+
 def _stabilized_state_covariance(kernelparam, tau, *, jitter, compute_dtype):
-    """Return a state covariance with explicit numerical jitter."""
+    """Return raw covariance plus instantaneous jitter at zero lag."""
     K = Ks(kernelparam, tau, compute_dtype=compute_dtype, output_dtype=compute_dtype)
-    return K + jnp.eye(K.shape[-1], dtype=K.dtype) * jnp.asarray(
-        jitter, dtype=K.real.dtype
+    zero_lag = jnp.equal(jnp.asarray(tau), 0.0)
+    return K + jnp.eye(K.shape[-1], dtype=K.dtype) * jnp.where(
+        zero_lag, jnp.asarray(jitter, dtype=K.real.dtype), 0.0
     )
 
 
-def _dynamics(kernelparam, tau, *, jitter=0.0):
-    """Return dynamics from explicitly stabilized covariance blocks."""
-    sigma, rho, omega, _ = itemgetter("sigma", "rho", "omega", "order")(kernelparam)
-    compute_dtype = _kernel_compute_dtype()
-    output_dtype = _kernel_output_dtype(tau, sigma, rho, omega, jitter)
-    Kt = _stabilized_state_covariance(
-        kernelparam, tau, jitter=jitter, compute_dtype=compute_dtype
-    )
+def _raw_dynamics_covariances(kernelparam, tau, *, jitter, compute_dtype):
+    """Build the stationary and positive-lag blocks for state dynamics."""
     K0 = _stabilized_state_covariance(
         kernelparam, 0.0, jitter=jitter, compute_dtype=compute_dtype
     )
-    return _dynamics_from_covariances(K0, Kt, output_dtype=output_dtype)
+    Kt_raw = Ks(
+        kernelparam, tau, compute_dtype=compute_dtype, output_dtype=compute_dtype
+    )
+    # A zero-step transition is the identity with zero process noise. For
+    # positive lags, retain the raw cross-covariance so an instantaneous
+    # component has no temporal cross-covariance.
+    zero_lag = jnp.equal(jnp.asarray(tau), 0.0)
+    Kt = jnp.where(zero_lag, K0, Kt_raw)
+    return K0, Kt
+
+
+def _dynamics(kernelparam, tau, *, jitter=0.0):
+    """Return dynamics from a jittered stationary and raw lag block."""
+    compute_dtype = _kernel_compute_dtype()
+    K0, Kt = _raw_dynamics_covariances(
+        kernelparam, tau, jitter=jitter, compute_dtype=compute_dtype
+    )
+    return _dynamics_from_covariances(K0, Kt)
 
 
 def Af(kernelparam, tau, *, jitter=0.0):

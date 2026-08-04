@@ -2,16 +2,18 @@ from collections.abc import Callable
 from functools import partial
 
 import jax
-from jax import Array, numpy as jnp, scipy as jsp
 import optax
 import optax.tree_utils as otu
+from jax import Array
+from jax import numpy as jnp
+from jax import scipy as jsp
 from rich.progress import (
     MofNCompleteColumn,
     Progress,
+    SpinnerColumn,
     TextColumn,
     TimeElapsedColumn,
     TimeRemainingColumn,
-    SpinnerColumn,
 )
 
 EPS = 1e-6
@@ -62,7 +64,7 @@ def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
         return (iter_num == 0) | ((iter_num < max_iter) & (err > tol))
 
     init_carry = (init_params, opt.init(init_params))
-    final_params, final_state = jax.lax.while_loop(
+    final_params, _ = jax.lax.while_loop(
         continuing_criterion, step, init_carry
     )
 
@@ -368,7 +370,7 @@ def training_progress():
         TimeRemainingColumn(),
         TextColumn("•"),
         "Negative ELL",
-        TextColumn("{task.fields[nell]:.3f}"),
+        TextColumn("{task.fields[nell_display]}"),
     )
 
 

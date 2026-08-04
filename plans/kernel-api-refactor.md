@@ -8,11 +8,14 @@ the current numerical behavior.
 
 ## Plan status
 
-The plan is ready for staged implementation after the existing API/dispatch
-refactor. Phases 1–2 are substantially implemented; the remaining work is
-primarily covariance semantics, solver stabilization, validation, and
-regression coverage. Do not treat the plan's later phases as prerequisites for
-using the current low-order x64 CVHM path.
+The plan is in progress. Phases 1–2 are implemented. The stabilization
+stage has now implemented zero-lag instantaneous jitter semantics,
+Cholesky-based stationary solves with a bounded machine-scale fallback ladder,
+static-order `make_Ks`, parameter validation, generator dtype handling, and
+focused regression coverage. Remaining work is deciding whether
+high-order/float32 workloads justify the optional square-root path.
+Do not treat the later phases as prerequisites for the current low-order x64
+CVHM path.
 
 ## Design decision
 
@@ -83,6 +86,7 @@ dispatch point.
 6. **Object convenience API**
    - `HidaMatern.K` delegates to `Ks` and applies explicit object-level
      instantaneous jitter only when `tau == 0`.
+   - `make_Ks(order)` closes over static matrix-shape metadata for JAX use.
    - Class dynamics methods delegate to shared functional dynamics.
    - No class-level order-specific branches.
 
@@ -128,10 +132,11 @@ semantics:
 - Route functional `Af/Qf/Ab/Qb` through raw `Ks` and this helper.
 - Route class dynamics methods through the functional helpers.
 - Keep raw covariance and stabilized covariance as explicit layers.
-- Implement the instantaneous-component convention explicitly: add `s I` to
+- Implemented the instantaneous-component convention explicitly: add `s I` to
   the stationary block used for `K0`, but do not add it to positive-lag
-  cross-covariance `Kt`. Test zero lag, positive lag, forward dynamics, and
-  backward dynamics separately.
+  cross-covariance `Kt`; zero-step dynamics use `Kt=K0` and therefore have
+  identity transition and zero process noise. Tests cover zero lag, positive
+  lag, forward dynamics, and backward dynamics.
 - Keep the raw functional API JAX-safe by making the zero-lag/stationary
   choice explicit in the dynamics helper; do not rely on a Python `tau == 0`
   branch for traced values. `HidaMatern.K(0)` may expose the convenient object
@@ -140,11 +145,10 @@ semantics:
 - Preserve `s=1e-5` as the conservative default while documenting that it is
   part of the covariance model and also improves numerical conditioning.
 - Hermitian-symmetrize covariance inputs and derived process-noise blocks.
-- Replace generic inverse-like operations with Cholesky solves whenever the
-  stationary block is positive definite. Define adaptive fallback behavior in
-  JAX terms (finite Cholesky diagnostics plus a fixed jitter ladder or
-  `lax.while_loop`); a jitted Cholesky will not reliably raise a Python
-  exception. Do not silently apply large jitter or eigenvalue clipping.
+- Implemented Cholesky solves for stationary blocks and a fixed six-candidate
+  machine-scale jitter ladder selected by finite-factor diagnostics. The
+  fallback does not eigenvalue-clip derived process noise; exhausted failure
+  propagates non-finite factors for explicit downstream diagnosis.
 - Apply stabilization before consequential solves and covariance subtraction,
   not by adding a correction after a derived process-noise matrix.
 - Preserve raw versus stabilized paths as separately testable policies.
@@ -159,6 +163,10 @@ semantics:
 
 ### Phase 5 — Consolidate CVHM dynamics preparation
 
+Status: implemented for `fit`: CVHM prepares one scaled dynamics bundle and
+reuses the assembled matrices through filtering. The public matrix accessors
+remain independently callable and prepare their own bundle.
+
 - Prepare one scaled dynamics bundle per kernel for the configured time step.
 - Reuse it across `CVHM.Af`, `Qf`, `Ab`, `Qb`, `Q0`, and `latent_mask` where
   semantics permit.
@@ -172,6 +180,12 @@ semantics:
   eigenvalue clipping in the default CVHM path.
 
 ### Phase 6 — Validation, dtype boundaries, and fallback paths
+
+Status: implemented for the current covariance-form scope. Static order and
+scalar-parameter validation, `make_Ks`, generator output dtype selection, and
+x64 generator regression coverage are implemented. High-order x32 symbolic
+integer-overflow handling remains a known limitation and is explicitly
+outside the current supported path.
 
 - Derive generator output dtype from input dtype instead of unconditional
   `complex128` allocation; avoid integer overflow during high-order symbolic
@@ -190,6 +204,11 @@ semantics:
   covariance-form path inadequate.
 
 ### Phase 7 — Realistic-case regression, documentation, and cleanup
+
+Status: implemented. Documentation and a reproducible slow VdP jitter
+regression are updated; full-suite evidence is recorded below. The reference
+comparison is `s=0` and `s=1e-5`, both above the benchmark floor and near
+pooled `R²=0.972`.
 
 - Run the Van der Pol example with `s=0`, `1e-8`, `1e-5`, and `1e-3` under
   x64; compare pooled R², posterior finiteness, covariance PSD, and training
@@ -243,6 +262,20 @@ The stabilization stage is complete when:
   `R²=0.9722` and shows no material regression for `s=1e-5`.
 - x64 behavior is supported and documented; x32/high-order failures or
   fallback activation are explicit diagnostics rather than silent corruption.
+
+## Current validation evidence
+
+```text
+focused kernel/CVHM/generator tests: 369 passed, 2 warnings
+benchmark (`--run-slow`): 5 passed, 4 warnings
+full suite: 443 passed, 5 skipped, 2 warnings
+VdP demo: frozen 0.9721, estimated 0.9723, variable-length 0.9721
+VdP frozen jitter comparison: s=0 -> 0.97223, s=1e-5 -> 0.97212;
+both pass the 0.96 floor and differ by about 1.1e-4
+```
+
+The optional square-root/QR path remains deferred: the x64, correlation-scaled
+covariance-form path is adequate for the current benchmark and realistic case.
 
 ## Validation commands
 
