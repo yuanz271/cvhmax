@@ -14,7 +14,7 @@ pytest.importorskip("sympy2jax", reason="kergen extra not installed")
 
 from cvhmax.kernel_generator import HidaMaternKernelGenerator, make_kernel  # noqa: E402
 from cvhmax.kernel_generator.matern import matern_poly, hida_matern_kernel  # noqa: E402
-from cvhmax.hm import HidaMatern, Ks0, Ks1, Ks  # noqa: E402
+from cvhmax.hm import HidaMatern, Ks0, Ks1, Ks2, Ks  # noqa: E402
 from cvhmax.utils import real_repr, conjtrans  # noqa: E402
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
@@ -299,7 +299,7 @@ class TestSSMProperties:
 
 
 class TestParityHandCoded:
-    """Verify generated kernels match existing Ks0 and Ks1."""
+    """Verify generated kernels match the closed-form Ks0, Ks1, and Ks2."""
 
     @pytest.mark.parametrize("sigma,rho,omega", _PARAM_GRID)
     @pytest.mark.parametrize("tau_val", [0.0, 0.1, 0.5, 1.0, 5.0])
@@ -327,6 +327,20 @@ class TestParityHandCoded:
             jnp.array(omega),
         )
         K_ref = Ks1(tau_val, sigma, rho, omega)
+        npt.assert_allclose(np.asarray(K_gen), np.asarray(K_ref), atol=ATOL_MED)
+
+    @pytest.mark.parametrize("sigma,rho,omega", _PARAM_GRID)
+    @pytest.mark.parametrize("tau_val", [0.0, 0.1, 0.5, 1.0, 5.0])
+    def test_parity_order3_Ks2(self, sigma, rho, omega, tau_val):
+        """Generated order-3 kernel must match the closed-form Ks2."""
+        gen = make_kernel(3)
+        K_gen = gen.create_K_hat(
+            jnp.array(tau_val),
+            jnp.array(sigma),
+            jnp.array(rho),
+            jnp.array(omega),
+        )
+        K_ref = Ks2(tau_val, sigma, rho, omega)
         npt.assert_allclose(np.asarray(K_gen), np.asarray(K_ref), atol=ATOL_MED)
 
 

@@ -172,7 +172,8 @@ model.fit(y, valid_y=valid_y, random_state=0)
 |---------------------|---------------|-------------|
 | 0                   | Hand-coded `Ks0` | 1 x 1    |
 | 1                   | Hand-coded `Ks1` | 2 x 2    |
-| >= 2                | `kernel_generator.make_kernel(order + 1)` | (order+1) x (order+1) |
+| 2                   | Hand-coded `Ks2` | 3 x 3    |
+| >= 3                | `kernel_generator.make_kernel(order + 1)` | (order+1) x (order+1) |
 
 The dict-based `Ks(kernelparam, tau)` function follows the same rules.
 

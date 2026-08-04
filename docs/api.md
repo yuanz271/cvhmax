@@ -46,7 +46,9 @@ Source: `src/cvhmax/cvhm.py`
 
 ## Kernels
 
-- `HidaMatern`: kernel with `Af/Qf/Ab/Qb` and `K(tau)`
+- `HidaMatern`: scalar `kernel(tau)` plus `Af/Qf/Ab/Qb` and state block
+  `K(tau)`. Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) use
+  built-in closed-form blocks; higher orders require the `kergen` extra.
 
 Source: `src/cvhmax/hm.py`
 

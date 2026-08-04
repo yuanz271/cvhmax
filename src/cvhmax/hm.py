@@ -7,9 +7,10 @@ Hida-Matern Kernel
 # 3/2 -> p=1
 # 5/2 -> p=2
 # etc.
-from operator import itemgetter
 from dataclasses import dataclass
 from functools import partial
+from math import factorial
+from operator import itemgetter
 from typing import Dict
 
 import jax
@@ -63,23 +64,39 @@ def _stabilize_covariance(
 
 
 def matern(tau: float, *, rho: float, order: int):
-    """Evaluate the Matérn kernel with the requested smoothness.
+    """Evaluate a half-integer Matérn kernel with unit amplitude.
+
+    ``order=p`` corresponds to Matérn smoothness ``nu=p+1/2``. The
+    half-integer Matérn family has a closed form in ``d=abs(tau)``.
 
     Parameters
     ----------
-    tau : float
+    tau : float or Array
         Time lag at which the kernel is evaluated.
     rho : float
         Length scale of the kernel.
     order : int
-        Smoothness order corresponding to the Matérn parameter.
+        Non-negative integer smoothness index ``p``.
 
-    Raises
-    ------
-    NotImplementedError
-        Raised while the general Matérn evaluator is pending implementation.
+    Returns
+    -------
+    Array
+        Matérn covariance with value one at zero lag.
     """
-    raise NotImplementedError("General Matérn kernel evaluation is not implemented.")
+    if order < 0:
+        raise ValueError(f"Matérn order must be non-negative, got {order}")
+
+    d = jnp.abs(tau)
+    x = d / rho
+    prefactor = factorial(order) / factorial(2 * order)
+    decay = jnp.exp(-jnp.sqrt(2 * order + 1) * x)
+    polynomial = sum(
+        factorial(order + i)
+        / (factorial(i) * factorial(order - i))
+        * (jnp.sqrt(8 * order + 4) * x) ** (order - i)
+        for i in range(order + 1)
+    )
+    return prefactor * decay * polynomial
 
 
 def hm(tau: float, *, sigma: float, rho: float, order: int, omega: float):
@@ -101,7 +118,7 @@ def hm(tau: float, *, sigma: float, rho: float, order: int, omega: float):
     Returns
     -------
     Array
-        Complex-valued covariance for the requested lag.
+        Real-valued covariance for the requested lag.
     """
     # cos(t) == cos(-t)
     return sigma**2 * jnp.cos(omega * tau) * matern(tau, rho=rho, order=order)
@@ -182,6 +199,48 @@ def Ks1(tau, sigma, rho, omega):
     )
 
 
+def Ks2(tau, sigma, rho, omega):
+    """State-space kernel matrix for the 5/2-order HM kernel.
+
+    This is the closed-form three-state covariance block for the
+    Matérn-5/2 kernel modulated by ``exp(1j * omega * tau)``.  The
+    derivatives are evaluated on the positive-lag branch, with ``abs(tau)``
+    matching the convention used by :func:`Ks0` and :func:`Ks1`.
+    """
+    d = jnp.abs(tau)
+    a = jnp.sqrt(5.0) / rho
+    b = 5.0 / (3.0 * rho**2)
+    lam = 1.0j * omega - a
+    polynomial = 1.0 + a * d + b * d**2
+    exponential = jnp.exp(lam * d)
+
+    # k^(n)(d) / sigma^2 for n = 0, ..., 4, where
+    # k(d) = sigma^2 * (1 + a*d + b*d^2) * exp((i*omega-a)*d).
+    k0 = exponential * polynomial
+    k1 = exponential * (lam * polynomial + a + 2.0 * b * d)
+    k2 = exponential * (
+        lam**2 * polynomial + 2.0 * lam * (a + 2.0 * b * d) + 2.0 * b
+    )
+    k3 = exponential * (
+        lam**3 * polynomial
+        + 3.0 * lam**2 * (a + 2.0 * b * d)
+        + 6.0 * lam * b
+    )
+    k4 = exponential * (
+        lam**4 * polynomial
+        + 4.0 * lam**3 * (a + 2.0 * b * d)
+        + 12.0 * lam**2 * b
+    )
+
+    return sigma**2 * jnp.array(
+        [
+            [k0, -k1, k2],
+            [k1, -k2, k3],
+            [k2, -k3, k4],
+        ]
+    )
+
+
 @dataclass
 class HidaMatern:
     """Hida-Matern kernel parameterised as a linear Gaussian SSM.
@@ -201,8 +260,9 @@ class HidaMatern:
 
     Notes
     -----
-    Only select orders are implemented. The current `K(tau)` implementation
-    supports order 0; other orders raise `NotImplementedError`.
+    Orders 0, 1, and 2 use closed-form covariance blocks for the
+    Matérn-1/2, Matérn-3/2, and Matérn-5/2 kernels. Higher orders use the
+    optional symbolic kernel generator.
     """
 
     sigma: float = 1.0
@@ -213,6 +273,23 @@ class HidaMatern:
 
     def cov(self, tau=0.0):
         raise NotImplementedError
+
+    def kernel(self, tau=0.0):
+        """Evaluate the scalar, jitter-free Hida–Matérn covariance.
+
+        The returned real-valued covariance is
+        ``sigma**2 * matern(tau, rho=rho, order=order) * cos(omega*tau)``.
+        Unlike :meth:`K`, this method returns only the function-level kernel;
+        it does not include derivative-state entries or numerical jitter.
+        ``tau`` may be a scalar or an array.
+        """
+        return hm(
+            tau,
+            sigma=self.sigma,
+            rho=self.rho,
+            order=self.order,
+            omega=self.omega,
+        )
 
     def K(self, tau=0.0, *, compute_dtype: jnp.dtype | None = None, output_dtype: jnp.dtype | None = None):
         """Return the state-space covariance block at lag ``tau``.
@@ -241,30 +318,34 @@ class HidaMatern:
 
         # TODO: confusing with covariance matrix
         # somehow not decorable by cache or cached_property
-        if self.order == 0:
-            K = Ks0(tau_c, sigma_c, rho_c, omega_c)
-            K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
-        elif self.order == 1:
-            K = Ks1(tau_c, sigma_c, rho_c, omega_c)
-            K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
-        else:
-            try:
-                from .kernel_generator import make_kernel
-            except ImportError:
-                raise ImportError(
-                    "Orders >= 2 require the kergen extra. "
-                    "Install with:  pip install cvhmax[kergen]"
-                ) from None
+        match self.order:
+            case 0:
+                K = Ks0(tau_c, sigma_c, rho_c, omega_c)
+                K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
+            case 1:
+                K = Ks1(tau_c, sigma_c, rho_c, omega_c)
+                K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
+            case 2:
+                K = Ks2(tau_c, sigma_c, rho_c, omega_c)
+                K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
+            case _:
+                try:
+                    from .kernel_generator import make_kernel
+                except ImportError:
+                    raise ImportError(
+                        "Orders >= 3 require the kergen extra. "
+                        "Install with:  pip install cvhmax[kergen]"
+                    ) from None
 
-            # Generator order M = self.order + 1 (SSM state dimension)
-            gen = make_kernel(self.nple)
-            K = gen.create_K_hat(
-                tau_c,
-                sigma_c,
-                rho_c,
-                omega_c,
-            )
-            K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
+                # Generator order M = self.order + 1 (SSM state dimension)
+                gen = make_kernel(self.nple)
+                K = gen.create_K_hat(
+                    tau_c,
+                    sigma_c,
+                    rho_c,
+                    omega_c,
+                )
+                K = K + jnp.eye(self.nple, dtype=K.dtype) * s_c
 
         return K.astype(_kernel_complex_dtype(output_dtype))
 
@@ -418,12 +499,14 @@ def Ks(kernelparam, tau, *, compute_dtype: jnp.dtype | None = None, output_dtype
         K = Ks0(tau_c, sigma_c, rho_c, omega_c)
     elif order == 1:
         K = Ks1(tau_c, sigma_c, rho_c, omega_c)
+    elif order == 2:
+        K = Ks2(tau_c, sigma_c, rho_c, omega_c)
     else:
         try:
             from .kernel_generator import make_kernel
         except ImportError:
             raise ImportError(
-                "Orders >= 2 require the kergen extra. "
+                "Orders >= 3 require the kergen extra. "
                 "Install with:  pip install cvhmax[kergen]"
             ) from None
 

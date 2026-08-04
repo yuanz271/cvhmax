@@ -11,7 +11,7 @@ import numpy.testing as npt
 import pytest
 
 from cvhmax import hm
-from cvhmax.hm import HidaMatern, spectral_density
+from cvhmax.hm import HidaMatern, matern, spectral_density
 from cvhmax.utils import real_repr, conjtrans
 
 
@@ -21,6 +21,51 @@ def test_Ks(order, expected_nple):
     spec = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": order}
     K = hm.Ks(spec, 1.0)
     assert K.shape == (expected_nple, expected_nple)
+
+
+@pytest.mark.parametrize(
+    "order,expected",
+    [
+        (0, lambda x: jnp.exp(-x)),
+        (1, lambda x: (1 + jnp.sqrt(3) * x) * jnp.exp(-jnp.sqrt(3) * x)),
+        (
+            2,
+            lambda x: (1 + jnp.sqrt(5) * x + 5 * x**2 / 3)
+            * jnp.exp(-jnp.sqrt(5) * x),
+        ),
+    ],
+)
+def test_matern_half_integer_closed_forms(order, expected):
+    x = jnp.array(0.7)
+    npt.assert_allclose(matern(x, rho=1.0, order=order), expected(x))
+
+
+def test_HidaMatern_kernel_matches_scalar_covariance():
+    model = HidaMatern(sigma=1.5, rho=0.8, omega=2.0, order=2, s=1e-2)
+    tau = jnp.array([-0.4, 0.0, 0.7])
+    expected = 1.5**2 * matern(tau, rho=0.8, order=2) * jnp.cos(2.0 * tau)
+    npt.assert_allclose(model.kernel(tau), expected)
+
+
+def test_HidaMatern_kernel_is_jitter_free_at_zero():
+    model = HidaMatern(sigma=1.5, rho=0.8, order=2, s=1e-2)
+    npt.assert_allclose(model.kernel(0.0), 1.5**2)
+
+
+def test_HidaMatern_kernel_matches_generator_real_part():
+    from cvhmax.kernel_generator import make_kernel
+
+    model = HidaMatern(sigma=1.5, rho=0.8, omega=2.0, order=3, s=1e-2)
+    tau = jnp.array([-0.4, 0.0, 0.7])
+    generated = make_kernel(4).get_base_kernel(
+        tau, jnp.array(model.sigma), jnp.array(model.rho), jnp.array(model.omega)
+    )
+    npt.assert_allclose(model.kernel(tau), generated)
+
+
+def test_matern_rejects_negative_order():
+    with pytest.raises(ValueError, match="non-negative"):
+        matern(0.0, rho=1.0, order=-1)
 
 
 def test_ssm_repr():

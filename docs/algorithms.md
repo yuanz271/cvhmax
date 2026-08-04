@@ -142,17 +142,22 @@ Source: `src/cvhmax/filtering.py`
 
 ## Hida-Matern Kernels
 
-`HidaMatern` represents Matern kernels modulated by a complex exponential
-as linear Gaussian state-space models:
+`HidaMatern.kernel(tau)` evaluates the real scalar covariance
+
+    sigma^2 * matern(abs(tau), rho, order) * cos(omega * tau)
+
+without state derivatives or jitter. `HidaMatern` also represents the same
+Matérn family as linear Gaussian state-space models modulated by a complex
+exponential:
 
     k(tau) = sigma^2 * matern(nu, tau, rho) * exp(i * omega * tau)
 
 The kernel order determines the per-kernel complex state dimension
 `nple = order + 1`.  The total state dimension is `L = 2 * sum(nple)`
 across all kernels (factor of 2 from the real-valued representation).
-Orders 0 and 1 use hand-coded closed-form expressions (`Ks0`, `Ks1`).
-Higher orders are handled by the `kernel_generator` subpackage, which
-symbolically differentiates the kernel and converts the result to JAX
+Orders 0, 1, and 2 use hand-coded closed-form expressions (`Ks0`, `Ks1`,
+`Ks2`). Higher orders are handled by the `kernel_generator` subpackage,
+which symbolically differentiates the kernel and converts the result to JAX
 functions at runtime via `sympy2jax`.
 
 ### Kernel generator internals
