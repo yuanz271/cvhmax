@@ -6,10 +6,60 @@ from jax import numpy as jnp
 from cvhmax.cvhm import CVHM, lift, project, sde2gp
 from cvhmax.hm import HidaMatern
 from cvhmax.hm import sample_matern
+from cvhmax.utils import real_repr
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
 ATOL_MED = 1e-12 if X64_ENABLED else 1e-6
+
+
+@pytest.mark.parametrize("order", [0, 1, 2])
+def test_correlation_scaling_matches_reference_transform(order):
+    kernel = HidaMatern(sigma=1.5, rho=0.8, omega=2.0, order=order, s=0.0)
+    model = CVHM(n_components=1, dt=0.5, kernels=[kernel])
+
+    scale = np.asarray(kernel.state_scale())
+    K0 = np.asarray(kernel.K(0.0))
+    expected_K0 = scale[:, None] * K0 * scale[None, :]
+    Q0 = np.asarray(model.Q0())
+
+    np.testing.assert_allclose(
+        Q0,
+        np.asarray(real_repr(expected_K0)),
+        atol=ATOL_TIGHT,
+    )
+    np.testing.assert_allclose(
+        np.diag(Q0), np.ones(2 * kernel.nple), atol=ATOL_TIGHT
+    )
+
+    # The real observation coordinate is recovered from the normalized state
+    # with the inverse function-coordinate scale.
+    np.testing.assert_allclose(
+        model.latent_mask()[0, 0], 1.0 / scale[0], atol=ATOL_TIGHT
+    )
+
+    Af = np.asarray(model.Af())
+    Qf = np.asarray(model.Qf())
+    np.testing.assert_allclose(Af @ Q0 @ Af.T + Qf, Q0, atol=ATOL_TIGHT)
+
+
+@pytest.mark.parametrize("order", list(range(9)))
+def test_scaled_dynamics_stable_for_high_orders(order):
+    """Correlation scaling keeps high-order filtering dynamics numerically valid."""
+    kernel = HidaMatern(sigma=0.5, rho=0.3, omega=10.0, order=order, s=0.0)
+    model = CVHM(n_components=1, dt=0.01, kernels=[kernel])
+
+    K0 = np.asarray(model.Q0())
+    Af = np.asarray(model.Af())
+    Qf = np.asarray(model.Qf())
+    eigvals = np.linalg.eigvalsh((Qf + Qf.T) / 2)
+    residual = Af @ K0 @ Af.T + Qf - K0
+
+    assert np.all(np.isfinite(K0))
+    assert np.all(np.isfinite(Af))
+    assert np.all(np.isfinite(Qf))
+    assert eigvals.min() >= -1e-8
+    np.testing.assert_allclose(residual, 0.0, atol=1e-7, rtol=1e-7)
 
 
 @pytest.mark.parametrize(
@@ -33,7 +83,9 @@ def test_latent_mask(orders):
     M = model.latent_mask()
 
     assert M.shape == (K, L)
-    assert jnp.all(M.sum(axis=1) == 1.0)
+    # The mask contains the inverse state-correlation scale in the observed
+    # coordinate, so its row sums are not exactly one when jitter is nonzero.
+    assert jnp.all(M.sum(axis=1) > 0.0)
     assert int(jnp.count_nonzero(M)) == K
 
     # Each kernel block gets [1, 2, ..., nple]; M selects the first element.

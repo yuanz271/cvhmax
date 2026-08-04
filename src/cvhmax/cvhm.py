@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 import secrets
 
 import jax
@@ -10,8 +10,18 @@ from jax.scipy.linalg import block_diag
 import chex
 
 from .cvi import CVI, Gaussian
-from .utils import real_repr, symm, cho_inv, training_progress, to_device
+from .utils import conjtrans, real_repr, symm, cho_inv, training_progress, to_device
 from .filtering import bifilter, information_filter
+
+
+class _ScaledDynamics(NamedTuple):
+    """Correlation-scaled state-space quantities for one kernel."""
+
+    stationary: Array
+    forward: Array
+    forward_noise: Array
+    backward: Array
+    backward_noise: Array
 
 
 @dataclass
@@ -60,15 +70,41 @@ class CVHM:
         """Resolve the CVI subclass for the requested observation model."""
         self.cvi = CVI.registry.get(self.observation, Gaussian)
 
+    def _scaled_kernel_dynamics(self, tau):
+        """Return correlation-scaled, numerically stabilized dynamics."""
+        dynamics = []
+        for kernel in self.kernels:
+            K0 = kernel.K(0.0)
+            Kt = kernel.K(tau)
+            scale = kernel.state_scale()
+            K0 = scale[:, None] * K0 * scale[None, :]
+            Kt = scale[:, None] * Kt * scale[None, :]
+            forward = conjtrans(jnp.linalg.solve(conjtrans(K0), conjtrans(Kt)))
+            forward_noise = K0 - Kt @ jnp.linalg.solve(K0, conjtrans(Kt))
+            backward = conjtrans(jnp.linalg.solve(conjtrans(K0), Kt))
+            backward_noise = K0 - conjtrans(Kt) @ jnp.linalg.solve(K0, Kt)
+            dynamics.append(
+                _ScaledDynamics(
+                    stationary=K0,
+                    forward=forward,
+                    forward_noise=forward_noise,
+                    backward=backward,
+                    backward_noise=backward_noise,
+                )
+            )
+        return dynamics
+
     def Af(self):
-        """Forward transition matrix for the latent SSM.
+        """Forward transition matrix for the normalized latent SSM.
 
         Returns
         -------
         Array
             Block-diagonal real-valued transition matrix.
         """
-        C = block_diag(*[kernel.Af(self.dt) for kernel in self.kernels])
+        C = block_diag(
+            *[dynamics.forward for dynamics in self._scaled_kernel_dynamics(self.dt)]
+        )
         return real_repr(C)
 
     def Qf(self):
@@ -79,7 +115,12 @@ class CVHM:
         Array
             Block-diagonal process noise covariance.
         """
-        C = block_diag(*[kernel.Qf(self.dt) for kernel in self.kernels])
+        C = block_diag(
+            *[
+                dynamics.forward_noise
+                for dynamics in self._scaled_kernel_dynamics(self.dt)
+            ]
+        )
         return symm(real_repr(C))
 
     def Ab(self):
@@ -90,7 +131,9 @@ class CVHM:
         Array
             Block-diagonal real-valued transition matrix.
         """
-        C = block_diag(*[kernel.Ab(self.dt) for kernel in self.kernels])
+        C = block_diag(
+            *[dynamics.backward for dynamics in self._scaled_kernel_dynamics(self.dt)]
+        )
         return real_repr(C)
 
     def Qb(self):
@@ -101,7 +144,12 @@ class CVHM:
         Array
             Block-diagonal process noise covariance.
         """
-        C = block_diag(*[kernel.Qb(self.dt) for kernel in self.kernels])
+        C = block_diag(
+            *[
+                dynamics.backward_noise
+                for dynamics in self._scaled_kernel_dynamics(self.dt)
+            ]
+        )
         return symm(real_repr(C))
 
     def Q0(self):
@@ -112,7 +160,9 @@ class CVHM:
         Array
             Block-diagonal stationary covariance.
         """
-        C = block_diag(*[kernel.K(0.0) for kernel in self.kernels])
+        C = block_diag(
+            *[dynamics.stationary for dynamics in self._scaled_kernel_dynamics(0.0)]
+        )
         return symm(real_repr(C))
 
     def latent_mask(self):
@@ -128,7 +178,10 @@ class CVHM:
         M = jnp.zeros((self.n_components, 2 * ssm_dim))
         offset = 0
         for i, kernel in enumerate(self.kernels):
-            M = M.at[i, offset].set(1.0)
+            # The normalized state is x_z = D x. Recover f(t) from the
+            # function coordinate with D^{-1}; the imaginary coordinate is
+            # not observed for the real GP.
+            M = M.at[i, offset].set(1.0 / kernel.state_scale()[0])
             offset += kernel.nple
 
         return M

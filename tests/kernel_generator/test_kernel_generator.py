@@ -12,10 +12,10 @@ import pytest
 pytest.importorskip("sympy", reason="kergen extra not installed")
 pytest.importorskip("sympy2jax", reason="kergen extra not installed")
 
-from cvhmax.kernel_generator import HidaMaternKernelGenerator, make_kernel  # noqa: E402
-from cvhmax.kernel_generator.matern import matern_poly, hida_matern_kernel  # noqa: E402
-from cvhmax.hm import HidaMatern, Ks0, Ks1, Ks2, Ks  # noqa: E402
-from cvhmax.utils import real_repr, conjtrans  # noqa: E402
+from cvhmax.hm import HidaMatern, Ks
+from cvhmax.kernel_generator import HidaMaternKernelGenerator, make_kernel
+from cvhmax.kernel_generator.matern import hida_matern_kernel, matern_poly
+from cvhmax.utils import conjtrans, real_repr
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_TIGHT = 1e-12 if X64_ENABLED else 1e-6
@@ -299,12 +299,12 @@ class TestSSMProperties:
 
 
 class TestParityHandCoded:
-    """Verify generated kernels match the closed-form Ks0, Ks1, and Ks2."""
+    """Verify generated kernels match the canonical functional API."""
 
     @pytest.mark.parametrize("sigma,rho,omega", _PARAM_GRID)
     @pytest.mark.parametrize("tau_val", [0.0, 0.1, 0.5, 1.0, 5.0])
     def test_parity_order1_Ks0(self, sigma, rho, omega, tau_val):
-        """Generated order-1 kernel must match Ks0."""
+        """Generated order-1 kernel must match the canonical order-0 API."""
         gen = make_kernel(1)
         K_gen = gen.create_K_hat(
             jnp.array(tau_val),
@@ -312,13 +312,13 @@ class TestParityHandCoded:
             jnp.array(rho),
             jnp.array(omega),
         )
-        K_ref = Ks0(tau_val, sigma, rho, omega)
+        K_ref = Ks({"sigma": sigma, "rho": rho, "omega": omega, "order": 0}, tau_val)
         npt.assert_allclose(np.asarray(K_gen), np.asarray(K_ref), atol=ATOL_TIGHT)
 
     @pytest.mark.parametrize("sigma,rho,omega", _PARAM_GRID)
     @pytest.mark.parametrize("tau_val", [0.0, 0.1, 0.5, 1.0, 5.0])
     def test_parity_order2_Ks1(self, sigma, rho, omega, tau_val):
-        """Generated order-2 kernel must match Ks1."""
+        """Generated order-2 kernel must match the canonical order-1 API."""
         gen = make_kernel(2)
         K_gen = gen.create_K_hat(
             jnp.array(tau_val),
@@ -326,13 +326,13 @@ class TestParityHandCoded:
             jnp.array(rho),
             jnp.array(omega),
         )
-        K_ref = Ks1(tau_val, sigma, rho, omega)
+        K_ref = Ks({"sigma": sigma, "rho": rho, "omega": omega, "order": 1}, tau_val)
         npt.assert_allclose(np.asarray(K_gen), np.asarray(K_ref), atol=ATOL_MED)
 
     @pytest.mark.parametrize("sigma,rho,omega", _PARAM_GRID)
     @pytest.mark.parametrize("tau_val", [0.0, 0.1, 0.5, 1.0, 5.0])
     def test_parity_order3_Ks2(self, sigma, rho, omega, tau_val):
-        """Generated order-3 kernel must match the closed-form Ks2."""
+        """Generated order-3 kernel must match the canonical order-2 API."""
         gen = make_kernel(3)
         K_gen = gen.create_K_hat(
             jnp.array(tau_val),
@@ -340,7 +340,7 @@ class TestParityHandCoded:
             jnp.array(rho),
             jnp.array(omega),
         )
-        K_ref = Ks2(tau_val, sigma, rho, omega)
+        K_ref = Ks({"sigma": sigma, "rho": rho, "omega": omega, "order": 2}, tau_val)
         npt.assert_allclose(np.asarray(K_gen), np.asarray(K_ref), atol=ATOL_MED)
 
 

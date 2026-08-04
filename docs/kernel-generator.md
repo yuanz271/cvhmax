@@ -6,9 +6,17 @@ SymPy for symbolic differentiation and `sympy2jax` to convert the
 resulting expressions into JAX functions that are compatible with
 `jax.jit`, `jax.vmap`, and `jax.grad`.
 
-Before this subpackage existed, only Matern-1/2 (`order=0`) and
-Matern-3/2 (`order=1`) were available via hand-coded expressions.
-The kernel generator removes that limitation.
+The public kernel API has two layers. `Ks(kernelparam, tau)` is the
+canonical JAX-compatible functional path; `HidaMatern.K(tau)` is a thin
+convenience wrapper that packs the dataclass fields, delegates to `Ks`, and
+applies optional object-level covariance jitter. Functional dynamics expose
+explicit `jitter=` stabilization, while class dynamics pass `HidaMatern.s`.
+The kernel generator is an internal fallback for orders without a built-in
+implementation. This separation keeps JAX transformations on pytrees while
+avoiding duplicate order dispatch.
+
+Orders 0, 1, and 2 currently use built-in closed-form implementations.
+The kernel generator removes the remaining order limitation.
 
 ## Background
 
@@ -129,9 +137,12 @@ gen = HidaMaternKernelGenerator(order=4)  # Matern-7/2
 
 ## Transparent integration with HidaMatern
 
-The existing `HidaMatern` class and the free functions `Ks`, `Af`, `Qf`,
-`Ab`, `Qb` in `hm.py` automatically dispatch to the kernel generator for
-orders >= 2. No code changes are needed in downstream callers.
+The existing `HidaMatern` class and the functional APIs in `hm.py` use one
+shared dispatch design. `Ks` is the canonical raw state-covariance path;
+`Af`, `Qf`, `Ab`, and `Qb` are functional dynamics helpers built from it.
+`HidaMatern.K` and its dynamics methods are convenience wrappers for users
+working with a configured kernel object. No order-specific dispatch should
+be duplicated in the class methods.
 
 ```python
 from cvhmax.hm import HidaMatern
@@ -168,14 +179,21 @@ model.fit(y, valid_y=valid_y, random_state=0)
 
 ### Dispatch rules
 
-| `HidaMatern.order` | Method         | Matrix size |
-|---------------------|---------------|-------------|
-| 0                   | Hand-coded `Ks0` | 1 x 1    |
-| 1                   | Hand-coded `Ks1` | 2 x 2    |
-| 2                   | Hand-coded `Ks2` | 3 x 3    |
-| >= 3                | `kernel_generator.make_kernel(order + 1)` | (order+1) x (order+1) |
+| `HidaMatern.order` | Implementation | Matrix size |
+|--------------------|----------------|-------------|
+| 0 | Built-in Matérn-1/2 state block | 1 x 1 |
+| 1 | Built-in Matérn-3/2 state block | 2 x 2 |
+| 2 | Built-in Matérn-5/2 state block | 3 x 3 |
+| >= 3 | `kernel_generator.make_kernel(order + 1)` | (order+1) x (order+1) |
 
-The dict-based `Ks(kernelparam, tau)` function follows the same rules.
+`Ks(kernelparam, tau)` is the single raw functional entry point. The class
+method `HidaMatern.K(tau)` delegates to it and may add the object's diagonal
+jitter. Functional dynamics accept explicit `jitter=` and class dynamics pass
+`HidaMatern.s`; this stabilization is needed because process-noise subtraction
+and covariance solves can be ill-conditioned at small lags and high orders.
+The built-in implementations are internal dispatch targets rather than
+separate user-facing APIs. Future optimized orders should be registered in
+one dispatcher and share generic derivative/state assembly where possible.
 
 ## Using the generator directly
 
@@ -192,7 +210,7 @@ rho   = jnp.array(1.0)
 omega = jnp.array(0.0)
 
 K = gen.create_K_hat(tau, sigma, rho, omega)
-# shape: (2, 2), dtype: complex128
+# shape: (2, 2), complex dtype (float32/float64 family follows JAX settings)
 ```
 
 At `tau = 0` the matrix is the stationary covariance `K(0)`, which is

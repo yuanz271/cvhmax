@@ -146,20 +146,63 @@ Source: `src/cvhmax/filtering.py`
 
     sigma^2 * matern(abs(tau), rho, order) * cos(omega * tau)
 
-without state derivatives or jitter. `HidaMatern` also represents the same
-Matérn family as linear Gaussian state-space models modulated by a complex
-exponential:
+without state derivatives or jitter. The state-space implementation uses the
+related complex auxiliary kernel
 
-    k(tau) = sigma^2 * matern(nu, tau, rho) * exp(i * omega * tau)
+    k_z(tau) = sigma^2 * matern(abs(tau), rho, order) * exp(i * omega * abs(tau))
+
+and recovers the real process through `Re(k_z)`. This is an exact
+representation of the real oscillatory covariance, since
+`cos(omega * tau) = Re(exp(i * omega * tau))`.
+
+The complex form is not an assumption that the observed GP is complex. It is
+a compact realization of the two conjugate spectral components centered at
+`+omega` and `-omega`. A direct real realization carries both components
+explicitly, whereas one complex state represents the pair. The number of
+real degrees of freedom is unchanged: one complex state corresponds to two
+real states. In this repository, `real_repr` converts the complex state
+matrices to an equivalent real block representation for real-valued filtering.
+
+The numerical benefit comes from the resulting algebraic structure and from
+state scaling, rather than from complex arithmetic by itself. The covariance
+blocks are Hermitian and obey conjugate-symmetry constraints, which avoids
+redundant calculations and enables structure-preserving operations. The paper
+also proposes a correlation transform that normalizes derivative states using
+the stationary variances, reducing the condition number of `K(0)` before
+filtering. Without this scaling, high-order derivative covariance matrices can
+be badly conditioned even in the complex representation. `CVHM` applies this transform when constructing its filtering dynamics and
+stationary prior. The standalone `HidaMatern.Af/Qf/Ab/Qb/K` methods remain
+unscaled so they continue to expose the raw kernel state coordinates.
 
 The kernel order determines the per-kernel complex state dimension
-`nple = order + 1`.  The total state dimension is `L = 2 * sum(nple)`
+`nple = order + 1`. The total state dimension is `L = 2 * sum(nple)`
 across all kernels (factor of 2 from the real-valued representation).
-Orders 0, 1, and 2 use hand-coded closed-form expressions (`Ks0`, `Ks1`,
-`Ks2`). Higher orders are handled by the `kernel_generator` subpackage,
-which symbolically differentiates the kernel and converts the result to JAX
-functions at runtime via `sympy2jax`.
 
+The kernel API has two layers with deliberately different roles:
+
+- `Ks(kernelparam, tau)` is the canonical JAX functional path. Its mapping
+  parameter container is a pytree, so it is suitable for `jax.jit`, `jax.vmap`,
+  and `jax.scan`. It returns the raw complex state covariance.
+- `HidaMatern.K(tau)` is a convenience wrapper. It packs the dataclass fields,
+  delegates to `Ks`, and adds the object's optional diagonal covariance jitter
+  `s`. It contains no order-specific mathematical dispatch. With `s=0`, it
+  agrees with `Ks` up to dtype.
+- Functional dynamics accept explicit `jitter=`. The class dynamics methods
+  pass `HidaMatern.s` because covariance subtraction and matrix solves can be
+  numerically singular even when the raw covariance is mathematically valid.
+  Correlation scaling remains the primary high-order conditioning mechanism.
+
+Orders 0, 1, and 2 use built-in closed-form implementations. Higher orders are
+handled by the `kernel_generator` subpackage, which symbolically differentiates
+the kernel and converts the result to JAX functions at runtime via `sympy2jax`.
+The implementation should maintain one internal raw-covariance dispatcher;
+future optimized orders should register there rather than add branches to both
+public APIs. The long-term organization is to share derivative/state assembly
+across orders and reserve hand-coded code for order-specific polynomial data.
+
+This representation follows Dowling, Sokół, and Park, “Hida–Matérn Kernel,”
+arXiv:2107.07098, especially the complex decomposition and state-space
+construction in Eqs. 25–31 and the conditioning discussion in Section 6.
 ### Kernel generator internals
 
 For an order-M kernel, the generator:

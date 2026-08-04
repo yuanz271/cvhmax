@@ -52,6 +52,27 @@ def test_HidaMatern_kernel_is_jitter_free_at_zero():
     npt.assert_allclose(model.kernel(0.0), 1.5**2)
 
 
+def test_Ks_is_raw_and_HidaMatern_K_is_stabilized():
+    params = {"sigma": 1.5, "rho": 0.8, "omega": 2.0, "order": 2}
+    model = HidaMatern(**params, s=1e-3)
+    raw = np.asarray(hm.Ks(params, 0.4))
+    stabilized = np.asarray(model.K(0.4))
+    expected = raw + 1e-3 * np.eye(model.nple)
+    npt.assert_allclose(stabilized, expected, atol=1e-12)
+
+
+def test_dynamics_jitter_is_explicit_and_effective():
+    params = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 2}
+    raw = np.asarray(hm.Qf(params, 1e-3, jitter=0.0))
+    stabilized = np.asarray(hm.Qf(params, 1e-3, jitter=1e-5))
+    assert np.max(np.abs(raw - stabilized)) > 1e-10
+    npt.assert_allclose(
+        stabilized,
+        np.asarray(HidaMatern(**params, s=1e-5).Qf(1e-3)),
+        atol=1e-12,
+    )
+
+
 def test_HidaMatern_kernel_matches_generator_real_part():
     from cvhmax.kernel_generator import make_kernel
 
@@ -233,7 +254,9 @@ def test_kernel_precision_parity_x64_toggle():
     for key in ("K0", "A", "Q"):
         arr_f32 = _unpack_complex(payload_f32[key])
         arr_f64 = _unpack_complex(payload_f64[key])
-        npt.assert_allclose(arr_f32, arr_f64, rtol=5e-4, atol=2e-6)
+        # Raw dynamics no longer include user jitter ``s``. Float32 covariance
+        # subtraction at very small lags can differ from x64 by a few ulps.
+        npt.assert_allclose(arr_f32, arr_f64, rtol=5e-4, atol=3e-6)
 
 
 def test_kernel_precision_parity_inputs():

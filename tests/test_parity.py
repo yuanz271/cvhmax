@@ -20,11 +20,11 @@ X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_PARITY = 1e-10 if X64_ENABLED else 5e-6
 RTOL_PARITY = 1e-8 if X64_ENABLED else 1e-5
 
-from cvhmax.hm import HidaMatern, Ks0, Ks1, spectral_density
+from cvhmax.hm import HidaMatern, Ks, spectral_density
 from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
 from cvhmax.utils import real_repr, symm, conjtrans, gamma, trial_info_repr
 from cvhmax.filtering import predict, information_filter, bifilter
-from cvhmax.cvi import poisson_cvi_bin_stats
+from cvhmax.cvi import TAU, poisson_cvi_bin_stats
 
 
 def _torch_and_ref_available():
@@ -114,7 +114,7 @@ class TestKernelParity:
             K_ref = create_K_hat(torch.tensor(tau, dtype=torch.complex128), **kwargs)
             K_ref_np = K_ref.detach().cpu().numpy()
 
-            K_jax = np.asarray(Ks0(tau, sigma, rho, omega))
+            K_jax = np.asarray(Ks({"sigma": sigma, "rho": rho, "omega": omega, "order": 0}, tau))
 
             npt.assert_allclose(
                 K_jax,
@@ -505,7 +505,7 @@ class TestKernelParityOrder1:
             K_ref = create_K_hat(torch.tensor(tau, dtype=torch.complex128), **kwargs)
             K_ref_np = K_ref.detach().cpu().numpy()
 
-            K_jax = np.asarray(Ks1(tau, sigma, rho, omega))
+            K_jax = np.asarray(Ks({"sigma": sigma, "rho": rho, "omega": omega, "order": 1}, tau))
 
             npt.assert_allclose(
                 K_jax,
@@ -708,6 +708,7 @@ def test_poisson_cvi_bin_stats_convention():
 
     # --- reference: m = J^{-1} h, V = J^{-1} ---
     J_t = torch.tensor(Z_np, dtype=torch.float64)
+    J_t = J_t + TAU * torch.eye(state_dim, dtype=torch.float64)
     J_chol = torch.linalg.cholesky(J_t)
     m_ref = torch.linalg.solve(J_t, torch.tensor(z_np, dtype=torch.float64))
     C_t = torch.tensor(H_np, dtype=torch.float64)

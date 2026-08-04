@@ -46,9 +46,24 @@ Source: `src/cvhmax/cvhm.py`
 
 ## Kernels
 
-- `HidaMatern`: scalar `kernel(tau)` plus `Af/Qf/Ab/Qb` and state block
-  `K(tau)`. Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) use
-  built-in closed-form blocks; higher orders require the `kergen` extra.
+- `HidaMatern`: user-facing parameter container with scalar `kernel(tau)`,
+  state block `K(tau)`, and `Af/Qf/Ab/Qb` convenience methods.
+- `Ks(kernelparam, tau)`: canonical JAX-compatible functional API for the
+  raw, jitter-free complex state covariance. Dictionary parameter containers
+  are pytrees and can be passed through `jax.jit`, `jax.vmap`, and `jax.scan`.
+- `matern(tau, rho=..., order=...)` and `hm(tau, sigma=..., rho=...,
+  order=..., omega=...)`: scalar real-valued covariance helpers.
+
+`HidaMatern.K(tau)` is a thin wrapper around `Ks`: it packs the object fields
+and applies the object's optional diagonal jitter `s`. It contains no
+order-specific dispatch. With `s=0`, it agrees with `Ks` up to dtype.
+The functional dynamics helpers accept an explicit `jitter=` argument;
+`HidaMatern.Af/Qf/Ab/Qb` pass the object's `s` to stabilize consequential
+linear-algebra operations. The raw state covariance is positive-lag oriented;
+`kernel(tau)` is the real, even scalar covariance.
+
+Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) currently use built-in
+closed-form implementations. Higher orders require the `kergen` extra.
 
 Source: `src/cvhmax/hm.py`
 
@@ -74,9 +89,12 @@ Matern smoothness is `nu = (M - 1) + 0.5`:
 | 3 | 5/2 | 2 |
 | N | (2N-1)/2 | N-1 |
 
-`HidaMatern.K()` and `Ks()` in `hm.py` automatically dispatch to the
-generator for orders >= 2, so higher-order kernels work transparently
-throughout the pipeline.
+`Ks()` is the canonical raw functional dispatch path. `HidaMatern.K()`
+delegates to `Ks()` and adds the object's configured covariance jitter.
+Functional `Af/Qf/Ab/Qb` accept explicit stabilization jitter, and class
+methods pass `HidaMatern.s` to those helpers. Orders 0, 1, and 2 use built-in
+implementations; generator dispatch starts at order 3, so higher-order kernels
+work transparently throughout the pipeline.
 
 Source: `src/cvhmax/kernel_generator/`
 
