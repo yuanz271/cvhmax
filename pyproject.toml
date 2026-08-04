@@ -7,7 +7,6 @@ authors = [
 ]
 dependencies = [
     "jax>=0.4.38",
-    "jaxlib>=0.4.13",
     "numpy>=1.24.4",
     "scipy>=1.10.1",
     "equinox>=0.11.8",
@@ -22,6 +21,9 @@ requires-python = ">= 3.12"
 kergen = [
     "sympy>=1.12",
     "sympy2jax>=0.0.4",
+]
+cuda12 = [
+    "jax[cuda12]>=0.4.38",
 ]
 
 [build-system]

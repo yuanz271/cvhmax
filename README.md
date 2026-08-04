@@ -34,7 +34,13 @@ Requires Python 3.12+ and JAX.
 pip install git+https://github.com/yuanz271/cvhmax
 ```
 
-JAX wheels are platform-specific. For GPU/TPU support, follow the [official installation guide](https://jax.readthedocs.io/en/latest/installation.html) before installing `cvhmax`.
+The default installation uses the CPU JAX backend. For an NVIDIA GPU with CUDA 12 support, install the optional `cuda12` extra:
+
+```console
+pip install "cvhmax[cuda12]"
+```
+
+With `uv`, use `uv sync --extra cuda12` for a checkout. The extra uses JAX's pip-managed CUDA 12 plugin and runtime libraries. See the [official JAX installation guide](https://docs.jax.dev/en/latest/installation.html) for driver and platform requirements.
 
 ## Quickstart
 
