@@ -7,7 +7,7 @@
 
 ## Numerical Instability
 
-- Enable 64-bit precision in JAX for the supported high-order path:
+- Enable 64-bit precision in JAX for the supported kernel path:
   `JAX_ENABLE_X64=1`.
 - Keep CVHM correlation scaling enabled; it is the primary conditioning
   transform for derivative-state covariance blocks.
@@ -15,10 +15,11 @@
   instantaneous state-space covariance component and is added only to `K(0)`;
   it is not a universal replacement for correlation scaling.
 - Dynamics use Cholesky stationary solves and a bounded machine-scale fallback
-  ladder. Derived process noise is symmetrized, not eigenvalue-clipped.
-- If float64 is disabled, expect larger roundoff at small lags. Very high-order
-  symbolic generator construction can overflow in x32; use a lower order or
-  enable x64 rather than silently increasing jitter indefinitely.
+  ladder. Derived process noise is symmetrized, not eigenvalue-clipped. The
+  built-in Hida–Matérn state-space path supports orders 0, 1, and 2.
+- If float64 is disabled, expect larger roundoff at small lags. For custom
+  higher-order kernels, validate numerical conditioning separately rather than
+  silently increasing jitter indefinitely.
 - Start with smaller `max_iter`/`cvi_iter` and gradually increase.
 
 ## Training progress shows `Negative ELL n/a`

@@ -200,45 +200,13 @@ The kernel API has two layers with deliberately different roles:
   remains the primary high-order conditioning mechanism. The default practical
   path is `JAX_ENABLE_X64=1`, correlation scaling, and `s=1e-5`.
 
-Orders 0, 1, and 2 use built-in closed-form implementations. Higher orders are
-handled by the `kernel_generator` subpackage, which symbolically differentiates
-the kernel and converts the result to JAX functions at runtime via `sympy2jax`.
-The implementation maintains one internal raw-covariance dispatcher;
-future optimized orders should register there rather than add branches to both
-public APIs. The long-term organization is to share derivative/state assembly
-across orders and reserve hand-coded code for order-specific polynomial data.
+Orders 0, 1, and 2 use built-in closed-form implementations. Higher orders
+are rejected explicitly because this package does not validate their
+state-space construction. The inference engine remains extensible through
+direct kernel-object injection: users can pass custom objects implementing the
+kernel interface required by `CVHM` without modifying the built-in Hida–Matern
+implementation.
 
 This representation follows Dowling, Sokół, and Park, “Hida–Matérn Kernel,”
 arXiv:2107.07098, especially the complex decomposition and state-space
 construction in Eqs. 25–31 and the conditioning discussion in Section 6.
-### Kernel generator internals
-
-For an order-M kernel, the generator:
-
-1. Builds the symbolic Hida-Matern covariance using SymPy.
-2. Computes successive derivatives `d^p k / d tau^p` for `p = 0..2M-1`
-   and their limits at `tau -> 0+`.
-3. Assembles the M x M state-space covariance matrix `K_hat(tau)`:
-   - Outer entries (row 0, last column): `K_hat[r,c] = (-1)^c * d^{r+c}k/dtau^{r+c}`
-   - Inner entries via antisymmetry: `K_hat[r,c] = -K_hat[r-1, c+1]`
-4. Converts each entry to a JAX-traceable function using `sympy2jax.SymbolicModule`.
-5. Handles the `tau = 0` limit case with `jnp.where`.
-
-The SSM dynamics are derived from the kernel blocks:
-- Forward transition: `A = K(tau) @ K(0)^{-1}`
-- Process noise: `Q = K(0) - K(tau) @ K(0)^{-1} @ K(tau)^H`
-- These satisfy the Lyapunov equation: `A @ K(0) @ A^H + Q = K(0)`
-
-Generator instances are cached by order via `make_kernel(order)`, so the
-symbolic computation cost is paid once per order per process lifetime.
-
-Key code:
-
-- `HidaMatern.Af/Qf/Ab/Qb` for transitions and noise
-- `HidaMatern.K(tau)` for stationary covariances
-- `kernel_generator.HidaMaternKernelGenerator` for arbitrary-order kernels
-- `kernel_generator.make_kernel(order)` cached factory
-
-Sources: `src/cvhmax/hm.py`, `src/cvhmax/kernel_generator/`
-
-See `kernel-generator.md` for usage examples and integration patterns.

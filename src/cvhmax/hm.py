@@ -60,7 +60,6 @@ def _stabilize_covariance(Q: jnp.ndarray) -> jnp.ndarray:
     """
     return _hermitian(Q)
 
-# TODO: see sympy2jax, equinox
 # NOTE: cos(x) = (exp(j * x) + exp(-j * x)) / 2 = Real[exp(j * x)]
 
 
@@ -216,9 +215,10 @@ def _state_covariance_from_polynomial(order, tau, sigma, rho, omega):
 
 # Built-in entries share the same polynomial/derivative assembler. A future
 # optimized order can register a function with this signature at one place.
+_SUPPORTED_STATE_ORDERS = (0, 1, 2)
 _BUILTIN_STATE_COVARIANCES = {
     order: partial(_state_covariance_from_polynomial, order)
-    for order in (0, 1, 2)
+    for order in _SUPPORTED_STATE_ORDERS
 }
 
 
@@ -268,7 +268,8 @@ def _dynamics_from_covariances(K0, Kt, *, jitter=0.0):
     """Derive dynamics using a Cholesky solve and conditional covariance."""
     K0 = _hermitian(K0)
     chol, K0 = _adaptive_cholesky(K0, jitter=jitter)
-    solve_K0 = lambda rhs: jsp.linalg.cho_solve((chol, True), rhs)
+    def solve_K0(rhs):
+        return jsp.linalg.cho_solve((chol, True), rhs)
     forward = conjtrans(solve_K0(conjtrans(Kt)))
     forward_noise = K0 - Kt @ solve_K0(conjtrans(Kt))
     backward = conjtrans(solve_K0(Kt))
@@ -301,8 +302,8 @@ class HidaMatern:
     Notes
     -----
     Orders 0, 1, and 2 use closed-form covariance blocks for the
-    Matérn-1/2, Matérn-3/2, and Matérn-5/2 kernels. Higher orders use the
-    optional symbolic kernel generator.
+    Matérn-1/2, Matérn-3/2, and Matérn-5/2 kernels. Higher orders are not
+    supported by the built-in state-space implementation.
     """
 
     sigma: float = 1.0
@@ -313,6 +314,10 @@ class HidaMatern:
 
     def __post_init__(self):
         self.order = _validate_order(self.order)
+        if self.order not in _SUPPORTED_STATE_ORDERS:
+            raise ValueError(
+                f"Unsupported Matérn order {self.order}; supported orders are 0, 1, and 2"
+            )
         _validate_scalar_parameters(self.sigma, self.rho, self.omega, self.s)
 
     def cov(self, tau=0.0):
@@ -526,24 +531,11 @@ def Ks(kernelparam, tau, *, compute_dtype: jnp.dtype | None = None, output_dtype
     )
 
     builtin = _BUILTIN_STATE_COVARIANCES.get(order)
-    if builtin is not None:
-        K = builtin(tau_c, sigma_c, rho_c, omega_c)
-    else:
-        try:
-            from .kernel_generator import make_kernel
-        except ImportError:
-            raise ImportError(
-                "Orders >= 3 require the kergen extra. "
-                "Install with:  pip install cvhmax[kergen]"
-            ) from None
-
-        # Generator order M = order + 1 (SSM state dimension)
-        K = make_kernel(order + 1).create_K_hat(
-            tau_c,
-            sigma_c,
-            rho_c,
-            omega_c,
+    if builtin is None:
+        raise ValueError(
+            f"Unsupported Matérn order {order}; supported orders are 0, 1, and 2"
         )
+    K = builtin(tau_c, sigma_c, rho_c, omega_c)
 
     return K.astype(_kernel_complex_dtype(output_dtype))
 

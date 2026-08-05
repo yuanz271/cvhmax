@@ -12,7 +12,6 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `Params`: readout parameter container
 - `HidaMatern`: kernel class for state-space dynamics
 - `Ks`, `make_Ks`: raw functional kernel API and static-order JAX wrapper
-- `HidaMaternKernelGenerator`, `make_kernel`: kernel generator for arbitrary orders
 - `pad_trials`, `unpad_trials`: utilities for variable-length trials
 
 ## CVHM
@@ -70,44 +69,12 @@ For JAX transformations where the matrix shape must be static, use
 `sigma`, `rho`, and `omega` leaves in the parameter mapping.
 
 Orders 0, 1, and 2 (Matérn-1/2, -3/2, and -5/2) use built-in closed-form
-implementations. Higher orders require the `kergen` extra. The supported
-numerical path is x64 with CVHM correlation scaling; very high-order symbolic
-construction can overflow in x32.
+state-space implementations. Higher orders are rejected explicitly because
+this package does not validate their state-space construction. Users may pass
+custom kernel objects directly through `CVHM(kernels=...)`; the inference
+engine does not restrict extensions to the built-in Hida–Matérn family.
 
 Source: `src/cvhmax/hm.py`
-
-## Kernel Generator
-
-Runtime symbolic construction of Hida-Matern state-space kernel matrices
-for arbitrary smoothness orders. Uses SymPy for symbolic differentiation
-and `sympy2jax` to convert expressions into JIT-compatible JAX functions.
-
-- `HidaMaternKernelGenerator(order)`: builds a generator for SSM order `M`
-  - `.create_K_hat(tau, sigma, rho, omega)` — M x M complex covariance matrix
-  - `.get_moments(sigma, rho, omega)` — 2M spectral moments
-  - `.get_base_kernel(tau, sigma, rho, omega)` — scalar base kernel
-- `make_kernel(order)`: cached factory returning a `HidaMaternKernelGenerator`
-
-The generator order `M` corresponds to the SSM state dimension. The
-Matern smoothness is `nu = (M - 1) + 0.5`:
-
-| Generator order (M) | Matern | `HidaMatern.order` |
-|---------------------|--------|--------------------|
-| 1 | 1/2 | 0 |
-| 2 | 3/2 | 1 |
-| 3 | 5/2 | 2 |
-| N | (2N-1)/2 | N-1 |
-
-`Ks()` is the canonical raw functional dispatch path. `HidaMatern.K()`
-delegates to `Ks()` and adds its configured instantaneous component only at
-zero lag. Functional `Af/Qf/Ab/Qb` use the jittered stationary block, raw
-positive-lag cross-covariance, and Cholesky stationary solves. Orders 0, 1,
-and 2 use built-in implementations; generator dispatch starts at order 3, so
-higher-order kernels work transparently throughout the pipeline.
-
-Source: `src/cvhmax/kernel_generator/`
-
-See `kernel-generator.md` for usage examples and integration patterns.
 
 ## Utilities
 

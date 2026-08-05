@@ -101,8 +101,9 @@ raw. Dynamics use Cholesky-based stationary solves with a bounded numerical
 fallback; derived process noise is symmetrized rather than eigenvalue-clipped.
 
 For static-shape JAX transformations, use `make_Ks(order)` and close over the
-integer state order. Very high-order symbolic generator construction can
-overflow in x32, so use x64 or a lower order in that regime.
+integer state order. The built-in state-space implementation supports orders
+0, 1, and 2; users can supply custom kernel objects through `CVHM(kernels=...)`
+when they need other kernel families or state dimensions.
 
 ## Data model
 

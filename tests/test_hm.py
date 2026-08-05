@@ -105,15 +105,10 @@ def test_zero_step_dynamics_are_identity_and_noiseless():
     npt.assert_allclose(hm.Ks(params, 0.0), K0 - 1e-3 * np.eye(2), atol=1e-12)
 
 
-def test_HidaMatern_kernel_matches_generator_real_part():
-    from cvhmax.kernel_generator import make_kernel
-
-    model = HidaMatern(sigma=1.5, rho=0.8, omega=2.0, order=3, s=1e-2)
-    tau = jnp.array([-0.4, 0.0, 0.7])
-    generated = make_kernel(4).get_base_kernel(
-        tau, jnp.array(model.sigma), jnp.array(model.rho), jnp.array(model.omega)
-    )
-    npt.assert_allclose(model.kernel(tau), generated)
+def test_state_covariance_rejects_unsupported_orders():
+    params = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 3}
+    with pytest.raises(ValueError, match="supported orders are 0, 1, and 2"):
+        hm.Ks(params, 0.0)
 
 
 def test_matern_rejects_invalid_parameters():

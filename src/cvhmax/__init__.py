@@ -18,11 +18,3 @@ __all__ = [
     "pad_trials",
     "unpad_trials",
 ]
-
-# Optional: kernel_generator requires the `kergen` extra.
-try:
-    from .kernel_generator import HidaMaternKernelGenerator, make_kernel
-
-    __all__ += ["HidaMaternKernelGenerator", "make_kernel"]
-except ImportError:
-    pass
