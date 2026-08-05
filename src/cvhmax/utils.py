@@ -60,7 +60,7 @@ def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
         _, state = carry
         iter_num = otu.tree_get(state, "count")
         grad = otu.tree_get(state, "grad")
-        err = otu.tree_l2_norm(grad)
+        err = otu.tree_norm(grad)
         return (iter_num == 0) | ((iter_num < max_iter) & (err > tol))
 
     init_carry = (init_params, opt.init(init_params))

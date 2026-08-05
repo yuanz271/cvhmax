@@ -3,14 +3,16 @@
 ## Shape Errors
 
 - Verify `y` is `(trials, time, features)` or `(time, features)`.
-- Ensure `valid_y` is broadcastable to the first two axes of `y`.
+- Ensure `valid_y` has shape `(trials, time)`, or shape `(time,)` when `y`
+  is provided as `(time, features)`.
 
 ## Numerical Instability
 
 - Enable 64-bit precision in JAX for the supported kernel path:
   `JAX_ENABLE_X64=1`.
-- Keep CVHM correlation scaling enabled; it is the primary conditioning
-  transform for derivative-state covariance blocks.
+- CVHM applies correlation scaling internally; retain this transformation
+  when implementing custom filtering or kernel code because it improves
+  conditioning of derivative-state covariance blocks.
 - `HidaMatern(s=1e-5)` is the conservative default. It represents a small
   instantaneous state-space covariance component and is added only to `K(0)`;
   it is not a universal replacement for correlation scaling.
@@ -27,7 +29,3 @@
 `n/a` means the observation model did not return an M-step objective, as in a
 frozen-readout model. It is not a NaN posterior diagnostic. A finite objective
 is displayed numerically when the readout update provides one.
-
-## JAX Warnings
-
-Some JAX linear algebra warnings indicate future behavior changes. Prefer `jnp.linalg.solve(A, b[..., None])[..., 0]` for batched 1D solves.
