@@ -71,12 +71,9 @@ class CVHM:
 
     def __post_init__(self):
         """Resolve the built-in CVI subclass for the requested observation model."""
-        if self.observation not in ("Gaussian", "Poisson"):
-            raise ValueError(
-                f"Unsupported observation model {self.observation!r}; "
-                "supported models are Gaussian and Poisson"
-            )
-        self.cvi = CVI.registry[self.observation]
+        self.cvi = CVI.registry.get(self.observation)
+        if self.cvi is None:
+            raise ValueError(f"Unsupported observation model: {self.observation!r}")
 
     def _scaled_kernel_dynamics(self, tau):
         """Return correlation-scaled, Cholesky-stabilized dynamics."""

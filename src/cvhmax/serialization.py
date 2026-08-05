@@ -245,6 +245,14 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
             _integer(axis, f"params.{name}.shape", minimum=0)
 
 
+def _validate_builtin_observation(observation: str) -> None:
+    if observation not in _SUPPORTED_OBSERVATIONS:
+        raise ValueError(
+            f"Unsupported observation model {observation!r}; "
+            "only Gaussian and Poisson can be serialized"
+        )
+
+
 def save(model: Any, path: str | os.PathLike[str]) -> None:
     """Save a CVHM model to a ZIP archive.
 
@@ -256,6 +264,7 @@ def save(model: Any, path: str | os.PathLike[str]) -> None:
     path : str or os.PathLike
         Destination path for the archive.
     """
+    _validate_builtin_observation(model.observation)
     manifest = build_manifest(model)
     params_payload = None if model.params is None else _serialize_params(model.params)
     if params_payload is not None and len(params_payload) > _MAX_PARAMS_BYTES:
