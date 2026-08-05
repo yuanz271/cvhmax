@@ -1,19 +1,20 @@
 # Model Serialization
 
-This document specifies persistence for fitted `CVHM` models.
+This document specifies persistence for `CVHM` models.
 
 ## Scope
 
-The persistence API saves and restores a `CVHM` object as a reusable model. A
-model consists of:
+The persistence API saves and restores a reusable model, not a completed
+inference cache. A model consists of:
 
-- `CVHM` constructor configuration;
-- GP kernel objects and their parameters; and
-- fitted observation-model parameters (`CVHM.params`), when present.
+- `CVHM` configuration;
+- `HidaMatern` kernel configurations;
+- the stateless readout algorithm name; and
+- fitted readout parameters owned by `CVHM`, when present.
 
 The posterior and latent inference caches are transient outputs. They are not
-saved because they can be reconstructed by running inference again and may be
-substantially larger than the model itself.
+saved because they can be reconstructed relatively quickly from a restored
+model and may be substantially larger than the model itself.
 
 The public API is:
 
@@ -27,18 +28,50 @@ posterior = restored.infer(y, valid_y)
 `CVHM` object. `infer()` recomputes posterior state without performing a
 readout-parameter update.
 
-`CVHM.load()` must return an in-memory `CVHM` object that is semantically
-equivalent to the saved object. Equivalence means that it has the same model
-configuration, kernel behavior, and observation-model parameters, subject to
-normal device placement and numerical representation differences.
+## Configuration and ownership
+
+`CVHM` is the composite model. It owns model-level configuration, kernels, the
+stateless readout algorithm identifier, and fitted readout parameters:
+
+```text
+CVHM
+├── kernels
+├── observation: stateless CVI algorithm
+└── params: fitted readout PyTree
+```
+
+`Gaussian` and `Poisson` are pure algorithmic `CVI` classes. Their methods
+consume `Params` and, where appropriate, return an updated `Params`; the
+classes do not own fitted state.
+
+`CVHM` and `HidaMatern` use one common configuration protocol:
+
+```python
+class Serializable(Protocol):
+    def get_config(self) -> dict: ...
+
+    @classmethod
+    def from_config(cls, config: dict): ...
+```
+
+The configuration is JSON-compatible and sufficient to reproduce the
+component's semantics. `from_config()` owns translation from the stable
+configuration to the current implementation. Normal constructors remain
+ordinary Python APIs and do not accept serialized dictionaries as a second
+calling convention.
+
+For this working-version format, no cross-version compatibility is promised.
+The archive is expected to be loaded by the same working version of cvhmax
+that wrote it. The format version is retained only to reject incompatible or
+malformed files clearly; no migration framework is required.
 
 ## File format
 
-A save produces one self-contained archive at the requested path. The archive
-must not require sidecar files, the original Python process, or the original
-model object to load successfully.
+A save produces one self-contained ZIP archive at the requested path. It must
+not require sidecar files, the original Python process, or the original model
+object to load successfully.
 
-The archive is ZIP-based and contains at least:
+The archive contains at least:
 
 ```text
 model.cvhmax
@@ -46,20 +79,21 @@ model.cvhmax
 └── params.eqx
 ```
 
-`params.eqx` is omitted when the model has no fitted readout parameters.
-For schema version 1, `manifest.json` is required exactly once and
-`params.eqx` is required exactly when `params.present` is true. Unknown regular
-members are ignored; duplicate member names, unsafe member names, malformed
-required members, and unsupported schema versions are rejected.
+`params.eqx` is omitted when the model has no fitted readout parameters. The
+manifest contains model and kernel configuration; Equinox stores the numerical
+leaves of the CVHM-owned fitted parameter PyTree.
 
-The format must not use `pickle`, `cloudpickle`, or any serialization mechanism
-that reconstructs arbitrary executable Python object graphs. The archive is a
+The format must not use `pickle`, `cloudpickle`, or any mechanism that
+reconstructs arbitrary executable Python object graphs. The archive is a
 data format, not a Python object snapshot.
 
 ## Manifest
 
-`manifest.json` is UTF-8 JSON and contains all non-array information required
-to reconstruct the model. At minimum it includes:
+`manifest.json` is UTF-8 JSON. It contains the model configuration, HidaMatern
+configuration, and the readout class name. It does not encode current
+constructor signatures as a separate persistence mechanism.
+
+A representative manifest is:
 
 ```json
 {
@@ -68,115 +102,130 @@ to reconstruct the model. At minimum it includes:
   "model": {
     "n_components": 2,
     "dt": 1.0,
-    "observation": "Gaussian",
     "lr": 0.1,
     "max_iter": 10,
-    "cvi_iter": 5
+    "cvi_iter": 5,
+    "observation": "Gaussian",
+    "kernels": [
+      {
+        "sigma": 1.0,
+        "rho": 50.0,
+        "omega": 0.0,
+        "order": 0,
+        "s": 1e-5
+      }
+    ]
   },
-  "kernels": [
-    {
-      "class": "cvhmax.hm.HidaMatern",
-      "sigma": 1.0,
-      "rho": 50.0,
-      "omega": 0.0,
-      "order": 0,
-      "s": 1e-5
-    }
-  ],
   "params": {
     "present": true,
     "type": "cvhmax.cvi.Params",
-    "R_is_none": false
+    "R_is_none": false,
+    "arrays": {
+      "C": {"shape": [2, 1], "dtype": "float64"},
+      "d": {"shape": [2], "dtype": "float64"},
+      "R": {"shape": [2, 2], "dtype": "float64"}
+    }
   }
 }
 ```
 
-The initial format supports only the built-in `Gaussian` and `Poisson`
-observation identifiers. Unknown or custom observation models must be rejected
-rather than silently falling back to `Gaussian`.
+The manifest must record:
 
-The manifest schema must record:
-
-- a format identifier and integer schema version;
-- every constructor argument that affects `CVHM` behavior;
-- the fully qualified supported kernel type and all kernel parameters;
-- whether fitted readout parameters are present;
-- the parameter-tree type and structural metadata needed to build a
-  deserialization skeleton, including whether `Params.R` is `None`;
-- array shape and dtype metadata when required by the Equinox restore path;
-- optional package and dependency version metadata for reproducibility.
+- archive format and integer version;
+- all `CVHM`-owned configuration: `n_components`, `dt`, `lr`, `max_iter`,
+  `cvi_iter`, and `observation`;
+- each HidaMatern configuration: `sigma`, `rho`, `omega`, `order`, and `s`;
+- whether fitted parameters are present;
+- parameter-tree metadata needed to create the runtime Equinox `like` PyTree,
+  including whether `Params.R` is `None`; and
+- array shape and dtype metadata required by the Equinox restore path.
 
 JSON values must be finite and representable without loss of model semantics.
-Non-finite values, unknown model types, and malformed structural metadata must
-cause a clear load error.
+Malformed structural metadata and unknown observation names must cause a clear
+load error rather than silently falling back to `Gaussian`.
+
+The `observation` value is the `CVI` subclass name, for example `"Gaussian"`
+or `"Poisson"`. The initial implementation supports the built-in names only.
+The kernel entries are assumed to be `HidaMatern`; no kernel type field is
+needed.
+
+## Kernel subclasses
+
+A kernel supplied to `CVHM` may be a subclass of `HidaMatern`, but the format
+preserves only the base HidaMatern configuration. Loading always reconstructs
+a base `HidaMatern` instance. Subclass-specific state and behavior are not
+preserved; callers must use subclasses only when they are semantically
+equivalent to the base class. The format does not attempt to support new
+kernel families.
 
 ## Save procedure
 
 `CVHM.save(path)` must:
 
-1. Validate that the destination is a single archive path.
-2. Serialize model configuration and kernel descriptions into the manifest.
-3. Serialize `CVHM.params` with Equinox leaf serialization when parameters are
-   present.
-4. Write the manifest and parameter payload into one archive atomically, or
-   remove an incomplete archive before reporting failure.
-5. Exclude `posterior`, `latent`, device buffers, compilation caches, and other
-   transient runtime state.
+1. Validate all `CVHM` configuration, HidaMatern kernels, the built-in
+   observation name, and fitted parameter structure before writing anything.
+2. Obtain kernel configuration through the HidaMatern serialization protocol.
+3. Serialize fitted `CVHM.params` with Equinox when present.
+4. Write one ZIP archive containing `manifest.json` and, when applicable,
+   `params.eqx`.
+5. Exclude `posterior`, `latent`, device buffers, compilation caches, and
+   other transient runtime state.
+6. Write atomically through a temporary file followed by `os.replace`.
+7. Avoid leaving a partial archive at the destination after failure.
 
-The save operation must support both an unfitted model (`params is None`) and a
-fitted model. Saving unsupported kernel or parameter types must fail before
-writing a partial archive, with an actionable error message.
+The save operation must support both unfitted models (`params is None`) and
+fitted models. Unsupported kernel subclasses, observation names, or parameter
+structures must fail with an actionable error unless their semantics are
+explicitly covered by the working implementation.
 
 ## Load procedure
 
 `CVHM.load(path)` must:
 
-1. Open and validate the archive and manifest format identifier.
-2. Check the schema version and reject unsupported versions clearly.
-3. Validate all required members before constructing the result.
-4. Reconstruct each supported kernel from its manifest description.
-5. Construct a `CVHM` skeleton from the saved configuration.
-6. Construct a matching `Params` skeleton when fitted parameters are present.
-7. Restore parameter leaves from `params.eqx` using Equinox.
-8. Return the reconstructed `CVHM` with the restored `params`.
+1. Open and validate that the archive is a ZIP file.
+2. Validate member names, duplicate members, member sizes, and required
+   members before allocating restore arrays.
+3. Parse and validate the archive format/version; reject files from an
+   incompatible working version.
+4. Validate the observation class name against the built-in `CVI` mapping and
+   construct the corresponding stateless algorithm. Never silently substitute
+   `Gaussian`.
+5. Reconstruct each `HidaMatern` kernel through its configuration protocol.
+6. Construct `CVHM` with its own saved configuration, reconstructed kernels,
+   and readout algorithm.
+7. Reconstruct a runtime Equinox `like` PyTree for CVHM-owned `params` with the
+   same structure and leaf types as the saved fitted state. The `like` tree is
+   not saved as a separate artifact.
+8. Restore parameter leaves from `params.eqx` with Equinox.
+9. Return the reconstructed model without `posterior` or `latent` attributes.
 
-The loader must not depend on the device type used during saving. Arrays may be
-restored to the current default JAX device and may be copied to another device
-by normal JAX operations after loading.
+Restoration must not depend on the save-time device. Arrays may be restored to
+the current default JAX device and copied to another device by normal JAX
+operations afterward.
 
 A loaded model must not have a posterior or latent cache merely because the
-saved model was previously fitted. Posterior reconstruction is a separate
-inference operation and must not silently perform an observation-model update.
-The inference-only API `model.infer(y, valid_y=None)` recomputes a posterior
-from a loaded model without refitting its readout parameters.
+saved model was previously fitted. `model.infer(y, valid_y=None)` recomputes a
+posterior without updating fitted readout parameters.
 
 ## Supported types
 
 The initial implementation supports:
 
 - `CVHM`;
-- built-in `HidaMatern` kernels with orders 0, 1, and 2; and
-- the built-in `cvhmax.cvi.Params` parameter container.
+- `HidaMatern` kernels of orders 0, 1, and 2; subclasses are accepted only
+  when they are semantically equivalent to the base class and are restored as
+  base `HidaMatern` instances;
+- the stateless `Gaussian` and `Poisson` `CVI` algorithms; and
+- the Equinox `cvhmax.cvi.Params` parameter container.
 
-Custom kernels and custom CVI parameter PyTrees are not implicitly serialized.
-They must either be rejected with a clear error or gain an explicit,
-versioned serialization protocol in a future extension. Serializing arbitrary
-Python classes would violate the data-only format requirement.
+User-defined readouts are not part of the initial format. User-defined kernel
+subclasses are supported only under the HidaMatern-subclass restriction above.
+Arbitrary Python classes remain rejected.
 
-## Compatibility and safety
-
-The format is versioned independently of Python pickle. Loaders must validate
-schema and structural metadata before restoring arrays. A future incompatible
-format requires a new schema version or an explicit migration path.
-
-The archive is intended to be portable across CPU and GPU environments, but
-not necessarily across incompatible numerical or model-code changes. The
-manifest should record package and dependency versions when available, and
-load errors should identify incompatibilities rather than silently producing a
-different model.
+## Safety
 
 Although the format contains no pickle payload, loading still consumes data
-from disk and must validate archive paths, member names, sizes, and JSON
-structures before allocation. Archives from untrusted sources should not be
-accepted without the normal filesystem and resource controls of the calling
-application.
+from disk and must validate archive paths, member names, sizes, JSON structure,
+configuration values, and parameter metadata before allocation. Archives from
+untrusted sources should not be accepted without the normal filesystem and
+resource controls of the calling application.

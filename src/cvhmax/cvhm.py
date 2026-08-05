@@ -70,8 +70,13 @@ class CVHM:
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
-        """Resolve the CVI subclass for the requested observation model."""
-        self.cvi = CVI.registry.get(self.observation, Gaussian)
+        """Resolve the built-in CVI subclass for the requested observation model."""
+        if self.observation not in ("Gaussian", "Poisson"):
+            raise ValueError(
+                f"Unsupported observation model {self.observation!r}; "
+                "supported models are Gaussian and Poisson"
+            )
+        self.cvi = CVI.registry[self.observation]
 
     def _scaled_kernel_dynamics(self, tau):
         """Return correlation-scaled, Cholesky-stabilized dynamics."""
@@ -348,6 +353,64 @@ class CVHM:
         self.latent = (z, Z)
         self.posterior = (m, V)
         return self
+
+    def get_config(self) -> dict:
+        """Return a JSON-compatible configuration dict.
+
+        Returns
+        -------
+        dict
+            Configuration with keys ``n_components``, ``dt``, ``lr``, ``max_iter``,
+            ``cvi_iter``, ``observation``, and ``kernels`` (each kernel via
+            its ``get_config()``).
+        """
+        return {
+            "n_components": int(self.n_components),
+            "dt": float(self.dt),
+            "lr": float(self.lr),
+            "max_iter": int(self.max_iter),
+            "cvi_iter": int(self.cvi_iter),
+            "observation": str(self.observation),
+            "kernels": [k.get_config() for k in self.kernels],
+        }
+
+    @classmethod
+    def from_config(cls, config: dict) -> "CVHM":
+        """Reconstruct a CVHM from a configuration dict.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dict with keys ``n_components``, ``dt``, ``lr``,
+            ``max_iter``, ``cvi_iter``, ``observation``, and ``kernels``.
+
+        Returns
+        -------
+        CVHM
+            Reconstructed model without posterior or fitted params.
+
+        Raises
+        ------
+        ValueError
+            If required keys are missing, observation is unknown, or kernel
+            config is invalid.
+        """
+        from .hm import HidaMatern
+
+        required = ("n_components", "dt", "lr", "max_iter", "cvi_iter", "observation", "kernels")
+        for key in required:
+            if key not in config:
+                raise ValueError(f"CVHM.from_config missing required key: {key!r}")
+        kernels = [HidaMatern.from_config(k) for k in config["kernels"]]
+        return cls(
+            n_components=config["n_components"],
+            dt=config["dt"],
+            kernels=kernels,
+            observation=config["observation"],
+            lr=config["lr"],
+            max_iter=config["max_iter"],
+            cvi_iter=config["cvi_iter"],
+        )
 
     def save(self, path: str | PathLike[str]) -> None:
         """Save model configuration and fitted readout parameters.

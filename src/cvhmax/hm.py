@@ -479,6 +479,53 @@ class HidaMatern:
             "order": self.order,
         }
 
+    def get_config(self) -> dict:
+        """Return a JSON-compatible configuration dict.
+
+        Returns
+        -------
+        dict
+            Configuration with keys ``sigma``, ``rho``, ``omega``, ``order``, ``s``.
+        """
+        return {
+            "sigma": float(self.sigma),
+            "rho": float(self.rho),
+            "omega": float(self.omega),
+            "order": int(self.order),
+            "s": float(self.s),
+        }
+
+    @classmethod
+    def from_config(cls, config: dict) -> "HidaMatern":
+        """Reconstruct a HidaMatern kernel from a configuration dict.
+
+        Parameters
+        ----------
+        config : dict
+            Configuration dict with keys ``sigma``, ``rho``, ``omega``, ``order``, ``s``.
+
+        Returns
+        -------
+        HidaMatern
+            Reconstructed kernel instance.
+
+        Raises
+        ------
+        ValueError
+            If required keys are missing or values are invalid.
+        """
+        required = ("sigma", "rho", "omega", "order", "s")
+        for key in required:
+            if key not in config:
+                raise ValueError(f"HidaMatern.from_config missing required key: {key!r}")
+        return cls(
+            sigma=float(config["sigma"]),
+            rho=float(config["rho"]),
+            omega=float(config["omega"]),
+            order=int(config["order"]),
+            s=float(config["s"]),
+        )
+
     def spectral(self):
         raise NotImplementedError
 

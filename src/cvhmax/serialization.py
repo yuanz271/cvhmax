@@ -15,7 +15,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from .cvi import Params
-from .hm import HidaMatern
 
 FORMAT = "cvhmax.CVHM"
 VERSION = 1
@@ -24,24 +23,11 @@ _PARAMS = "params.eqx"
 _MAX_MANIFEST_BYTES = 1 << 20
 _MAX_PARAMS_BYTES = 1 << 30
 _SUPPORTED_OBSERVATIONS = {"Gaussian", "Poisson"}
+
+
 def _array_metadata(array: Any) -> dict[str, Any]:
     value = np.asarray(array)
     return {"shape": list(value.shape), "dtype": str(value.dtype)}
-
-
-def _kernel_manifest(kernel: HidaMatern) -> dict[str, Any]:
-    if not isinstance(kernel, HidaMatern):
-        raise TypeError("Only cvhmax.hm.HidaMatern kernels can be serialized")
-    if kernel.order not in (0, 1, 2):
-        raise ValueError("Only HidaMatern orders 0, 1, and 2 can be serialized")
-    return {
-        "class": "cvhmax.hm.HidaMatern",
-        "sigma": _finite_float(kernel.sigma, "kernel.sigma"),
-        "rho": _finite_float(kernel.rho, "kernel.rho"),
-        "omega": _finite_float(kernel.omega, "kernel.omega"),
-        "order": int(kernel.order),
-        "s": _finite_float(kernel.s, "kernel.s"),
-    }
 
 
 def _finite_float(value: Any, name: str) -> float:
@@ -78,25 +64,38 @@ def _integer(value: Any, name: str, *, minimum: int = 0) -> int:
 
 
 def build_manifest(model: Any) -> dict[str, Any]:
+    """Build the serialization manifest using the get_config() protocol.
+
+    Parameters
+    ----------
+    model : CVHM
+        The model to serialize.
+
+    Returns
+    -------
+    dict
+        Manifest dictionary ready for JSON serialization.
+    """
     if model.observation not in _SUPPORTED_OBSERVATIONS:
         raise ValueError(
             f"Unsupported observation model {model.observation!r}; "
             "only Gaussian and Poisson can be serialized"
         )
-    if len(model.kernels) != model.n_components:
+    config = model.get_config()
+    if len(config["kernels"]) != config["n_components"]:
         raise ValueError("CVHM requires one kernel per component")
     return {
         "format": FORMAT,
         "version": VERSION,
         "model": {
-            "n_components": _integer(model.n_components, "model.n_components", minimum=1),
-            "dt": _finite_float(model.dt, "model.dt"),
-            "observation": model.observation,
-            "lr": _finite_float(model.lr, "model.lr"),
-            "max_iter": _integer(model.max_iter, "model.max_iter"),
-            "cvi_iter": _integer(model.cvi_iter, "model.cvi_iter"),
+            "n_components": _integer(config["n_components"], "model.n_components", minimum=1),
+            "dt": _finite_float(config["dt"], "model.dt"),
+            "observation": config["observation"],
+            "lr": _finite_float(config["lr"], "model.lr"),
+            "max_iter": _integer(config["max_iter"], "model.max_iter"),
+            "cvi_iter": _integer(config["cvi_iter"], "model.cvi_iter"),
         },
-        "kernels": [_kernel_manifest(kernel) for kernel in model.kernels],
+        "kernels": config["kernels"],
         "params": _params_manifest(model.params),
     }
 
@@ -105,6 +104,19 @@ def _serialize_params(params: Params) -> bytes:
     buffer = io.BytesIO()
     eqx.tree_serialise_leaves(buffer, params)
     return buffer.getvalue()
+
+
+def _validate_params_shapes(params: Params, n_components: int) -> None:
+    C = np.asarray(params.C)
+    d = np.asarray(params.d)
+    if C.ndim != 2 or C.shape[1] != n_components:
+        raise ValueError("Params.C shape is incompatible with n_components")
+    if d.ndim != 1 or d.shape[0] != C.shape[0]:
+        raise ValueError("Params.d shape is incompatible with Params.C")
+    if params.R is not None:
+        R = np.asarray(params.R)
+        if R.shape != (C.shape[0], C.shape[0]):
+            raise ValueError("Params.R shape is incompatible with Params.C")
 
 
 def _deserialize_params(payload: bytes, metadata: dict[str, Any]) -> Params:
@@ -189,12 +201,10 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     for index, kernel in enumerate(kernels):
         if not isinstance(kernel, dict):
             raise ValueError(f"Manifest kernel {index} must be an object")
-        required = ("class", "sigma", "rho", "omega", "order", "s")
+        required = ("sigma", "rho", "omega", "order", "s")
         for key in required:
             if key not in kernel:
                 raise ValueError(f"Manifest is missing kernels[{index}].{key}")
-        if kernel["class"] != "cvhmax.hm.HidaMatern":
-            raise ValueError(f"Unsupported kernel type: {kernel['class']!r}")
         _finite_float(kernel["sigma"], f"kernels[{index}].sigma")
         _finite_float(kernel["rho"], f"kernels[{index}].rho")
         _finite_float(kernel["omega"], f"kernels[{index}].omega")
@@ -236,6 +246,16 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
 
 
 def save(model: Any, path: str | os.PathLike[str]) -> None:
+    """Save a CVHM model to a ZIP archive.
+
+    Parameters
+    ----------
+    model : CVHM
+        Model to save. Must have a ``get_config()`` method and built-in
+        observation model.
+    path : str or os.PathLike
+        Destination path for the archive.
+    """
     manifest = build_manifest(model)
     params_payload = None if model.params is None else _serialize_params(model.params)
     if params_payload is not None and len(params_payload) > _MAX_PARAMS_BYTES:
@@ -261,6 +281,19 @@ def save(model: Any, path: str | os.PathLike[str]) -> None:
 
 
 def load(path: str | os.PathLike[str]) -> Any:
+    """Load a CVHM model from a ZIP archive.
+
+    Parameters
+    ----------
+    path : str or os.PathLike
+        Path to the archive created by :func:`save`.
+
+    Returns
+    -------
+    CVHM
+        Reconstructed model with fitted readout parameters (if present).
+        Posterior and latent caches are not restored.
+    """
     from .cvhm import CVHM
 
     try:
@@ -277,31 +310,14 @@ def load(path: str | os.PathLike[str]) -> Any:
         if has_params != has_payload:
             raise ValueError("params.eqx presence does not match manifest metadata")
 
-        model_metadata = manifest["model"]
-        kernels = []
-        for item in manifest["kernels"]:
-            if not isinstance(item, dict) or item.get("class") != "cvhmax.hm.HidaMatern":
-                raise ValueError("Unsupported kernel type in manifest")
-            kernels.append(
-                HidaMatern(
-                    sigma=item["sigma"],
-                    rho=item["rho"],
-                    omega=item["omega"],
-                    order=item["order"],
-                    s=item["s"],
-                )
-            )
-        params = None
+        model_config = manifest["model"]
+        model_config["kernels"] = manifest["kernels"]
+        model = CVHM.from_config(model_config)
         if has_params:
-            params = _deserialize_params(archive.read(_PARAMS), params_metadata)
-        model = CVHM(
-            n_components=model_metadata["n_components"],
-            dt=model_metadata["dt"],
-            kernels=kernels,
-            params=params,
-            observation=model_metadata["observation"],
-            lr=model_metadata["lr"],
-            max_iter=model_metadata["max_iter"],
-            cvi_iter=model_metadata["cvi_iter"],
-        )
+            model.params = _deserialize_params(archive.read(_PARAMS), params_metadata)
+            _validate_params_shapes(model.params, model.n_components)
+            if model.observation == "Gaussian" and model.params.R is None:
+                raise ValueError("Gaussian Params must include R")
+            if model.observation == "Poisson" and model.params.R is not None:
+                raise ValueError("Poisson Params must have R=None")
         return model

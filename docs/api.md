@@ -20,13 +20,19 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `CVHM.fit_transform(y, valid_y)`
 - `CVHM.infer(y, valid_y=None)` — recompute posterior using fitted readout parameters
 - `CVHM.transform(y, valid_y)` (currently not implemented)
+- `CVHM.get_config()` — return JSON-compatible configuration dict
+- `CVHM.from_config(config)` — classmethod reconstructing CVHM from configuration
+- `CVHM.save(path)` — persist model to one self-contained ZIP archive
+- `CVHM.load(path)` — classmethod restoring a saved model
 
 Source: `src/cvhmax/cvhm.py`
 
 `CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
-saving posterior or latent caches. See `serialization.md` for the archive
-format and compatibility policy. `CVHM.infer(...)` recomputes posterior state
-without updating fitted readout parameters.
+saving posterior or latent caches. The serialization uses the
+`get_config()`/`from_config()` protocol on both `CVHM` and `HidaMatern`.
+`CVHM.infer(...)` recomputes posterior state without updating fitted readout
+parameters. See `serialization.md` for the archive format and compatibility
+policy.
 
 ## CVI and Readouts
 
@@ -53,7 +59,8 @@ Source: `src/cvhmax/cvhm.py`
 ## Kernels
 
 - `HidaMatern`: user-facing parameter container with scalar `kernel(tau)`,
-  state block `K(tau)`, and `Af/Qf/Ab/Qb` convenience methods.
+  state block `K(tau)`, `Af/Qf/Ab/Qb` convenience methods, `get_config()`,
+  and `from_config()`.
 - `Ks(kernelparam, tau)`: canonical JAX-compatible functional API for the
   raw, jitter-free complex state covariance. Dictionary parameter containers
   are pytrees and can be passed through `jax.jit`, `jax.vmap`, and `jax.scan`;
