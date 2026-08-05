@@ -18,9 +18,15 @@ Public exports live in `src/cvhmax/__init__.py`:
 
 - `CVHM.fit(y, valid_y=None, random_state=None)`
 - `CVHM.fit_transform(y, valid_y)`
+- `CVHM.infer(y, valid_y=None)` — recompute posterior using fitted readout parameters
 - `CVHM.transform(y, valid_y)` (currently not implemented)
 
 Source: `src/cvhmax/cvhm.py`
+
+`CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
+saving posterior or latent caches. See `serialization.md` for the archive
+format and compatibility policy. `CVHM.infer(...)` recomputes posterior state
+without updating fitted readout parameters.
 
 ## CVI and Readouts
 

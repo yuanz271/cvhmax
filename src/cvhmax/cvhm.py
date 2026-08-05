@@ -2,6 +2,7 @@ import math
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from os import PathLike
 from typing import Any, NamedTuple
 
 import chex
@@ -347,6 +348,93 @@ class CVHM:
         self.latent = (z, Z)
         self.posterior = (m, V)
         return self
+
+    def save(self, path: str | PathLike[str]) -> None:
+        """Save model configuration and fitted readout parameters.
+
+        Posterior and latent inference caches are intentionally excluded.
+        The archive is a data-only format; custom kernels and observation
+        models are not supported by the initial serializer.
+        """
+        from .serialization import save
+
+        save(self, path)
+
+    @classmethod
+    def load(cls, path: str | PathLike[str]) -> "CVHM":
+        """Load a model saved by :meth:`save`."""
+        from .serialization import load
+
+        return load(path)
+
+    def infer(self, y: Array, valid_y: Array | None = None):
+        """Compute a posterior using fitted parameters without refitting.
+
+        Parameters
+        ----------
+        y : Array
+            Observations shaped `(trials, time, features)` or `(time, features)`.
+        valid_y : Array, optional
+            Binary observation mask. Missing values default to all ones.
+
+        Returns
+        -------
+        tuple[Array, Array]
+            Posterior mean and covariance in latent space.
+
+        Raises
+        ------
+        RuntimeError
+            If the model has no fitted readout parameters.
+        """
+        if self.params is None:
+            raise RuntimeError("Cannot infer with an unfitted model")
+        if valid_y is None:
+            valid_y = jnp.ones(y.shape[:-1], dtype=jnp.uint)
+        if y.ndim == 2:
+            y = jnp.expand_dims(y, 0)
+            valid_y = jnp.expand_dims(valid_y, 0)
+        chex.assert_equal_shape_prefix((y, valid_y), 2)
+
+        dynamics = self._scaled_kernel_dynamics(self.dt)
+        Af, Qf, Ab, Qb, Q0 = self._matrices_from_dynamics(dynamics)
+        Pf, Pb = cho_inv(Qf), cho_inv(Qb)
+        n_trials, n_bins = y.shape[:2]
+        L = Af.shape[0]
+        z0 = jnp.tile(jnp.zeros(L), (n_trials, 1))
+        Z0 = jnp.tile(cho_inv(Q0), (n_trials, 1, 1))
+        M = self.latent_mask()
+        jl, Jl = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0))(
+            self.params, y, valid_y
+        )
+        smooth_batch = vmap(
+            lambda jk, Jk, zk0, Zk0: bifilter(jk, Jk, zk0, Zk0, Af, Pf, Ab, Pb)
+        )
+        fwd_batch = vmap(
+            lambda jk, Jk, zk0, Zk0: information_filter(
+                (zk0, Zk0), (jk, Jk), Af, Pf
+            )
+        )
+        j_w, J_w = lift(jl, Jl, M)
+        zp, Zp, _, _ = fwd_batch(j_w, J_w, z0, Z0)
+        m_w, V_w = project(zp, Zp, M)
+        jl, Jl = self.cvi.update_pseudo(
+            self.params, y, valid_y, m_w, V_w, jl, Jl, 1.0
+        )
+
+        def cvi_step(_, carry):
+            jl, Jl = carry
+            j, J = lift(jl, Jl, M)
+            z, Z = smooth_batch(j, J, z0, Z0)
+            m, V = project(z, Z, M)
+            return self.cvi.update_pseudo(
+                self.params, y, valid_y, m, V, jl, Jl, self.lr
+            )
+
+        jl, Jl = jax.lax.fori_loop(0, self.cvi_iter, cvi_step, (jl, Jl))
+        j, J = lift(jl, Jl, M)
+        z, Z = smooth_batch(j, J, z0, Z0)
+        return project(z, Z, M)
 
     def transform(self, y: Array, valid_y: Array):
         """Infer latent trajectories for new data.
