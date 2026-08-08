@@ -2,17 +2,17 @@
 
 ## Goal
 
-Make the Hida–Matérn kernel implementation future-proof as additional
-closed-form orders are added, while preserving JAX transformation support and
-the current numerical behavior.
+Maintain a stable, validated covariance-form Hida–Matérn implementation for
+built-in orders 0, 1, and 2, while preserving JAX transformation support and
+current numerical behavior.
 
 ## Plan status
 
-The required covariance-form plan is complete. Phases 1–7 are implemented,
-validated, and documented. The square-root/QR implementation is deliberately
-an optional follow-up, not a prerequisite for the current supported x64,
-correlation-scaled CVHM path. The known limitation is very high-order symbolic
-generator construction under x32.
+The supported covariance-form implementation is complete for built-in orders
+0, 1, and 2. The square-root/QR implementation is deliberately an optional
+follow-up, not a prerequisite for the current supported x64,
+correlation-scaled CVHM path. Higher orders and new kernel families are outside
+this repository's scope.
 
 ## Design decision
 
@@ -70,8 +70,8 @@ dispatch point.
 
 4. **Raw state-covariance dispatch**
    - One `_raw_state_covariance(...)` dispatcher.
-   - Built-in implementations registered by order.
-   - Higher orders delegated to `make_kernel(order + 1)`.
+   - Built-in implementations registered for orders 0, 1, and 2.
+   - Higher orders are rejected explicitly.
    - Returns raw, jitter-free complex covariance.
    - `order` is static metadata; numerical parameters and lag may be traced.
 
@@ -150,16 +150,16 @@ semantics:
   not by adding a correction after a derived process-noise matrix.
 - Preserve raw versus stabilized paths as separately testable policies.
 
-### Phase 4 — Generalize hand-coded orders
+### Phase 4 — Consolidate supported built-in orders
 
-Status: implemented. Built-in orders use shared polynomial, derivative, and
-state-covariance assembly with one registry.
+Status: complete. Orders 0, 1, and 2 use the shared polynomial, derivative, and
+state-covariance assembly with one built-in dispatcher. No higher-order kernel
+implementation or new kernel family is planned in this repository.
 
-- Refactor `Ks0`, `Ks1`, and `Ks2` toward shared polynomial/derivative/state
-  assembly.
-- Keep only order-specific polynomial coefficients or small optimized kernels.
-- Add each future optimized order through one registry entry.
-- Compare every builtin implementation against the symbolic generator.
+- Keep order-specific polynomial data behind the shared assembly.
+- Keep the supported-order boundary explicit and tested.
+- Compare supported behavior through algebraic identities, dynamics tests,
+  benchmarks, and realistic examples.
 
 ### Phase 5 — Consolidate CVHM dynamics preparation
 
@@ -182,21 +182,19 @@ remain independently callable and prepare their own bundle.
 ### Phase 6 — Validation, dtype boundaries, and fallback paths
 
 Status: implemented for the current covariance-form scope. Static order and
-scalar-parameter validation, `make_Ks`, generator output dtype selection, and
-x64 generator regression coverage are implemented. High-order x32 symbolic
-integer-overflow handling remains a known limitation and is explicitly
-outside the current supported path.
+scalar-parameter validation, `make_Ks`, and supported-order x64/x32 regression
+coverage are implemented. Orders above 2 remain explicitly unsupported.
 
-- Derive generator output dtype from input dtype instead of unconditional
-  `complex128` allocation; avoid integer overflow during high-order symbolic
-  conversion.
+- Keep dtype handling explicit at kernel boundaries and reject unsupported
+  state-space orders above 2 rather than attempting unvalidated construction.
 - Validate nonnegative static integer `order` and positive `rho` at Python
   API boundaries.
 - Do not use `abs` to hide invalid stationary variances in `state_scale`.
 - Document that state covariance calls use nonnegative, transition-oriented
   lags unless signed-lag support is explicitly implemented.
-- Add explicit stress coverage for orders 0–8, short lags, high frequencies,
-  x64 and x32, and a jitter ladder. Record when fixed `s=1e-5` is sufficient,
+- Maintain stress coverage for supported orders 0–2, short lags, high
+  frequencies, x64 and x32, and a jitter ladder. Record when fixed `s=1e-5`
+  is sufficient,
   when adaptive jitter is activated, and when the calculation should fail
   rather than silently alter the covariance.
 - Defer square-root/QR filtering and conditional-covariance propagation to a
@@ -225,12 +223,11 @@ Update:
 
 - docs/api.md;
 - docs/algorithms.md;
-- docs/kernel-generator.md;
 - __init__.py exports and docstrings if public symbols change;
 - tests and examples.
 
-Remove stale claims that generator dispatch starts at order 2. The current
-built-in boundary is order 2; generator fallback starts at order 3.
+The built-in boundary is order 2; orders above 2 and new kernel families are
+explicitly unsupported.
 
 ### Phase 8 — Optional square-root path (deferred follow-up)
 
@@ -266,14 +263,18 @@ The stabilization stage is complete when:
 
 ## Current validation evidence
 
+The current repository validation is:
+
 ```text
-focused kernel/CVHM/generator tests: 369 passed, 2 warnings
-benchmark (`--run-slow`): 5 passed, 4 warnings
-full suite: 443 passed, 5 skipped, 2 warnings
-VdP demo: frozen 0.9721, estimated 0.9723, variable-length 0.9721
-VdP frozen jitter comparison: s=0 -> 0.97223, s=1e-5 -> 0.97212;
-both pass the 0.96 floor and differ by about 1.1e-4
+full CPU suite: 133 passed, 39 skipped
+GPU CPU–GPU parity: 1 passed
+VdP demo: frozen order 0 -> 0.8677, order 1 -> 0.9721,
+           order 2 -> 0.9819, estimated -> 0.9723,
+           variable-length -> 0.9721
 ```
+
+The benchmark remains the regression guard for inference quality and should be
+run with `--run-slow` before future numerical changes.
 
 The optional square-root/QR path remains deferred: the x64, correlation-scaled
 covariance-form path is adequate for the current benchmark and realistic case.
@@ -282,7 +283,6 @@ covariance-form path is adequate for the current benchmark and realistic case.
 
 ```bash
 JAX_ENABLE_X64=1 uv run pytest -q tests/test_hm.py tests/test_cvhm.py
-JAX_ENABLE_X64=1 uv run pytest -q tests/kernel_generator/test_kernel_generator.py
 JAX_ENABLE_X64=1 uv run pytest -q tests/test_benchmark.py --run-slow
 JAX_ENABLE_X64=1 uv run pytest -q
 ```
