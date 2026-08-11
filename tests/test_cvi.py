@@ -98,7 +98,7 @@ def test_poisson_cvi_gradient_direction(rng):
 
     C_raw = jnp.array(rng.standard_normal((N, K)) * 0.3)
     d = jnp.ones(N)
-    params = Params(C=C_raw, d=d, R=None)
+    params = Params(C=C_raw, d=d, R=jnp.asarray(0.0))
 
     x = jnp.array(rng.standard_normal((1, T, K)) * 0.5)
     eta = x @ C_raw.T + d

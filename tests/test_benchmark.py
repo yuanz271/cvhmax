@@ -103,7 +103,9 @@ def test_benchmark_jitter_regression(s):
     """The conservative instantaneous component is neutral on VdP data."""
     rng = np.random.default_rng(2024)
     y, _, x_std, C_true, d_true = _make_data(rng)
-    true_params = Params(C=jnp.asarray(C_true), d=jnp.asarray(d_true), R=None)
+    true_params = Params(
+        C=jnp.asarray(C_true), d=jnp.asarray(d_true), R=jnp.asarray(0.0)
+    )
     model = CVHM(
         n_components=N_LATENTS,
         dt=DT,
@@ -140,7 +142,9 @@ def test_benchmark_frozen_readout():
     y, _, x_std, C_true, d_true = _make_data(rng)
     kernels = _kernels()
 
-    true_params = Params(C=jnp.asarray(C_true), d=jnp.asarray(d_true), R=None)
+    true_params = Params(
+        C=jnp.asarray(C_true), d=jnp.asarray(d_true), R=jnp.asarray(0.0)
+    )
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,

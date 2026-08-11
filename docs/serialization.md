@@ -105,6 +105,9 @@ A representative manifest is:
     "lr": 0.1,
     "max_iter": 10,
     "cvi_iter": 5,
+    "tol": 0.05,
+    "min_iter": 2,
+    "convergence_patience": 2,
     "observation": "Gaussian",
     "kernels": [
       {
@@ -119,7 +122,6 @@ A representative manifest is:
   "params": {
     "present": true,
     "type": "cvhmax.cvi.Params",
-    "R_is_none": false,
     "arrays": {
       "C": {"shape": [2, 1], "dtype": "float64"},
       "d": {"shape": [2], "dtype": "float64"},
@@ -129,15 +131,19 @@ A representative manifest is:
 }
 ```
 
+For Gaussian, `Params.R` is an observation covariance matrix. For Poisson,
+`Params.R` is the scalar JAX sentinel `jnp.asarray(0.0)`; it is serialized as a
+scalar array and is not used as a covariance.
+
 The manifest must record:
 
 - archive format and integer version;
 - all `CVHM`-owned configuration: `n_components`, `dt`, `lr`, `max_iter`,
-  `cvi_iter`, and `observation`;
+  `cvi_iter`, `tol`, `min_iter`, `convergence_patience`, and `observation`;
 - each HidaMatern configuration: `sigma`, `rho`, `omega`, `order`, and `s`;
 - whether fitted parameters are present;
 - parameter-tree metadata needed to create the runtime Equinox `like` PyTree,
-  including whether `Params.R` is `None`; and
+  including the always-present JAX-compatible `Params.R` leaf; and
 - array shape and dtype metadata required by the Equinox restore path.
 
 JSON values must be finite and representable without loss of model semantics.

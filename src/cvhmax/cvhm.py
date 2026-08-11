@@ -27,6 +27,32 @@ class _ScaledDynamics(NamedTuple):
     backward_noise: Array
 
 
+def _relative_change(value_new: Array, value_old: Array) -> Array:
+    """Normalized change between successive readout parameters.
+
+    Uses the Frobenius norm for matrices and the 2-norm for vectors,
+    normalized by ``max(1, ||reference||)``.
+    """
+    denom = jnp.maximum(jnp.linalg.norm(value_old), 1.0)
+    return jnp.linalg.norm(value_new - value_old) / denom
+
+
+def readout_change(params_new, params_old) -> Array:
+    """Scalar readout-parameter change between two outer EM iterations.
+
+    Compares the CVHM-owned readout ``Params`` fields ``C``, ``d``, and ``R``.
+    With the latent GP prior and data fixed, identical readout parameters
+    deterministically imply the same posterior, so no latent posterior or
+    coordinate-alignment comparison is required. ``R`` is always a
+    JAX-compatible leaf; for Poisson readouts it is the scalar zero sentinel
+    on every iteration, contributing zero change.
+    """
+    delta_C = _relative_change(params_new.C, params_old.C)
+    delta_d = _relative_change(params_new.d, params_old.d)
+    delta_R = _relative_change(params_new.R, params_old.R)
+    return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
+
+
 @dataclass
 class CVHM:
     """Variational CVHM model wrapper for latent state inference and smoothing.
@@ -49,6 +75,12 @@ class CVHM:
         Maximum number of outer EM iterations.
     cvi_iter : int, default=5
         Number of inner CVI smoothing iterations per EM step.
+    tol : float, default=0.05
+        Convergence tolerance on the readout-parameter change.
+    min_iter : int, default=2
+        Minimum number of completed outer iterations before a stop is allowed.
+    convergence_patience : int, default=2
+        Number of consecutive passing outer iterations required for convergence.
 
     Attributes
     ----------
@@ -67,13 +99,30 @@ class CVHM:
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 10
     cvi_iter: int = 5
+    tol: float = 0.05
+    min_iter: int = 2
+    convergence_patience: int = 2
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
-        """Resolve the built-in CVI subclass for the requested observation model."""
+        """Resolve the built-in CVI subclass and validate convergence settings."""
         self.cvi = CVI.registry.get(self.observation)
         if self.cvi is None:
             raise ValueError(f"Unsupported observation model: {self.observation!r}")
+        tol = float(self.tol)
+        if not math.isfinite(tol) or tol <= 0:
+            raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")
+        self.tol = tol
+        if int(self.min_iter) < 1:
+            raise ValueError(f"min_iter must be >= 1, got {self.min_iter!r}")
+        if int(self.convergence_patience) < 1:
+            raise ValueError(
+                f"convergence_patience must be >= 1, got {self.convergence_patience!r}"
+            )
+        if int(self.min_iter) > int(self.max_iter):
+            raise ValueError(
+                f"min_iter ({self.min_iter}) must not exceed max_iter ({self.max_iter})"
+            )
 
     def _scaled_kernel_dynamics(self, tau):
         """Return correlation-scaled, Cholesky-stabilized dynamics."""
@@ -323,9 +372,48 @@ class CVHM:
                 "Training", total=self.max_iter, nell=jnp.nan, nell_display="n/a"
             )
 
-            def step(i, carry):
-                carry = em_step(i, carry)
-                *_, nell = carry
+            # Initial convergence state: iteration 0, prev_params = params
+            # (dummy), has_prev=False so first metric is inf, patience=0,
+            # converged=False, metric=inf, nell=jnp.nan
+            init_carry = (
+                0, params, z, Z, jl, Jl, m, V, params, False, 0, False, jnp.inf, jnp.nan
+            )
+
+            def cond(carry):
+                iteration, _, _, _, _, _, _, _, _, _, _, converged, _, _ = carry
+                return (iteration < self.max_iter) & (~converged)
+
+            def body(carry):
+                (
+                    iteration, cur_params, z, Z, jl, Jl, m, V,
+                    prev_params, has_prev, patience, converged, metric, nell,
+                ) = carry
+
+                # Run one EM step
+                new_params, z, Z, jl, Jl, m, V, nell = em_step(
+                    iteration, (cur_params, z, Z, jl, Jl, m, V, nell)
+                )
+
+                # Compute convergence metric
+                metric = jnp.where(
+                    has_prev,
+                    readout_change(new_params, prev_params),
+                    jnp.inf,
+                )
+
+                iteration_new = iteration + 1
+
+                # Consecutive-passing patience: count only when
+                # iteration >= min_iter, metric is finite and <= tol
+                passing = (
+                    jnp.isfinite(metric)
+                    & (metric <= self.tol)
+                    & (iteration_new >= self.min_iter)
+                )
+                patience = jnp.where(passing, patience + 1, 0)
+                converged = passing & (patience >= self.convergence_patience)
+
+                # Progress bar update (iteration is 0-indexed)
                 jax.debug.callback(
                     lambda step_i, x: pbar.update(
                         task_id,
@@ -335,20 +423,27 @@ class CVHM:
                             f"{float(x):.3f}" if math.isfinite(float(x)) else "n/a"
                         ),
                     ),
-                    i,
+                    iteration,
                     nell,
                     ordered=True,
                 )
-                return carry
 
-            carry = (params, z, Z, jl, Jl, m, V, jnp.nan)
+                return (
+                    iteration_new, new_params, z, Z, jl, Jl, m, V,
+                    new_params, True, patience, converged, metric, nell,
+                )
 
-            carry = jax.lax.fori_loop(0, self.max_iter, step, carry)
+            final_carry = jax.lax.while_loop(cond, body, init_carry)
 
-        params, z, Z, jl, Jl, m, V, _ = carry
+        (
+            iteration, params, z, Z, jl, Jl, m, V,
+            _, _, _, converged, _, _,  # noqa: E741
+        ) = final_carry
         self.params = params
         self.latent = (z, Z)
         self.posterior = (m, V)
+        self.converged_ = bool(converged)
+        self.n_iter_ = int(iteration)
         return self
 
     def get_config(self) -> dict:
@@ -358,7 +453,8 @@ class CVHM:
         -------
         dict
             Configuration with keys ``n_components``, ``dt``, ``lr``, ``max_iter``,
-            ``cvi_iter``, ``observation``, and ``kernels`` (each kernel via
+            ``cvi_iter``, ``tol``, ``min_iter``, ``convergence_patience``,
+            ``observation``, and ``kernels`` (each kernel via
             its ``get_config()``).
         """
         return {
@@ -367,6 +463,9 @@ class CVHM:
             "lr": float(self.lr),
             "max_iter": int(self.max_iter),
             "cvi_iter": int(self.cvi_iter),
+            "tol": float(self.tol),
+            "min_iter": int(self.min_iter),
+            "convergence_patience": int(self.convergence_patience),
             "observation": str(self.observation),
             "kernels": [k.get_config() for k in self.kernels],
         }
@@ -379,7 +478,8 @@ class CVHM:
         ----------
         config : dict
             Configuration dict with keys ``n_components``, ``dt``, ``lr``,
-            ``max_iter``, ``cvi_iter``, ``observation``, and ``kernels``.
+            ``max_iter``, ``cvi_iter``, ``tol``, ``min_iter``,
+            ``convergence_patience``, ``observation``, and ``kernels``.
 
         Returns
         -------
@@ -394,7 +494,11 @@ class CVHM:
         """
         from .hm import HidaMatern
 
-        required = ("n_components", "dt", "lr", "max_iter", "cvi_iter", "observation", "kernels")
+        required = (
+            "n_components", "dt", "lr", "max_iter", "cvi_iter",
+            "tol", "min_iter", "convergence_patience",
+            "observation", "kernels",
+        )
         for key in required:
             if key not in config:
                 raise ValueError(f"CVHM.from_config missing required key: {key!r}")
@@ -407,6 +511,9 @@ class CVHM:
             lr=config["lr"],
             max_iter=config["max_iter"],
             cvi_iter=config["cvi_iter"],
+            tol=config["tol"],
+            min_iter=config["min_iter"],
+            convergence_patience=config["convergence_patience"],
         )
 
     def save(self, path: str | PathLike[str]) -> None:

@@ -36,7 +36,7 @@ def _fit_on_device(y, device):
             dt=1.0,
             kernels=[HidaMatern(sigma=1.0, rho=2.0, omega=0.0, order=0)],
             observation="Gaussian",
-            max_iter=1,
+            max_iter=2,
             cvi_iter=1,
         )
         model.fit(jax.device_put(y, device), random_state=0)

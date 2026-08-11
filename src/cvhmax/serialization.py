@@ -45,11 +45,10 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
     return {
         "present": True,
         "type": "cvhmax.cvi.Params",
-        "R_is_none": params.R is None,
         "arrays": {
             "C": _array_metadata(params.C),
             "d": _array_metadata(params.d),
-            "R": None if params.R is None else _array_metadata(params.R),
+            "R": _array_metadata(params.R),
         },
     }
 
@@ -94,6 +93,11 @@ def build_manifest(model: Any) -> dict[str, Any]:
             "lr": _finite_float(config["lr"], "model.lr"),
             "max_iter": _integer(config["max_iter"], "model.max_iter"),
             "cvi_iter": _integer(config["cvi_iter"], "model.cvi_iter"),
+            "tol": _finite_float(config["tol"], "model.tol"),
+            "min_iter": _integer(config["min_iter"], "model.min_iter"),
+            "convergence_patience": _integer(
+                config["convergence_patience"], "model.convergence_patience"
+            ),
         },
         "kernels": config["kernels"],
         "params": _params_manifest(model.params),
@@ -113,8 +117,8 @@ def _validate_params_shapes(params: Params, n_components: int) -> None:
         raise ValueError("Params.C shape is incompatible with n_components")
     if d.ndim != 1 or d.shape[0] != C.shape[0]:
         raise ValueError("Params.d shape is incompatible with Params.C")
-    if params.R is not None:
-        R = np.asarray(params.R)
+    R = np.asarray(params.R)
+    if R.ndim > 0:
         if R.shape != (C.shape[0], C.shape[0]):
             raise ValueError("Params.R shape is incompatible with Params.C")
 
@@ -126,8 +130,6 @@ def _deserialize_params(payload: bytes, metadata: dict[str, Any]) -> Params:
 
     def skeleton(name: str):
         item = arrays.get(name)
-        if name == "R" and item is None:
-            return None
         if not isinstance(item, dict) or not isinstance(item.get("shape"), list):
             raise ValueError(f"Invalid parameter metadata for {name}")
         try:
@@ -186,7 +188,17 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     params = manifest.get("params")
     if not isinstance(model, dict) or not isinstance(kernels, list) or not isinstance(params, dict):
         raise ValueError("Manifest has invalid model, kernels, or params metadata")
-    for key in ("n_components", "dt", "observation", "lr", "max_iter", "cvi_iter"):
+    for key in (
+        "n_components",
+        "dt",
+        "observation",
+        "lr",
+        "max_iter",
+        "cvi_iter",
+        "tol",
+        "min_iter",
+        "convergence_patience",
+    ):
         if key not in model:
             raise ValueError(f"Manifest is missing model.{key}")
     _integer(model["n_components"], "model.n_components", minimum=1)
@@ -194,6 +206,11 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     _finite_float(model["lr"], "model.lr")
     _integer(model["max_iter"], "model.max_iter")
     _integer(model["cvi_iter"], "model.cvi_iter")
+    _finite_float(model["tol"], "model.tol")
+    _integer(model["min_iter"], "model.min_iter", minimum=1)
+    _integer(model["convergence_patience"], "model.convergence_patience", minimum=1)
+    if model["min_iter"] > model["max_iter"]:
+        raise ValueError("model.min_iter must not exceed model.max_iter")
     if model["observation"] not in _SUPPORTED_OBSERVATIONS:
         raise ValueError(f"Unsupported observation model: {model['observation']!r}")
     if len(kernels) != model["n_components"]:
@@ -220,16 +237,10 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         return
     if params.get("type") != "cvhmax.cvi.Params":
         raise ValueError(f"Unsupported parameter type: {params.get('type')!r}")
-    if not isinstance(params.get("R_is_none"), bool):
-        raise ValueError("params.R_is_none must be a boolean")
     arrays = params.get("arrays")
     if not isinstance(arrays, dict) or set(arrays) != {"C", "d", "R"}:
         raise ValueError("params.arrays must contain exactly C, d, and R")
-    if (arrays["R"] is None) != params["R_is_none"]:
-        raise ValueError("params.R_is_none disagrees with params.arrays.R")
     for name, metadata in arrays.items():
-        if metadata is None:
-            continue
         if not isinstance(metadata, dict) or not isinstance(metadata.get("shape"), list):
             raise ValueError(f"Invalid parameter metadata for {name}")
         _dtype = metadata.get("dtype")
@@ -325,8 +336,4 @@ def load(path: str | os.PathLike[str]) -> Any:
         if has_params:
             model.params = _deserialize_params(archive.read(_PARAMS), params_metadata)
             _validate_params_shapes(model.params, model.n_components)
-            if model.observation == "Gaussian" and model.params.R is None:
-                raise ValueError("Gaussian Params must include R")
-            if model.observation == "Poisson" and model.params.R is not None:
-                raise ValueError("Poisson Params must have R=None")
         return model

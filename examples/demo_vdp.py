@@ -323,7 +323,7 @@ def main():
     true_params = Params(
         C=jnp.asarray(C_true),
         d=jnp.asarray(d_true),
-        R=None,
+        R=jnp.asarray(0.0),
     )
     frozen_r2 = {}
     for order in (0, 1, 2):

@@ -37,6 +37,39 @@ CVHM loop:
     params = CVI.update_readout(params, y, valid_y, m, V)        # latent
 ```
 
+### Convergence detection
+
+`CVHM.fit` always performs convergence detection and stops either when the
+configured criteria are met or when it reaches the hard `max_iter` cap. Set
+`tol` to a positive value to control the threshold.
+Stopping uses training-fit state only; held-out likelihood or predictive
+metrics are not used.
+
+After each outer iteration, the implementation compares three readout
+parameter quantities:
+
+- loading matrix change (`C`);
+- readout bias change (`d`); and
+- observation-noise covariance change (`R`); `R` is always a JAX-compatible
+  array/scalar, with Poisson using a preserved scalar zero sentinel so this
+  metric is exactly zero.
+
+The latent GP prior, kernels, time step, and data are fixed during `fit`. Thus,
+identical readout parameters deterministically imply the same posterior up to
+numerical error. The detector does not compare full latent posterior arrays or
+perform latent-coordinate rotation alignment.
+
+Each change is normalized by `max(1, ||reference||)`. Convergence requires the
+maximum of these three changes to be at most `tol` for
+`convergence_patience` consecutive iterations after at least `min_iter`
+iterations. The first iteration is always unconditional because no previous
+posterior exists for comparison. Non-finite metrics never pass. If the cap is
+reached first, the fit is marked non-converged.
+
+The diagnostics are available after fitting as `model.converged_` and
+`model.n_iter_`. There is no fixed-iteration mode that disables convergence
+detection.
+
 The forward-filter warm-up provides sequentially coherent initial
 pseudo-observations — each bin's starting point incorporates causal
 information from all prior bins.  This is a state-space operation owned

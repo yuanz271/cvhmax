@@ -61,14 +61,14 @@ class Params(Module):
         Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
     d : Array
         Bias vector with shape ``(obs_dim (N),)``.
-    R : Array | None
+    R : Array
         Observation covariance. Typically ``(obs_dim (N), obs_dim (N))``.
-        ``None`` for observation models that do not use it (e.g., Poisson).
+        For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
     """
 
     C: Array
     d: Array
-    R: Array | None
+    R: Array
 
     def loading(self) -> Array:
         """Column-normalised loading matrix.
@@ -280,9 +280,6 @@ class Gaussian(CVI):
         C = params.loading()
         d = params.d
         R = params.R
-        if R is None:
-            raise ValueError("Gaussian readout requires a noise covariance R.")
-
         return trial_info_repr(y, valid_y, C, d, R)
 
     @classmethod
@@ -608,7 +605,7 @@ class Poisson(CVI):
         )
 
         nell = poisson_trial_nell((C, d), y=y, valid_y=valid_y, m=m, V=V, gamma=0.0)
-        return Params(C=C, d=d, R=None), nell
+        return Params(C=C, d=d, R=jnp.asarray(0.0)), nell
 
     @classmethod
     def update_pseudo(
@@ -706,4 +703,4 @@ class Poisson(CVI):
             partial(poisson_trial_nell, y=y, valid_y=jnp.ones(y.shape[:1]), m=m, V=V),
         )
 
-        return Params(C=C, d=d, R=None)
+        return Params(C=C, d=d, R=jnp.asarray(0.0))

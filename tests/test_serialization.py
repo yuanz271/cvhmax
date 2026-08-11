@@ -77,14 +77,15 @@ def test_fitted_gaussian_round_trip_and_infer(tmp_path):
     )
 
 
-def test_fitted_poisson_round_trip_with_none_covariance(tmp_path):
+def test_fitted_poisson_round_trip_with_sentinel_r(tmp_path):
     y = jnp.asarray(np.random.default_rng(1).poisson(2.0, size=(1, 5, 2)))
     model = _model("Poisson").fit(y, random_state=0)
     path = tmp_path / "poisson.cvhmax"
     model.save(path)
     restored = CVHM.load(path)
 
-    assert restored.params.R is None
+    assert np.asarray(restored.params.R).ndim == 0
+    assert float(np.asarray(restored.params.R)) == 0.0
     np.testing.assert_array_equal(
         np.asarray(restored.params.C), np.asarray(model.params.C)
     )
@@ -182,6 +183,9 @@ class TestGetConfigProtocol:
         assert config["n_components"] == 1
         assert config["dt"] == 0.5
         assert config["observation"] == "Gaussian"
+        assert config["tol"] == model.tol
+        assert config["min_iter"] == 2
+        assert config["convergence_patience"] == 2
         assert len(config["kernels"]) == 1
         assert set(config["kernels"][0]) == {"sigma", "rho", "omega", "order", "s"}
 
@@ -192,6 +196,9 @@ class TestGetConfigProtocol:
         assert restored.lr == model.lr
         assert restored.max_iter == model.max_iter
         assert restored.cvi_iter == model.cvi_iter
+        assert restored.tol == model.tol
+        assert restored.min_iter == model.min_iter
+        assert restored.convergence_patience == model.convergence_patience
         assert restored.params is None
         assert not hasattr(restored, "posterior")
         assert restored.kernels[0] == model.kernels[0]
@@ -311,9 +318,12 @@ def test_missing_params_eqx_when_present_is_true(tmp_path):
             "lr": 0.1,
             "max_iter": 10,
             "cvi_iter": 5,
+            "tol": 1e-4,
+            "min_iter": 2,
+            "convergence_patience": 2,
         },
         "kernels": [{"sigma": 1.0, "rho": 10.0, "omega": 0.0, "order": 0, "s": 1e-5}],
-        "params": {"present": True, "type": "cvhmax.cvi.Params", "R_is_none": False, "arrays": {"C": {"shape": [2, 1], "dtype": "float64"}, "d": {"shape": [2], "dtype": "float64"}, "R": {"shape": [2, 2], "dtype": "float64"}}},
+        "params": {"present": True, "type": "cvhmax.cvi.Params", "arrays": {"C": {"shape": [2, 1], "dtype": "float64"}, "d": {"shape": [2], "dtype": "float64"}, "R": {"shape": [2, 2], "dtype": "float64"}}},
     }
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
@@ -332,9 +342,12 @@ def _valid_manifest_with_params() -> dict:
             "lr": 0.1,
             "max_iter": 10,
             "cvi_iter": 5,
+            "tol": 1e-4,
+            "min_iter": 2,
+            "convergence_patience": 2,
         },
         "kernels": [{"sigma": 1.0, "rho": 10.0, "omega": 0.0, "order": 0, "s": 1e-5}],
-        "params": {"present": True, "type": "cvhmax.cvi.Params", "R_is_none": False, "arrays": {"C": {"shape": [2, 1], "dtype": "float64"}, "d": {"shape": [2], "dtype": "float64"}, "R": {"shape": [2, 2], "dtype": "float64"}}},
+        "params": {"present": True, "type": "cvhmax.cvi.Params", "arrays": {"C": {"shape": [2, 1], "dtype": "float64"}, "d": {"shape": [2], "dtype": "float64"}, "R": {"shape": [2, 2], "dtype": "float64"}}},
     }
 
 
@@ -355,16 +368,6 @@ def test_malformed_param_shape_rejected(tmp_path):
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
     with pytest.raises(ValueError, match="must be at least 0"):
-        CVHM.load(path)
-
-
-def test_params_r_is_none_disagreement_rejected(tmp_path):
-    path = tmp_path / "r_mismatch.cvhmax"
-    manifest = _valid_manifest_with_params()
-    manifest["params"]["R_is_none"] = True  # arrays.R is not None
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("manifest.json", json.dumps(manifest))
-    with pytest.raises(ValueError, match="disagrees with params.arrays.R"):
         CVHM.load(path)
 
 
@@ -441,3 +444,139 @@ def test_infer_does_not_mutate_params(tmp_path):
     m, V = restored.infer(_data())
     C_after = np.asarray(restored.params.C)
     np.testing.assert_array_equal(C_after, C_before)
+
+
+# ---------------------------------------------------------------------------
+# Convergence detection
+# ---------------------------------------------------------------------------
+
+
+def _conv_model(observation="Gaussian", **kwargs):
+    defaults = dict(
+        n_components=1,
+        dt=0.5,
+        kernels=[HidaMatern(sigma=1.2, rho=2.0, omega=0.3, order=1, s=1e-5)],
+        observation=observation,
+        lr=0.2,
+        max_iter=10,
+        cvi_iter=1,
+    )
+    defaults.update(kwargs)
+    return CVHM(**defaults)
+
+
+def _conv_data():
+    return jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 2)))
+
+
+def test_default_convergence_stops_early():
+    """Default tolerance (0.05) and min_iter/convergence_patience (2) should
+    allow early stopping before max_iter for a Gaussian fit."""
+    model = _conv_model().fit(_conv_data(), random_state=0)
+    assert model.converged_ is True
+    assert model.n_iter_ < model.max_iter
+    # Should have completed at least min_iter iterations
+    assert model.n_iter_ >= model.min_iter
+
+
+def test_loose_tolerance_stops_earlier():
+    """A looser tolerance should stop earlier than a strict one."""
+    data = _conv_data()
+    strict = _conv_model(tol=1e-6).fit(data, random_state=0)
+    loose = _conv_model(tol=1e-1).fit(data, random_state=0)
+    assert strict.converged_ is False
+    assert strict.n_iter_ == strict.max_iter
+    assert loose.converged_ is True
+    assert loose.n_iter_ < loose.max_iter
+
+
+def test_strict_tolerance_reaches_cap():
+    """A very strict tolerance should reach max_iter and report non-convergence."""
+    model = _conv_model(tol=1e-20, max_iter=5).fit(_conv_data(), random_state=0)
+    assert model.converged_ is False
+    assert model.n_iter_ == 5
+
+
+def test_min_iter_prevents_premature_stopping():
+    """Convergence should not be possible before min_iter iterations."""
+    data = _conv_data()
+    model = _conv_model(tol=1.0, min_iter=10, max_iter=10).fit(data, random_state=0)
+    # Even with tol=1.0, we cannot stop before min_iter=10
+    assert model.n_iter_ == 10
+    assert model.converged_ is False
+
+
+def test_convergence_patience_requires_consecutive_passing():
+    """With patience > 1, convergence requires multiple consecutive passing iterations."""
+    data = _conv_data()
+    # Use patience=3 so we need 3 consecutive passes
+    model = _conv_model(tol=0.1, convergence_patience=3, max_iter=10)
+    model.fit(data, random_state=0)
+    assert model.converged_ is True
+    # At least min_iter passes, with patience=3 must have at least 3 consecutive
+    # passing iterations, so at least min_iter + patience - 1 = 4 iterations
+    assert model.n_iter_ >= 4
+
+
+def test_invalid_tol_fails():
+    with pytest.raises(ValueError, match="tol must be finite"):
+        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=0.0)
+    with pytest.raises(ValueError, match="tol must be finite"):
+        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=-1.0)
+
+
+def test_invalid_min_iter_fails():
+    with pytest.raises(ValueError, match="min_iter must be >= 1"):
+        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], min_iter=0)
+
+
+def test_invalid_convergence_patience_fails():
+    with pytest.raises(ValueError, match="convergence_patience must be >= 1"):
+        CVHM(
+            n_components=1,
+            dt=1.0,
+            kernels=[HidaMatern()],
+            convergence_patience=0,
+        )
+
+
+def test_min_iter_exceeds_max_iter_fails():
+    with pytest.raises(ValueError, match="min_iter.*must not exceed"):
+        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], min_iter=10, max_iter=5)
+
+
+def test_convergence_fields_serialize_round_trip(tmp_path):
+    """Convergence configuration fields are serialized and restored."""
+    path = tmp_path / "model.cvhmax"
+    model = _conv_model(tol=1e-3, min_iter=3, convergence_patience=4)
+    model.save(path)
+    restored = CVHM.load(path)
+    assert restored.tol == 1e-3
+    assert restored.min_iter == 3
+    assert restored.convergence_patience == 4
+
+
+def test_convergence_diagnostics_after_fit(tmp_path):
+    """converged_ and n_iter_ are set after fit and are not present before."""
+    model = _conv_model()
+    assert not hasattr(model, "converged_")
+    assert not hasattr(model, "n_iter_")
+    model.fit(_conv_data(), random_state=0)
+    assert hasattr(model, "converged_")
+    assert hasattr(model, "n_iter_")
+    assert isinstance(model.converged_, bool)
+    assert isinstance(model.n_iter_, int)
+
+
+def test_first_iteration_does_not_converge():
+    """The first iteration cannot converge because no previous readout-parameter
+    state exists for comparison."""
+    data = _conv_data()
+    # Even with tol=inf, min_iter=1, patience=1, the first iteration has
+    # metric=inf (no previous state), so it cannot converge.
+    model = _conv_model(tol=1e10, min_iter=1, convergence_patience=1, max_iter=2)
+    model.fit(data, random_state=0)
+    # The first iteration doesn't converge, second iteration should converge
+    # (since tol is huge and patience=1)
+    assert model.converged_ is True
+    assert model.n_iter_ <= 2

@@ -452,7 +452,7 @@ def test_poisson_cvi_step_parity():
     # Build params — cvhmax normalises C internally via norm_loading,
     # so H will differ from the reference H_np.  We test shapes + finiteness.
     C_jax = jnp.array(C_np)
-    params = Params(C=C_jax, d=jnp.array(d_np), R=None)
+    params = Params(C=C_jax, d=jnp.array(d_np), R=jnp.asarray(0.0))
     y_jax = jnp.array(y_np)
     valid_y_jax = jnp.ones((1, T))
 

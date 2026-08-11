@@ -73,6 +73,9 @@ model = CVHM(
     kernels=kernels,
     observation="Poisson",  # or "Gaussian"
     max_iter=5,
+    tol=0.05,
+    min_iter=2,
+    convergence_patience=2,
 )
 model.fit(y, valid_y=valid_y, random_state=0)
 m, V = model.posterior  # latents: (trials, time, n_latents) and covariances

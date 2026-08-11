@@ -22,7 +22,10 @@
 - If float64 is disabled, expect larger roundoff at small lags. For custom
   higher-order kernels, validate numerical conditioning separately rather than
   silently increasing jitter indefinitely.
-- Start with smaller `max_iter`/`cvi_iter` and gradually increase.
+- Start with smaller `max_iter`/`cvi_iter` and gradually increase. Convergence
+  detection is mandatory; adjust the positive `tol`, `min_iter`, and
+  `convergence_patience` settings and inspect `model.converged_` and
+  `model.n_iter_`. Held-out metrics are not used as the stopping criterion.
 
 ## Training progress shows `Negative ELL n/a`
 
