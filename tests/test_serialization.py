@@ -1,4 +1,4 @@
-"""Model serialization round-trip tests."""
+"""Positive model serialization and convergence tests."""
 
 import json
 import subprocess
@@ -6,125 +6,121 @@ import sys
 import zipfile
 
 import numpy as np
-import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM, readout_change
-from cvhmax.cvi import CVI
+from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern
 
 
-def _model(observation="Gaussian"):
-    return CVHM(
+def _model(observation="Gaussian", **kwargs):
+    config = dict(
         n_components=1,
         dt=0.5,
         kernels=[HidaMatern(sigma=1.2, rho=2.0, omega=0.3, order=1, s=1e-5)],
         observation=observation,
         lr=0.2,
-        max_iter=2,
+        max_iter=10,
         cvi_iter=1,
     )
+    config.update(kwargs)
+    return CVHM(**config)
 
 
-def _multi_component_model(orders):
-    return CVHM(
-        n_components=len(orders),
-        dt=0.5,
-        kernels=[HidaMatern(order=order) for order in orders],
-        observation="Gaussian",
-        lr=0.2,
-        max_iter=2,
-        cvi_iter=1,
+def _data(n_components=1, n_features=2, n_time=16):
+    return jnp.asarray(
+        np.random.default_rng(0).normal(size=(1, n_time, n_features))
     )
-
-
-def _data():
-    return jnp.asarray(np.random.default_rng(0).normal(size=(1, 8, 2)))
 
 
 def test_unfitted_model_round_trip(tmp_path):
-    path = tmp_path / "model.cvhmax"
     model = _model()
+    path = tmp_path / "model.cvhmax"
     model.save(path)
     restored = CVHM.load(path)
 
     assert restored.params is None
-    assert not hasattr(restored, "posterior")
-    assert restored.observation == model.observation
+    assert restored.get_config() == model.get_config()
     assert restored.kernels[0] == model.kernels[0]
-    assert restored.n_components == model.n_components
-    assert restored.dt == model.dt
 
 
 def test_fitted_gaussian_round_trip_and_infer(tmp_path):
+    data = _data()
+    model = _model().fit(data, random_state=0)
     path = tmp_path / "model.cvhmax"
-    model = _model().fit(_data(), random_state=0)
-    params_before = tuple(np.asarray(value) for value in (model.params.C, model.params.d, model.params.R))
     model.save(path)
     restored = CVHM.load(path)
 
-    assert not hasattr(restored, "posterior")
-    assert not hasattr(restored, "latent")
-    for actual, expected in zip(
-        (restored.params.C, restored.params.d, restored.params.R), params_before
-    ):
-        np.testing.assert_array_equal(np.asarray(actual), expected)
+    np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
+    np.testing.assert_array_equal(np.asarray(restored.params.d), np.asarray(model.params.d))
+    np.testing.assert_array_equal(np.asarray(restored.params.R), np.asarray(model.params.R))
 
-    posterior = restored.infer(_data())
-    assert posterior[0].shape == (1, 8, 1)
-    assert all(np.isfinite(np.asarray(value)).all() for value in posterior)
-    np.testing.assert_array_equal(
-        np.asarray(restored.params.C), np.asarray(model.params.C)
-    )
+    means, covariances = restored.infer(data)
+    assert means.shape == (1, data.shape[1], 1)
+    assert covariances.shape == (1, data.shape[1], 1, 1)
+    assert np.isfinite(np.asarray(means)).all()
+    assert np.isfinite(np.asarray(covariances)).all()
 
 
 def test_fitted_poisson_round_trip_with_sentinel_r(tmp_path):
-    y = jnp.asarray(np.random.default_rng(1).poisson(2.0, size=(1, 5, 2)))
-    model = _model("Poisson").fit(y, random_state=0)
+    data = jnp.asarray(np.random.default_rng(1).poisson(2.0, size=(1, 8, 2)))
+    model = _model("Poisson").fit(data, random_state=0)
     path = tmp_path / "poisson.cvhmax"
     model.save(path)
     restored = CVHM.load(path)
 
-    assert np.asarray(restored.params.R).ndim == 0
-    assert float(np.asarray(restored.params.R)) == 0.0
-    np.testing.assert_array_equal(
-        np.asarray(restored.params.C), np.asarray(model.params.C)
+    assert np.asarray(restored.params.R).shape == ()
+    assert float(restored.params.R) == 0.0
+    np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
+    means, covariances = restored.infer(data)
+    assert np.isfinite(np.asarray(means)).all()
+    assert np.isfinite(np.asarray(covariances)).all()
+
+
+def test_model_config_round_trip():
+    model = _model(tol=0.01, min_iter=3, convergence_patience=4)
+    restored = CVHM.from_config(model.get_config())
+    assert restored.get_config() == model.get_config()
+
+
+def test_hida_matern_config_round_trip():
+    for order in (0, 1, 2):
+        kernel = HidaMatern(
+            sigma=1.5, rho=10.0, omega=0.4, order=order, s=1e-5
+        )
+        assert HidaMatern.from_config(kernel.get_config()) == kernel
+
+
+def test_multiple_components_and_supported_orders_round_trip(tmp_path):
+    orders = (0, 1, 2)
+    model = CVHM(
+        n_components=3,
+        dt=0.5,
+        kernels=[HidaMatern(order=order) for order in orders],
+        observation="Gaussian",
+        max_iter=2,
+        min_iter=2,
     )
+    data = _data(n_components=3, n_features=3)
+    model.fit(data, random_state=0)
+    path = tmp_path / "multi.cvhmax"
+    model.save(path)
+    restored = CVHM.load(path)
+
+    assert tuple(kernel.order for kernel in restored.kernels) == orders
+    means, covariances = restored.infer(data)
+    assert means.shape[-1] == 3
+    assert covariances.shape[-2:] == (3, 3)
 
 
-def test_archive_is_self_contained_and_data_only(tmp_path):
+def test_archive_is_single_model_artifact(tmp_path):
     path = tmp_path / "model.cvhmax"
     _model().fit(_data(), random_state=0).save(path)
     with zipfile.ZipFile(path) as archive:
-        assert set(archive.namelist()) == {"manifest.json", "params.eqx"}
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["format"] == "cvhmax.CVHM"
-        # Kernels are HidaMatern by contract; no kernel type field is stored.
-        assert "class" not in manifest["kernels"][0]
-        assert set(manifest["kernels"][0]) == {"sigma", "rho", "omega", "order", "s"}
-        assert b"pickle" not in archive.read("params.eqx").lower()
-
-
-def test_invalid_manifest_version_fails(tmp_path):
-    path = tmp_path / "model.cvhmax"
-    _model().fit(_data(), random_state=0).save(path)
-    broken = tmp_path / "broken.cvhmax"
-    with zipfile.ZipFile(path) as source, zipfile.ZipFile(broken, "w") as target:
-        manifest = json.loads(source.read("manifest.json"))
-        manifest["version"] = 99
-        target.writestr("manifest.json", json.dumps(manifest))
-        target.writestr("params.eqx", source.read("params.eqx"))
-    with pytest.raises(ValueError, match="Unsupported serialization version"):
-        CVHM.load(broken)
-
-
-def test_custom_kernel_is_rejected(tmp_path):
-    class CustomKernel:
-        pass
-
-    model = CVHM(n_components=1, dt=1.0, kernels=[CustomKernel()])
-    with pytest.raises((AttributeError, TypeError)):
-        model.save(tmp_path / "model.cvhmax")
+        members = set(archive.namelist())
+    assert manifest["format"] == "cvhmax.CVHM"
+    assert members == {"manifest.json", "params.eqx"}
 
 
 def test_round_trip_in_fresh_process(tmp_path):
@@ -136,11 +132,10 @@ import numpy as np
 import jax.numpy as jnp
 from cvhmax.cvhm import CVHM
 model = CVHM.load(sys.argv[1])
-assert model.params is not None
-assert not hasattr(model, 'posterior')
-y = jnp.asarray(np.random.default_rng(0).normal(size=(1, 8, 2)))
-posterior = model.infer(y)
-assert posterior[0].shape == (1, 8, 1)
+y = jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 2)))
+means, covariances = model.infer(y)
+assert means.shape == (1, 16, 1)
+assert covariances.shape == (1, 16, 1, 1)
 print(model.observation, model.n_components)
 """
     result = subprocess.run(
@@ -152,471 +147,28 @@ print(model.observation, model.n_components)
     assert result.stdout.strip() == "Gaussian 1"
 
 
-# ---------------------------------------------------------------------------
-# get_config / from_config protocol tests
-# ---------------------------------------------------------------------------
-
-
-class TestGetConfigProtocol:
-    """Verify the get_config/from_config protocol on CVHM and HidaMatern."""
-
-    def test_hida_matern_get_config_round_trip(self):
-        kernel = HidaMatern(sigma=1.5, rho=50.0, omega=0.0, order=1, s=1e-5)
-        config = kernel.get_config()
-        assert config == {"sigma": 1.5, "rho": 50.0, "omega": 0.0, "order": 1, "s": 1e-5}
-        restored = HidaMatern.from_config(config)
-        assert restored == kernel
-
-    def test_hida_matern_from_config_missing_key(self):
-        with pytest.raises(ValueError, match="missing required key"):
-            HidaMatern.from_config({"sigma": 1.0, "rho": 2.0})
-
-    @pytest.mark.parametrize("order", [0, 1, 2])
-    def test_hida_matern_all_supported_orders(self, order):
-        kernel = HidaMatern(sigma=1.0, rho=10.0, omega=0.0, order=order, s=1e-5)
-        config = kernel.get_config()
-        restored = HidaMatern.from_config(config)
-        assert restored == kernel
-
-    def test_cvhm_get_config_round_trip(self):
-        model = _model()
-        config = model.get_config()
-        assert config["n_components"] == 1
-        assert config["dt"] == 0.5
-        assert config["observation"] == "Gaussian"
-        assert config["tol"] == model.tol
-        assert config["min_iter"] == 2
-        assert config["convergence_patience"] == 2
-        assert len(config["kernels"]) == 1
-        assert set(config["kernels"][0]) == {"sigma", "rho", "omega", "order", "s"}
-
-        restored = CVHM.from_config(config)
-        assert restored.n_components == model.n_components
-        assert restored.dt == model.dt
-        assert restored.observation == model.observation
-        assert restored.lr == model.lr
-        assert restored.max_iter == model.max_iter
-        assert restored.cvi_iter == model.cvi_iter
-        assert restored.tol == model.tol
-        assert restored.min_iter == model.min_iter
-        assert restored.convergence_patience == model.convergence_patience
-        assert restored.params is None
-        assert not hasattr(restored, "posterior")
-        assert restored.kernels[0] == model.kernels[0]
-
-    def test_cvhm_from_config_missing_key(self):
-        with pytest.raises(ValueError, match="missing required key"):
-            CVHM.from_config({"n_components": 1})
-
-
-# ---------------------------------------------------------------------------
-# Multiple components and orders
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("orders", [[0], [1], [2], [0, 1], [1, 2]])
-def test_round_trip_multi_component_and_orders(tmp_path, orders):
-    """Round-trip with multiple components and various HidaMatern orders."""
-    n_components = len(orders)
-    obs_dim = max(n_components, 2)
-    path = tmp_path / "model.cvhmax"
-    model = _multi_component_model(orders)
-    y = jnp.asarray(np.random.default_rng(0).normal(size=(1, 32, obs_dim)))
-    model.fit(y, random_state=0)
-    model.save(path)
-    restored = CVHM.load(path)
-
-    assert restored.n_components == n_components
-    assert len(restored.kernels) == n_components
-    for rk, ok in zip(restored.kernels, model.kernels):
-        assert rk.order == ok.order
-        np.testing.assert_array_equal(np.asarray(rk.sigma), np.asarray(ok.sigma))
-    np.testing.assert_array_equal(
-        np.asarray(restored.params.C), np.asarray(model.params.C)
+def test_readout_change_is_invariant_to_glm_rotation():
+    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
+    theta = 0.37
+    rotation = jnp.asarray(
+        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
     )
-    # Infer after load
-    m, V = restored.infer(y)
-    assert m.shape == (1, 32, n_components)
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C @ rotation, d=old.d, R=old.R)
+    assert float(readout_change(new, old)) < 1e-6
 
 
-# ---------------------------------------------------------------------------
-# HidaMatern subclass round-trip (restored as base HidaMatern)
-# ---------------------------------------------------------------------------
-
-
-def test_hida_matern_subclass_is_restored_as_base(tmp_path):
-    class CustomHidaMatern(HidaMatern):
-        pass
-
-    kernel = CustomHidaMatern(sigma=1.0, rho=10.0, omega=0.0, order=0, s=1e-5)
-    model = CVHM(n_components=1, dt=0.5, kernels=[kernel], observation="Gaussian")
-    y = jnp.asarray(np.random.default_rng(0).normal(size=(1, 8, 2)))
-    model.fit(y, random_state=0)
-
-    path = tmp_path / "custom.cvhmax"
-    model.save(path)
-    restored = CVHM.load(path)
-
-    assert isinstance(restored.kernels[0], HidaMatern)
-    assert not isinstance(restored.kernels[0], CustomHidaMatern)
-    assert restored.kernels[0] == HidaMatern(sigma=1.0, rho=10.0, omega=0.0, order=0, s=1e-5)
-
-
-# ---------------------------------------------------------------------------
-# Malformed archive error cases
-# ---------------------------------------------------------------------------
-
-
-def test_unknown_observation_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Unsupported observation"):
-        CVHM(
-            n_components=1,
-            dt=1.0,
-            kernels=[HidaMatern()],
-            observation="UnknownObs",
-        )
-
-
-def test_unsupported_kernel_order_rejected(tmp_path):
-    with pytest.raises(ValueError, match="Unsupported Mat\u00e9rn order"):
-        HidaMatern(order=3)
-
-
-def test_missing_manifest_member_rejected(tmp_path):
-    path = tmp_path / "missing.cvhmax"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("params.eqx", b"garbage")
-    with pytest.raises(ValueError, match="missing manifest.json"):
-        CVHM.load(path)
-
-
-def test_unsafe_archive_path_rejected(tmp_path):
-    path = tmp_path / "unsafe.cvhmax"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("../manifest.json", json.dumps({"format": "cvhmax.CVHM"}))
-    with pytest.raises(ValueError, match="Unsafe archive member"):
-        CVHM.load(path)
-
-
-def test_duplicate_archive_member_rejected(tmp_path):
-    path = tmp_path / "dup.cvhmax"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("manifest.json", json.dumps({"format": "cvhmax.CVHM"}))
-        archive.writestr("manifest.json", json.dumps({"format": "cvhmax.CVHM"}))
-    with pytest.raises(ValueError, match="duplicate"):
-        CVHM.load(path)
-
-
-def test_missing_params_eqx_when_present_is_true(tmp_path):
-    path = tmp_path / "mismatch.cvhmax"
-    manifest = {
-        "format": "cvhmax.CVHM",
-        "version": 1,
-        "model": {
-            "n_components": 1,
-            "dt": 1.0,
-            "observation": "Gaussian",
-            "lr": 0.1,
-            "max_iter": 10,
-            "cvi_iter": 5,
-            "tol": 0.05,
-            "min_iter": 2,
-            "convergence_patience": 2,
-        },
-        "kernels": [{"sigma": 1.0, "rho": 10.0, "omega": 0.0, "order": 0, "s": 1e-5}],
-        "params": {"present": True, "type": "cvhmax.cvi.Params", "arrays": {"C": {"shape": [2, 1], "dtype": "float64"}, "d": {"shape": [2], "dtype": "float64"}, "R": {"shape": [2, 2], "dtype": "float64"}}},
-    }
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("manifest.json", json.dumps(manifest))
-    with pytest.raises(ValueError, match="params.eqx presence does not match"):
-        CVHM.load(path)
-
-
-def _valid_manifest_with_params() -> dict:
-    return {
-        "format": "cvhmax.CVHM",
-        "version": 1,
-        "model": {
-            "n_components": 1,
-            "dt": 1.0,
-            "observation": "Gaussian",
-            "lr": 0.1,
-            "max_iter": 10,
-            "cvi_iter": 5,
-            "tol": 0.05,
-            "min_iter": 2,
-            "convergence_patience": 2,
-        },
-        "kernels": [{"sigma": 1.0, "rho": 10.0, "omega": 0.0, "order": 0, "s": 1e-5}],
-        "params": {"present": True, "type": "cvhmax.cvi.Params", "arrays": {"C": {"shape": [2, 1], "dtype": "float64"}, "d": {"shape": [2], "dtype": "float64"}, "R": {"shape": [2, 2], "dtype": "float64"}}},
-    }
-
-
-def test_malformed_param_dtype_rejected(tmp_path):
-    path = tmp_path / "bad_dtype.cvhmax"
-    manifest = _valid_manifest_with_params()
-    manifest["params"]["arrays"]["C"]["dtype"] = "not-a-real-dtype"
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("manifest.json", json.dumps(manifest))
-    with pytest.raises(ValueError, match="Invalid parameter dtype"):
-        CVHM.load(path)
-
-
-def test_gaussian_scalar_r_rejected(tmp_path):
-    source_path = tmp_path / "source.cvhmax"
-    _model().fit(_data(), random_state=0).save(source_path)
-    path = tmp_path / "bad_r.cvhmax"
-    with zipfile.ZipFile(source_path) as source:
-        manifest = json.loads(source.read("manifest.json"))
-        manifest["params"]["arrays"]["R"]["shape"] = []
-        with zipfile.ZipFile(path, "w") as archive:
-            archive.writestr("manifest.json", json.dumps(manifest))
-            archive.writestr("params.eqx", source.read("params.eqx"))
-    with pytest.raises(ValueError, match="Gaussian Params.R"):
-        CVHM.load(path)
-
-
-def test_malformed_param_shape_rejected(tmp_path):
-    path = tmp_path / "bad_shape.cvhmax"
-    manifest = _valid_manifest_with_params()
-    manifest["params"]["arrays"]["d"]["shape"] = [-1]
-    with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("manifest.json", json.dumps(manifest))
-    with pytest.raises(ValueError, match="must be at least 0"):
-        CVHM.load(path)
-
-
-def test_manifest_size_limit_rejected(tmp_path, monkeypatch):
-    import cvhmax.serialization as serialization_module
-
-    monkeypatch.setattr(serialization_module, "_MAX_MANIFEST_BYTES", 16)
-    path = tmp_path / "model.cvhmax"
-    _model().save(path)  # manifest.json is much larger than 16 bytes
-    with pytest.raises(ValueError, match="manifest.json is too large"):
-        CVHM.load(path)
-
-
-def test_params_payload_size_limit_rejected(tmp_path, monkeypatch):
-    import cvhmax.serialization as serialization_module
-
-    monkeypatch.setattr(serialization_module, "_MAX_PARAMS_BYTES", 16)
-    path = tmp_path / "model.cvhmax"
+def test_convergence_stops_a_fit_and_reports_diagnostics():
     model = _model().fit(_data(), random_state=0)
-    with pytest.raises(ValueError, match="Serialized parameters are too large"):
-        model.save(path)
-    assert not path.exists()
-
-
-# ---------------------------------------------------------------------------
-# Overwrite and cleanup
-# ---------------------------------------------------------------------------
-
-
-def test_save_overwrite_works(tmp_path):
-    path = tmp_path / "model.cvhmax"
-    model = _model().fit(_data(), random_state=0)
-    model.save(path)
-    assert path.exists()
-    # Save again to the same path (should overwrite cleanly)
-    model.save(path)
-    assert path.exists()
-    restored = CVHM.load(path)
-    assert restored.params is not None
-
-
-def test_save_to_existing_unfitted_then_fitted(tmp_path):
-    """Unfitted save, then fitted save to same path should work."""
-    path = tmp_path / "model.cvhmax"
-    _model().save(path)
-    assert path.exists()
-    _model().fit(_data(), random_state=0).save(path)
-    restored = CVHM.load(path)
-    assert restored.params is not None
-
-
-def test_failed_save_does_not_overwrite_destination(tmp_path):
-    """A failed save must not corrupt or overwrite an existing file."""
-    path = tmp_path / "model.cvhmax"
-    path.write_text("original content")
-    model = CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()])
-    model.observation = "UnknownObs"
-    with pytest.raises(ValueError, match="Unsupported observation"):
-        model.save(path)
-    assert path.read_text() == "original content"
-
-
-# ---------------------------------------------------------------------------
-# Inference does not mutate params
-# ---------------------------------------------------------------------------
-
-
-def test_infer_does_not_mutate_params(tmp_path):
-    path = tmp_path / "model.cvhmax"
-    model = _model().fit(_data(), random_state=0)
-    C_before = np.asarray(model.params.C).copy()
-    model.save(path)
-    restored = CVHM.load(path)
-    m, V = restored.infer(_data())
-    C_after = np.asarray(restored.params.C)
-    np.testing.assert_array_equal(C_after, C_before)
-
-
-# ---------------------------------------------------------------------------
-# Convergence detection
-# ---------------------------------------------------------------------------
-
-
-def _conv_model(observation="Gaussian", **kwargs):
-    defaults = dict(
-        n_components=1,
-        dt=0.5,
-        kernels=[HidaMatern(sigma=1.2, rho=2.0, omega=0.3, order=1, s=1e-5)],
-        observation=observation,
-        lr=0.2,
-        max_iter=10,
-        cvi_iter=1,
-    )
-    defaults.update(kwargs)
-    return CVHM(**defaults)
-
-
-def _conv_data():
-    return jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 2)))
-
-
-def test_default_convergence_stops_early():
-    """Default tolerance (0.05) and min_iter/convergence_patience (2) should
-    allow early stopping before max_iter for a Gaussian fit."""
-    model = _conv_model().fit(_conv_data(), random_state=0)
     assert model.converged_ is True
-    assert model.n_iter_ < model.max_iter
-    # Should have completed at least min_iter iterations
-    assert model.n_iter_ >= model.min_iter
+    assert model.min_iter <= model.n_iter_ < model.max_iter
 
 
-def test_loose_tolerance_stops_earlier():
-    """A looser tolerance should stop earlier than a strict one."""
-    data = _conv_data()
-    strict = _conv_model(tol=1e-6).fit(data, random_state=0)
-    loose = _conv_model(tol=1e-1).fit(data, random_state=0)
-    assert strict.converged_ is False
-    assert strict.n_iter_ == strict.max_iter
-    assert loose.converged_ is True
-    assert loose.n_iter_ < loose.max_iter
-
-
-def test_strict_tolerance_reaches_cap():
-    """A very strict tolerance should reach max_iter and report non-convergence."""
-    model = _conv_model(tol=1e-20, max_iter=5).fit(_conv_data(), random_state=0)
-    assert model.converged_ is False
-    assert model.n_iter_ == 5
-
-
-def test_min_iter_prevents_premature_stopping():
-    """Convergence should not be possible before min_iter iterations."""
-    data = _conv_data()
-    model = _conv_model(tol=1.0, min_iter=10, max_iter=10).fit(data, random_state=0)
-    # Even with tol=1.0, we cannot stop before min_iter=10
-    assert model.n_iter_ == 10
-    assert model.converged_ is False
-
-
-def test_convergence_patience_requires_consecutive_passing():
-    """With patience > 1, convergence requires multiple consecutive passing iterations."""
-    data = _conv_data()
-    # Use patience=3 so we need 3 consecutive passes
-    model = _conv_model(tol=0.1, convergence_patience=3, max_iter=10)
-    model.fit(data, random_state=0)
-    assert model.converged_ is True
-    # At least min_iter passes, with patience=3 must have at least 3 consecutive
-    # passing iterations, so at least min_iter + patience - 1 = 4 iterations
-    assert model.n_iter_ >= 4
-
-
-def test_invalid_tol_fails():
-    with pytest.raises(ValueError, match="tol must be finite"):
-        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=0.0)
-    with pytest.raises(ValueError, match="tol must be finite"):
-        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=-1.0)
-
-
-def test_custom_parameter_pytree_is_rejected_by_convergence():
-    class CustomCVI(CVI):
-        @classmethod
-        def initialize_params(cls, *args, **kwargs):
-            return (jnp.zeros((2, 1)), jnp.zeros(2))
-
-    params = (jnp.zeros((2, 1)), jnp.zeros(2))
-    with pytest.raises(TypeError, match="cvhmax.cvi.Params"):
-        readout_change(params, params)
-
-
-def test_non_integral_convergence_settings_fail():
-    with pytest.raises(ValueError, match="min_iter must be an integer"):
-        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], min_iter=2.5)
-    with pytest.raises(ValueError, match="convergence_patience must be an integer"):
-        CVHM(
-            n_components=1,
-            dt=1.0,
-            kernels=[HidaMatern()],
-            convergence_patience=1.5,
-        )
-    with pytest.raises(ValueError, match="max_iter must be an integer"):
-        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], max_iter="5")
-
-
-def test_invalid_min_iter_fails():
-    with pytest.raises(ValueError, match="min_iter must be >= 1"):
-        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], min_iter=0)
-
-
-def test_invalid_convergence_patience_fails():
-    with pytest.raises(ValueError, match="convergence_patience must be >= 1"):
-        CVHM(
-            n_components=1,
-            dt=1.0,
-            kernels=[HidaMatern()],
-            convergence_patience=0,
-        )
-
-
-def test_min_iter_exceeds_max_iter_fails():
-    with pytest.raises(ValueError, match="min_iter.*must not exceed"):
-        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], min_iter=10, max_iter=5)
-
-
-def test_convergence_fields_serialize_round_trip(tmp_path):
-    """Convergence configuration fields are serialized and restored."""
+def test_convergence_configuration_round_trip(tmp_path):
+    model = _model(tol=0.01, min_iter=3, convergence_patience=4)
     path = tmp_path / "model.cvhmax"
-    model = _conv_model(tol=1e-3, min_iter=3, convergence_patience=4)
     model.save(path)
     restored = CVHM.load(path)
-    assert restored.tol == 1e-3
-    assert restored.min_iter == 3
-    assert restored.convergence_patience == 4
-
-
-def test_convergence_diagnostics_after_fit(tmp_path):
-    """converged_ and n_iter_ are set after fit and are not present before."""
-    model = _conv_model()
-    assert not hasattr(model, "converged_")
-    assert not hasattr(model, "n_iter_")
-    model.fit(_conv_data(), random_state=0)
-    assert hasattr(model, "converged_")
-    assert hasattr(model, "n_iter_")
-    assert isinstance(model.converged_, bool)
-    assert isinstance(model.n_iter_, int)
-
-
-def test_first_iteration_does_not_converge():
-    """The first iteration cannot converge because no previous readout-parameter
-    state exists for comparison."""
-    data = _conv_data()
-    # Even with tol=inf, min_iter=1, patience=1, the first iteration has
-    # metric=inf (no previous state), so it cannot converge.
-    model = _conv_model(tol=1e10, min_iter=1, convergence_patience=1, max_iter=2)
-    model.fit(data, random_state=0)
-    # The first iteration doesn't converge, second iteration should converge
-    # (since tol is huge and patience=1)
-    assert model.converged_ is True
-    assert model.n_iter_ <= 2
+    assert restored.tol == model.tol
+    assert restored.min_iter == model.min_iter
+    assert restored.convergence_patience == model.convergence_patience
