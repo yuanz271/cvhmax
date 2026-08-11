@@ -7,7 +7,7 @@ Add mandatory outer-loop convergence detection to `CVHM.fit`, with
 
 The stopping rule must be model-fit based, not validation based: held-out data
 must never influence EM stopping. The latent GP prior is fixed during `fit`, so
-convergence is detected solely from changes in the CVHM-owned readout
+convergence is detected solely from changes in the CVHM-owned GLM readout
 parameters.
 
 ## Proposed public API
@@ -50,12 +50,18 @@ and `+`. Because the GP kernels, prior, time step, and data are fixed during
 CVHM-owned readout parameters; it does not compare latent posteriors or solve
 a latent rotation/Procrustes alignment.
 
-For the loading matrix:
+For the GLM loading matrix, align the new loading to the old loading by
+orthogonal Procrustes:
 
 $$
-\delta_C = \frac{\|C^+ - C^-\|_F}
+Q^* = \arg\min_{Q^TQ=I}\|C^+Q-C^-\|_F,
+\qquad
+\delta_C = \frac{\|C^+Q^*-C^-\|_F}
 {\max(1,\|C^-\|_F)}.
 $$
+
+This handles the latent sign/permutation/orthogonal rotation gauge while
+assuming the current fixed-prior GLM representation.
 
 For the readout bias:
 
@@ -84,12 +90,10 @@ The scalar convergence metric is:
 max(delta_C, delta_d, delta_R) <= tol
 ```
 
-where `delta_R` is always included; it is zero when both `R` values are
-`None`. Compare raw `C` directly for the initial implementation: latent
-rotations are internal parameterization
-changes, but fixed kernels make the readout parameter state the sufficient
-stopping signal for the current fit. Do not compare full latent posterior
-arrays or map them into observation space.
+where `delta_R` is always included; it is zero for the Poisson scalar zero
+sentinel. `delta_C` is computed from the Procrustes-aligned loading, while `d`
+and `R` are compared directly. Do not compare full latent posterior arrays or
+map them into observation space.
 
 The first outer iteration runs unconditionally because no previous
 readout-parameter state exists for comparison. Initialize previous-state
@@ -130,7 +134,7 @@ JAX array/scalar in all branches; do not use `None` checks in the convergence
 path:
 
 - relative Frobenius change with `max(1, norm(reference))` denominator;
-- loading (`C`) change;
+- Procrustes-aligned GLM loading (`C`) change;
 - bias (`d`) change;
 - unconditional JAX-compatible noise (`R`) change;
 - aggregation to a scalar readout-parameter convergence metric.
@@ -208,6 +212,7 @@ Add discriminative tests for:
 - the first iteration cannot converge solely because its initial change is
   undefined; and
 - custom CVI subclasses using the built-in `Params` remain supported;
+- custom CVI parameter PyTrees are rejected clearly by the convergence metric;
 - `Params.R` is always a JAX-compatible leaf, including Poisson fits.
 
 Use tiny deterministic data and `max_iter` values that keep tests fast. Avoid

@@ -9,7 +9,8 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from cvhmax.cvhm import CVHM
+from cvhmax.cvhm import CVHM, readout_change
+from cvhmax.cvi import CVI
 from cvhmax.hm import HidaMatern
 
 
@@ -537,6 +538,17 @@ def test_invalid_tol_fails():
         CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=0.0)
     with pytest.raises(ValueError, match="tol must be finite"):
         CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=-1.0)
+
+
+def test_custom_parameter_pytree_is_rejected_by_convergence():
+    class CustomCVI(CVI):
+        @classmethod
+        def initialize_params(cls, *args, **kwargs):
+            return (jnp.zeros((2, 1)), jnp.zeros(2))
+
+    params = (jnp.zeros((2, 1)), jnp.zeros(2))
+    with pytest.raises(TypeError, match="cvhmax.cvi.Params"):
+        readout_change(params, params)
 
 
 def test_non_integral_convergence_settings_fail():

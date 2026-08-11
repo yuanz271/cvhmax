@@ -48,7 +48,8 @@ metrics are not used.
 After each outer iteration, the implementation compares three readout
 parameter quantities:
 
-- loading matrix change (`C`);
+- Procrustes-aligned loading matrix change (`C`), accounting for the GLM
+  latent sign/permutation/orthogonal rotation gauge;
 - readout bias change (`d`); and
 - observation-noise covariance change (`R`); `R` is always a JAX-compatible
   array/scalar, with Poisson using a preserved scalar zero sentinel so this
@@ -56,8 +57,9 @@ parameter quantities:
 
 The latent GP prior, kernels, time step, and data are fixed during `fit`. Thus,
 identical readout parameters deterministically imply the same posterior up to
-numerical error. The detector does not compare full latent posterior arrays or
-perform latent-coordinate rotation alignment.
+numerical error. The loading comparison aligns successive `C` matrices with
+orthogonal Procrustes; the detector does not compare full latent posterior
+arrays or map them into observation space.
 
 Each change is normalized by `max(1, ||reference||)`. Convergence requires the
 maximum of these three changes to be at most `tol` for

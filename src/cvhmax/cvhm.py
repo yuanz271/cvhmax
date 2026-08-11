@@ -12,7 +12,7 @@ from jax import Array, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
-from .cvi import CVI, Gaussian
+from .cvi import CVI, Gaussian, Params
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
 from .utils import cho_inv, real_repr, symm, training_progress
@@ -38,21 +38,30 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
     return jnp.linalg.norm(value_new - value_old) / denom
 
 
-def readout_change(params_new, params_old) -> Array:
-    """Scalar change between successive CVI parameter pytrees.
+def _aligned_loading_change(C_new: Array, C_old: Array) -> Array:
+    """Return Procrustes-aligned loading change for the GLM gauge."""
+    cross = C_new.T @ C_old
+    left, _, right = jnp.linalg.svd(cross, full_matrices=False)
+    rotation = left @ right
+    return _relative_change(C_new @ rotation, C_old)
 
-    The built-in ``Params`` tree compares ``C``, ``d``, and ``R``; arbitrary
-    custom CVI parameter pytrees are supported by comparing corresponding
-    numeric leaves. The trees must have identical structure.
+
+def readout_change(params_new: Params, params_old: Params) -> Array:
+    """Scalar change between successive built-in readout parameter states.
+
+    The GLM loading matrix is compared up to an orthogonal latent rotation.
+    Bias and noise parameters are compared directly. Arbitrary custom CVI
+    parameter pytrees are not supported by this convergence criterion.
     """
-    new_leaves, new_treedef = jax.tree_util.tree_flatten(params_new)
-    old_leaves, old_treedef = jax.tree_util.tree_flatten(params_old)
-    if new_treedef != old_treedef:
-        raise ValueError("CVI parameter tree structure changed during fitting")
-    if not new_leaves:
-        raise ValueError("CVI parameter tree must contain at least one leaf")
-    changes = [_relative_change(new, old) for new, old in zip(new_leaves, old_leaves)]
-    return jnp.max(jnp.stack(changes))
+    if not isinstance(params_new, Params) or not isinstance(params_old, Params):
+        raise TypeError(
+            "Convergence detection requires cvhmax.cvi.Params; "
+            "custom CVI parameter pytrees are unsupported"
+        )
+    delta_C = _aligned_loading_change(params_new.loading(), params_old.loading())
+    delta_d = _relative_change(params_new.d, params_old.d)
+    delta_R = _relative_change(params_new.R, params_old.R)
+    return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
 
 
 def _validated_integer(value: Any, name: str, *, minimum: int) -> int:
