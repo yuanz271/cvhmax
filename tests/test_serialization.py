@@ -318,7 +318,7 @@ def test_missing_params_eqx_when_present_is_true(tmp_path):
             "lr": 0.1,
             "max_iter": 10,
             "cvi_iter": 5,
-            "tol": 1e-4,
+            "tol": 0.05,
             "min_iter": 2,
             "convergence_patience": 2,
         },
@@ -342,7 +342,7 @@ def _valid_manifest_with_params() -> dict:
             "lr": 0.1,
             "max_iter": 10,
             "cvi_iter": 5,
-            "tol": 1e-4,
+            "tol": 0.05,
             "min_iter": 2,
             "convergence_patience": 2,
         },
@@ -358,6 +358,20 @@ def test_malformed_param_dtype_rejected(tmp_path):
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("manifest.json", json.dumps(manifest))
     with pytest.raises(ValueError, match="Invalid parameter dtype"):
+        CVHM.load(path)
+
+
+def test_gaussian_scalar_r_rejected(tmp_path):
+    source_path = tmp_path / "source.cvhmax"
+    _model().fit(_data(), random_state=0).save(source_path)
+    path = tmp_path / "bad_r.cvhmax"
+    with zipfile.ZipFile(source_path) as source:
+        manifest = json.loads(source.read("manifest.json"))
+        manifest["params"]["arrays"]["R"]["shape"] = []
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+            archive.writestr("params.eqx", source.read("params.eqx"))
+    with pytest.raises(ValueError, match="Gaussian Params.R"):
         CVHM.load(path)
 
 
@@ -523,6 +537,20 @@ def test_invalid_tol_fails():
         CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=0.0)
     with pytest.raises(ValueError, match="tol must be finite"):
         CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], tol=-1.0)
+
+
+def test_non_integral_convergence_settings_fail():
+    with pytest.raises(ValueError, match="min_iter must be an integer"):
+        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], min_iter=2.5)
+    with pytest.raises(ValueError, match="convergence_patience must be an integer"):
+        CVHM(
+            n_components=1,
+            dt=1.0,
+            kernels=[HidaMatern()],
+            convergence_patience=1.5,
+        )
+    with pytest.raises(ValueError, match="max_iter must be an integer"):
+        CVHM(n_components=1, dt=1.0, kernels=[HidaMatern()], max_iter="5")
 
 
 def test_invalid_min_iter_fails():

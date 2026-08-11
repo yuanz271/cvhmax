@@ -2,6 +2,7 @@ import math
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from numbers import Integral
 from os import PathLike
 from typing import Any, NamedTuple
 
@@ -38,19 +39,30 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
 
 
 def readout_change(params_new, params_old) -> Array:
-    """Scalar readout-parameter change between two outer EM iterations.
+    """Scalar change between successive CVI parameter pytrees.
 
-    Compares the CVHM-owned readout ``Params`` fields ``C``, ``d``, and ``R``.
-    With the latent GP prior and data fixed, identical readout parameters
-    deterministically imply the same posterior, so no latent posterior or
-    coordinate-alignment comparison is required. ``R`` is always a
-    JAX-compatible leaf; for Poisson readouts it is the scalar zero sentinel
-    on every iteration, contributing zero change.
+    The built-in ``Params`` tree compares ``C``, ``d``, and ``R``; arbitrary
+    custom CVI parameter pytrees are supported by comparing corresponding
+    numeric leaves. The trees must have identical structure.
     """
-    delta_C = _relative_change(params_new.C, params_old.C)
-    delta_d = _relative_change(params_new.d, params_old.d)
-    delta_R = _relative_change(params_new.R, params_old.R)
-    return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
+    new_leaves, new_treedef = jax.tree_util.tree_flatten(params_new)
+    old_leaves, old_treedef = jax.tree_util.tree_flatten(params_old)
+    if new_treedef != old_treedef:
+        raise ValueError("CVI parameter tree structure changed during fitting")
+    if not new_leaves:
+        raise ValueError("CVI parameter tree must contain at least one leaf")
+    changes = [_relative_change(new, old) for new, old in zip(new_leaves, old_leaves)]
+    return jnp.max(jnp.stack(changes))
+
+
+def _validated_integer(value: Any, name: str, *, minimum: int) -> int:
+    """Validate and normalize an integer configuration field."""
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise ValueError(f"{name} must be an integer, got {value!r}")
+    value = int(value)
+    if value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}, got {value!r}")
+    return value
 
 
 @dataclass
@@ -113,13 +125,13 @@ class CVHM:
         if not math.isfinite(tol) or tol <= 0:
             raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")
         self.tol = tol
-        if int(self.min_iter) < 1:
-            raise ValueError(f"min_iter must be >= 1, got {self.min_iter!r}")
-        if int(self.convergence_patience) < 1:
-            raise ValueError(
-                f"convergence_patience must be >= 1, got {self.convergence_patience!r}"
-            )
-        if int(self.min_iter) > int(self.max_iter):
+        self.max_iter = _validated_integer(self.max_iter, "max_iter", minimum=1)
+        self.cvi_iter = _validated_integer(self.cvi_iter, "cvi_iter", minimum=0)
+        self.min_iter = _validated_integer(self.min_iter, "min_iter", minimum=1)
+        self.convergence_patience = _validated_integer(
+            self.convergence_patience, "convergence_patience", minimum=1
+        )
+        if self.min_iter > self.max_iter:
             raise ValueError(
                 f"min_iter ({self.min_iter}) must not exceed max_iter ({self.max_iter})"
             )

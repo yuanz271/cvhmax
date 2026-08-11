@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+from numbers import Integral
 from typing import Any
 import zipfile
 
@@ -54,7 +55,7 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
 
 
 def _integer(value: Any, name: str, *, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+    if isinstance(value, bool) or not isinstance(value, Integral):
         raise ValueError(f"{name} must be an integer")
     value = int(value)
     if value < minimum:
@@ -110,7 +111,9 @@ def _serialize_params(params: Params) -> bytes:
     return buffer.getvalue()
 
 
-def _validate_params_shapes(params: Params, n_components: int) -> None:
+def _validate_params_shapes(
+    params: Params, n_components: int, observation: str
+) -> None:
     C = np.asarray(params.C)
     d = np.asarray(params.d)
     if C.ndim != 2 or C.shape[1] != n_components:
@@ -118,9 +121,12 @@ def _validate_params_shapes(params: Params, n_components: int) -> None:
     if d.ndim != 1 or d.shape[0] != C.shape[0]:
         raise ValueError("Params.d shape is incompatible with Params.C")
     R = np.asarray(params.R)
-    if R.ndim > 0:
-        if R.shape != (C.shape[0], C.shape[0]):
-            raise ValueError("Params.R shape is incompatible with Params.C")
+    if observation == "Gaussian":
+        if R.ndim != 2 or R.shape != (C.shape[0], C.shape[0]):
+            raise ValueError("Gaussian Params.R must be an (N, N) covariance matrix")
+    elif observation == "Poisson":
+        if R.ndim != 0 or float(R) != 0.0:
+            raise ValueError("Poisson Params.R must be the scalar zero sentinel")
 
 
 def _deserialize_params(payload: bytes, metadata: dict[str, Any]) -> Params:
@@ -254,6 +260,13 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError(f"Object dtype is not supported for parameter {name}")
         for axis in metadata["shape"]:
             _integer(axis, f"params.{name}.shape", minimum=0)
+    C_shape = arrays["C"]["shape"]
+    R_shape = arrays["R"]["shape"]
+    if model["observation"] == "Gaussian":
+        if len(C_shape) != 2 or R_shape != [C_shape[0], C_shape[0]]:
+            raise ValueError("Gaussian Params.R must be an (N, N) covariance matrix")
+    elif R_shape != []:
+        raise ValueError("Poisson Params.R must be the scalar zero sentinel")
 
 
 def _validate_builtin_observation(observation: str) -> None:
@@ -335,5 +348,7 @@ def load(path: str | os.PathLike[str]) -> Any:
         model = CVHM.from_config(model_config)
         if has_params:
             model.params = _deserialize_params(archive.read(_PARAMS), params_metadata)
-            _validate_params_shapes(model.params, model.n_components)
+            _validate_params_shapes(
+                model.params, model.n_components, model.observation
+            )
         return model
