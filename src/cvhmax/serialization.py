@@ -7,7 +7,6 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from numbers import Integral
 from typing import Any
 import zipfile
 
@@ -32,10 +31,10 @@ def _array_metadata(array: Any) -> dict[str, Any]:
 
 
 def _finite_float(value: Any, name: str) -> float:
-    array = np.asarray(value)
-    if array.ndim != 0 or not np.isfinite(array):
+    value = float(value)
+    if not np.isfinite(value):
         raise ValueError(f"{name} must be a finite scalar")
-    return float(array)
+    return value
 
 
 def _params_manifest(params: Params | None) -> dict[str, Any]:
@@ -55,8 +54,6 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
 
 
 def _integer(value: Any, name: str, *, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, Integral):
-        raise ValueError(f"{name} must be an integer")
     value = int(value)
     if value < minimum:
         raise ValueError(f"{name} must be at least {minimum}")

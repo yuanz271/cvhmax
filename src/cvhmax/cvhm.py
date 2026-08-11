@@ -2,7 +2,6 @@ import math
 import secrets
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from numbers import Integral
 from os import PathLike
 from typing import Any, NamedTuple
 
@@ -38,27 +37,11 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
     return jnp.linalg.norm(value_new - value_old) / denom
 
 
-def _aligned_loading_change(C_new: Array, C_old: Array) -> Array:
-    """Return Procrustes-aligned loading change for the GLM gauge."""
-    cross = C_new.T @ C_old
-    left, _, right = jnp.linalg.svd(cross, full_matrices=False)
-    rotation = left @ right
-    return _relative_change(C_new @ rotation, C_old)
-
-
 def readout_change(params_new: Params, params_old: Params) -> Array:
-    """Scalar change between successive built-in readout parameter states.
-
-    The GLM loading matrix is compared up to an orthogonal latent rotation.
-    Bias and noise parameters are compared directly. Arbitrary custom CVI
-    parameter pytrees are not supported by this convergence criterion.
-    """
-    if not isinstance(params_new, Params) or not isinstance(params_old, Params):
-        raise TypeError(
-            "Convergence detection requires cvhmax.cvi.Params; "
-            "custom CVI parameter pytrees are unsupported"
-        )
-    delta_C = _aligned_loading_change(params_new.loading(), params_old.loading())
+    """Return the GLM parameter change modulo latent rotation."""
+    C_new, C_old = params_new.loading(), params_old.loading()
+    left, _, right = jnp.linalg.svd(C_new.T @ C_old, full_matrices=False)
+    delta_C = _relative_change(C_new @ (left @ right), C_old)
     delta_d = _relative_change(params_new.d, params_old.d)
     delta_R = _relative_change(params_new.R, params_old.R)
     return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
@@ -66,8 +49,6 @@ def readout_change(params_new: Params, params_old: Params) -> Array:
 
 def _validated_integer(value: Any, name: str, *, minimum: int) -> int:
     """Validate and normalize an integer configuration field."""
-    if isinstance(value, bool) or not isinstance(value, Integral):
-        raise ValueError(f"{name} must be an integer, got {value!r}")
     value = int(value)
     if value < minimum:
         raise ValueError(f"{name} must be >= {minimum}, got {value!r}")
@@ -126,10 +107,8 @@ class CVHM:
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
-        """Resolve the built-in CVI subclass and validate convergence settings."""
-        self.cvi = CVI.registry.get(self.observation)
-        if self.cvi is None:
-            raise ValueError(f"Unsupported observation model: {self.observation!r}")
+        """Resolve the selected CVI subclass and validate fit settings."""
+        self.cvi = CVI.registry[self.observation]
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
             raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")
@@ -393,11 +372,21 @@ class CVHM:
                 "Training", total=self.max_iter, nell=jnp.nan, nell_display="n/a"
             )
 
-            # Initial convergence state: iteration 0, prev_params = params
-            # (dummy), has_prev=False so first metric is inf, patience=0,
-            # converged=False, metric=inf, nell=jnp.nan
             init_carry = (
-                0, params, z, Z, jl, Jl, m, V, params, False, 0, False, jnp.inf, jnp.nan
+                0,
+                params,
+                z,
+                Z,
+                jl,
+                Jl,
+                m,
+                V,
+                params,
+                False,
+                0,
+                False,
+                jnp.inf,
+                jnp.nan,
             )
 
             def cond(carry):
@@ -410,16 +399,11 @@ class CVHM:
                     prev_params, has_prev, patience, converged, metric, nell,
                 ) = carry
 
-                # Run one EM step
                 new_params, z, Z, jl, Jl, m, V, nell = em_step(
                     iteration, (cur_params, z, Z, jl, Jl, m, V, nell)
                 )
-
-                # Compute convergence metric
                 metric = jnp.where(
-                    has_prev,
-                    readout_change(new_params, prev_params),
-                    jnp.inf,
+                    has_prev, readout_change(new_params, prev_params), jnp.inf
                 )
 
                 iteration_new = iteration + 1
