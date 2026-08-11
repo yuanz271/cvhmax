@@ -2,6 +2,28 @@
 
 This file is for coding agents working in this repo. Keep changes small, follow existing JAX patterns, and prefer pure/jittable code. For project context, design specifications, API details, and other agent-agnostic information, consult `README.md`, `docs/`, source docstrings, and repository metadata as needed; do not duplicate that information here.
 
+## Research-Code Priorities
+
+Optimize for mathematical correctness, numerical stability, algorithmic fluency,
+and readability—in that order where tradeoffs are real. Keep core algorithmic
+components pure, minimal, and directly aligned with the mathematical
+formulation. Prefer a clear specialized implementation over a generic
+abstraction that obscures the computation.
+
+Validate user inputs at public API boundaries. Within core numerical routines,
+JAX transforms, and scan/loop bodies, assume inputs have the documented types,
+shapes, and units; let ordinary Python or JAX exceptions expose invalid
+internal use. Do not add defensive branches, speculative guards, redundant
+validation, compatibility scaffolding, or silent fallbacks unless they protect
+an explicit numerical or data-integrity invariant. When an edge case is not
+part of the interface contract, do not add code or tests for it merely because
+it is conceivable.
+
+Preserve behavior while simplifying the implementation. Every behavioral
+change needs a focused numerical or algorithmic test; prioritize tests of
+mathematical identities, invariants, stability, and scientifically meaningful
+outputs over tests of guardrails or implementation details.
+
 ## Hard Rules (Git + Safety)
 
 - Commits are allowed autonomously at meaningful milestones, when a plan is
@@ -151,10 +173,15 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 
 ### Error Handling and Validation
 
-- Validate shapes/dtypes at API boundaries (e.g., `CVHM.fit`) using `chex.assert_*` or explicit checks.
-- Inside `jax.jit`/`lax.scan` code paths, avoid Python exceptions; do checks outside jit.
-- Raise `ValueError` for invalid values, `TypeError` for wrong types; include shapes in messages.
-- Prefer failing early with a helpful message over silently broadcasting/reshaping inputs.
+- Validate the public interface at API boundaries (e.g., `CVHM.fit`) using
+  `chex.assert_*` or focused explicit checks.
+- Inside `jax.jit`/`lax.scan` code paths, assume the validated contract holds;
+  avoid defensive Python exceptions and redundant shape checks.
+- Prefer direct operations whose natural Python/JAX errors expose invalid
+  internal use. Add explicit errors only when they clarify a public boundary
+  or protect a numerical/data-integrity invariant.
+- Do not silently broadcast, reshape, clip, regularize, or fall back from
+  invalid inputs unless that behavior is part of the mathematical contract.
 
 ### JAX + Numerical Conventions
 
