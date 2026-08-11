@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.2.1
+
+### Added
+
+- Added mandatory EM convergence detection with configurable tolerance,
+  minimum iterations, patience, and post-fit diagnostics.
+- Added GLM loading convergence comparison up to the latent orthogonal rotation
+  gauge.
+
+### Fixed
+
+- Hardened convergence and serialized-parameter validation, including
+  observation-specific `R` shape checks and strict iteration settings.
+- Simplified positive numerical and serialization test coverage.
+
+### Documentation
+
+- Clarified research-code priorities and validation practices for agents.
+
 ## 0.2.0
 
 ### Breaking changes
