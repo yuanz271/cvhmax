@@ -47,8 +47,8 @@ Let the previous and current outer-iteration readout states be denoted by `-`
 and `+`. Because the GP kernels, prior, time step, and data are fixed during
 `fit`, identical readout parameters deterministically imply the same posterior
 (up to numerical error). Therefore the initial detector compares only
-CVHM-owned readout parameters; it does not compare latent posteriors or solve
-a latent rotation/Procrustes alignment.
+CVHM-owned readout parameters; it does not compare latent posteriors. Loading
+changes are compared after GLM orthogonal Procrustes alignment.
 
 For the GLM loading matrix, align the new loading to the old loading by
 orthogonal Procrustes:
@@ -96,8 +96,8 @@ and `R` are compared directly. Do not compare full latent posterior arrays or
 map them into observation space.
 
 The first outer iteration runs unconditionally because no previous
-readout-parameter state exists for comparison. Initialize previous-state
-metrics to `inf`; convergence
+readout-parameter state exists for comparison. Track whether a previous
+parameter state exists; the first metric is `jnp.inf`. Convergence
 is eligible only after the second completed outer iteration and after at least
 `min_iter` completed iterations. It then requires the criterion to pass for
 `convergence_patience` consecutive completed iterations. Any NaN or Inf metric
@@ -140,8 +140,8 @@ path:
 - aggregation to a scalar readout-parameter convergence metric.
 
 Helpers must be pure, shape-stable, and usable inside `jax.lax.while_loop` or
-`jax.lax.fori_loop`. Add dimension and finite-value sanity checks outside JAX
-transforms where appropriate.
+`jax.lax.fori_loop`. Assume the documented `Params` structure and finite
+numerical leaves inside the metric and JAX loop.
 
 ### 3. Refactor the outer loop
 
@@ -201,23 +201,19 @@ Add discriminative tests for:
 - a strict tolerance reaches the cap and reports non-convergence;
 - `min_iter` prevents premature stopping;
 - `convergence_patience` requires consecutive passing iterations;
-- convergence always evaluates the JAX-compatible `R` field;
+- convergence evaluates the JAX-compatible `R` field;
 - Poisson convergence has the scalar zero sentinel on every iteration and
   therefore `delta_R == 0`;
 - fixed readout parameters imply deterministic repeated posterior inference;
 - latent posterior arrays are not required by the detector;
-- invalid tolerance/minimum/patience settings fail clearly;
 - `converged_` and `n_iter_` are correct after fitting;
 - serialization round-trips the convergence configuration fields;
-- the first iteration cannot converge solely because its initial change is
-  undefined; and
-- custom CVI subclasses using the built-in `Params` remain supported;
-- custom CVI parameter PyTrees are rejected clearly by the convergence metric;
-- `Params.R` is always a JAX-compatible leaf, including Poisson fits.
+- `Params.R` is always a JAX-compatible leaf, including Poisson fits; and
+- GLM loading change is invariant to an orthogonal latent rotation.
 
 Use tiny deterministic data and `max_iter` values that keep tests fast. Avoid
 asserting a particular convergence iteration for numerically marginal data;
-assert the specified invariants instead. Test that NaN/Inf metrics never pass.
+assert the specified numerical and algorithmic invariants instead.
 
 ### 6. Update documentation
 
