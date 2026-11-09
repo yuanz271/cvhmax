@@ -7,14 +7,20 @@ Sessions are stacked on the trial axis; there is no new session axis:
 
 ```text
 y:       (trials, time, neurons)
-valid_y: (trials, time, neurons)
+valid_y: broadcastable to y, or None
 ```
 
-`valid_y[b, t, n]` is true exactly when neuron `n` is observed in trial `b`
-at time `t`. A neuron absent from an entire session has a false mask for all
-its time bins. A padded time bin has a false mask for every neuron. Inputs use
-a common neuron ordering across trials, with matched neurons mapped to the
-same index.
+For example, `valid_y` may have shape `(trials, time, neurons)`,
+`(trials, time, 1)` to share each time-bin mask across neurons, or
+`(trials, 1, neurons)` to share each trial-neuron availability across time.
+The shared axis has size 1 in an actual JAX array; a zero-sized axis is not a
+broadcast wildcard. `None` means all supplied entries are observed.
+
+After broadcasting, `valid_y[b, t, n]` is true exactly when neuron `n` is
+observed in trial `b` at time `t`. A neuron absent from an entire session has a
+false mask for all its time bins. A padded time bin has a false mask for every
+neuron. Inputs use a common neuron ordering across trials, with matched neurons
+mapped to the same index.
 
 The mask represents availability, not a zero-valued observation. Inference,
 initialization, and readout updates must depend only on entries marked observed.
@@ -56,21 +62,28 @@ likelihood.
 
 ## Public data contract
 
-1. Make `valid_y` match `y` exactly: `(trials, time, neurons)`, or
-   `(time, neurons)` for a single-trial `(time, neurons)` input. `None` means
-   every supplied entry is observed.
-2. Use boolean masks internally. Masked values may be filled with any finite
-   placeholder; sanitize them with `where` **before** likelihood calculations,
-   rather than multiplying missing values by zero after arithmetic.
-   `CVHM.fit()` must raise an error before initialization if any neuron is
-   masked at every time bin across all trials. `CVHM.infer()` may use any
-   observed subset because the readout has already been fitted.
-3. Update `pad_trials` to return a mask with the same shape as its padded `y`.
-   Per-trial input masks have shape `(time_i, neurons)`. An unpadded bin defaults
-   to all neurons observed; every padded entry is masked.
-4. Update local callers, tests, and examples to use the new shape. Do not add a
-   separate session dimension or silently interpret missing-neuron zeros as
-   observations.
+1. Accept `valid_y=None` or a mask broadcastable to the supplied `y` using
+   ordinary JAX broadcasting. For batched `y`, explicitly support the full
+   shape, `(trials, time, 1)`, and `(trials, 1, neurons)`. A two-dimensional
+   `(trials, time)` mask must use an explicit trailing singleton axis to mean
+   a time-bin mask; do not infer a missing axis from ambiguous dimensions.
+2. At the `fit()`/`infer()` boundary, convert the mask to boolean and broadcast
+   it to `y.shape` once. For a single-trial `(time, neurons)` input, broadcast
+   to that shape before adding the trial axis. `None` creates an all-true mask.
+   Core routines receive the canonical full-shape mask.
+3. Masked values may be filled with any finite placeholder; sanitize them with
+   `where` **before** likelihood calculations, rather than multiplying missing
+   values by zero after arithmetic. After broadcasting, `CVHM.fit()` must raise
+   an error before initialization if any neuron is masked at every time bin
+   across all trials. `CVHM.infer()` may use any observed subset because the
+   readout has already been fitted.
+4. Update `pad_trials` to return a mask with the same shape as its padded `y`.
+   Per-trial input masks must broadcast to `(time_i, neurons)`; a
+   `valid_y_list` of `None` means all supplied entries are observed. Every
+   padded entry is masked.
+5. Update local callers, tests, and examples for the broadcastable-mask
+   contract. Do not add a separate session dimension or silently interpret
+   missing-neuron zeros as observations.
 
 ## Masked inference
 
@@ -115,8 +128,8 @@ formulation; do not claim objective consistency or change either formulation as
 part of masking.
 
 The current objective divides the summed per-neuron terms and loading penalty
-by the number of valid time bins. With feature-level masks, count a time bin as
-valid when at least one neuron is observed:
+by the number of valid time bins. After broadcasting to the full shape, count a
+time bin as valid when at least one neuron is observed:
 
 ```python
 n_valid_bins = valid_y.any(axis=-1).sum()
@@ -245,8 +258,13 @@ floor that changes the objective.
   Verify the state-space result using `H = C @ M`.
 - **Poisson observed subset:** compare pseudo-observation information and the
   readout objective/gradient with a direct sum over observed neurons.
+- **Broadcast masks:** for each of `(trials, time, 1)` and
+  `(trials, 1, neurons)`, compare inference and readout results with that mask
+  explicitly broadcast to the full shape. `None` matches an all-observed mask.
+  Check the Poisson valid-bin count after broadcasting a time-shared neuron mask.
 - **Time padding:** a fully masked bin contributes no observation information;
-  `pad_trials` returns the correct element-wise mask for variable trial lengths.
+  `pad_trials` returns the correct element-wise mask for variable trial lengths
+  and accepts per-trial broadcastable masks.
 - **Missing-value invariance:** changing finite placeholder values for masked
   neurons leaves inference and readout updates unchanged.
 - **Gaussian M-step:** compare the masked conditional updates against a small
@@ -325,8 +343,9 @@ git diff --check
 
 ## Done when
 
-`CVHM.fit()` and `infer()` accept an element-wise `valid_y` with the same shape
-as `y`; missing neurons affect neither inference nor fitted readouts; Gaussian
-and Poisson paths meet the mathematical tests above; all-observed behavior is
+`CVHM.fit()` and `infer()` accept `valid_y=None` or a mask broadcastable to
+`y`; the canonical internal mask has the same shape as `y`. Missing neurons
+affect neither inference nor fitted readouts; Gaussian and Poisson paths meet
+the mathematical tests above; all-observed behavior is
 accounted for; documentation states the shared-readout and session-identifiability
 limits; and the validation commands pass.
