@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Removed loading normalization from Gaussian and Poisson readouts and the
+  convergence metric. Fixed GP kernels set the latent prior scale, and fitted
+  loadings retain observation-specific gains.
+
 ## 0.2.1
 
 ### Added

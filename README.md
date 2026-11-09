@@ -81,7 +81,10 @@ model.fit(y, valid_y=valid_y, random_state=0)
 m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
 ```
 
-Use `model.fit_transform(...)` when you only need the posterior means. For smoother latent trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
+Use `model.fit_transform(...)` when you only need the posterior means. The
+readout uses its fitted loading matrix directly; the fixed GP kernel amplitudes
+set the latent prior scale. For smoother latent trajectories, use higher-order
+kernels (e.g. `order=2` for Matern-5/2).
 
 The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen
 readout, holding the data, readout, and other kernel hyperparameters fixed:

@@ -14,7 +14,6 @@ from cvhmax.utils import (
     real_repr,
     symm,
     conjtrans,
-    norm_loading,
     bin_info_repr,
     trial_info_repr,
     pad_trials,
@@ -89,14 +88,6 @@ def test_conjtrans_involution(rng):
     vals = rng.standard_normal((3, 4)) + 1j * rng.standard_normal((3, 4))
     X = jnp.array(vals)
     npt.assert_allclose(np.asarray(conjtrans(conjtrans(X))), np.asarray(X), atol=ATOL_TINY)
-
-
-def test_norm_loading_unit_rows(rng):
-    """norm_loading(C, axis=0) normalises each row to unit norm."""
-    C = jnp.array(rng.standard_normal((10, 3)))
-    Cn = norm_loading(C)
-    row_norms = np.asarray(jnp.linalg.norm(Cn, axis=1))
-    npt.assert_allclose(row_norms, 1.0, atol=1e-5)
 
 
 def test_trial_info_repr_analytic(rng):

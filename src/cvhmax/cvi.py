@@ -12,7 +12,6 @@ from equinox import Module
 from .utils import (
     filter_array,
     trial_info_repr,
-    norm_loading,
     lbfgs_solve,
     ridge_estimate,
 )
@@ -58,7 +57,7 @@ class Params(Module):
     Attributes
     ----------
     C : Array
-        Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
+        Unnormalized loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
     d : Array
         Bias vector with shape ``(obs_dim (N),)``.
     R : Array
@@ -69,16 +68,6 @@ class Params(Module):
     C: Array
     d: Array
     R: Array
-
-    def loading(self) -> Array:
-        """Column-normalised loading matrix.
-
-        Returns
-        -------
-        Array
-            Loading matrix with unit-norm columns.
-        """
-        return norm_loading(self.C)
 
 
 class CVI:
@@ -277,7 +266,7 @@ class Gaussian(CVI):
             with shapes ``(time, latent_dim (K))`` and
             ``(time, latent_dim (K), latent_dim (K))``.
         """
-        C = params.loading()
+        C = params.C
         d = params.d
         R = params.R
         return trial_info_repr(y, valid_y, C, d, R)
@@ -548,7 +537,7 @@ class Poisson(CVI):
             shapes ``(time, latent_dim (K))`` and
             ``(time, latent_dim (K), latent_dim (K))``.
         """
-        C = params.loading()
+        C = params.C
         d = params.d
         K = C.shape[1]  # latent_dim
 
@@ -592,7 +581,7 @@ class Poisson(CVI):
         tuple[Params, float]
             Updated parameters and the negative expected log-likelihood.
         """
-        C = params.loading()
+        C = params.C
         d = params.d
 
         y = y.reshape(-1, y.shape[-1])
@@ -648,7 +637,7 @@ class Poisson(CVI):
         tuple[Array, Array]
             Updated pseudo-observation vectors and matrices in latent space.
         """
-        C = params.loading()
+        C = params.C
         d = params.d
         k, K = vmap(vmap(partial(poisson_cvi_bin_stats_latent, C=C, d=d)))(
             m, V, y, valid_y

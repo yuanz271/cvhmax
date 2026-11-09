@@ -393,8 +393,7 @@ def test_poisson_cvi_step_parity():
     """Poisson CVI init produces finite pseudo-obs matching reference shapes.
 
     The two implementations differ in predict-step structure (reference uses
-    Cholesky-based predict, cvhmax uses Joseph-form via lax.scan) and in the
-    observation matrix (cvhmax normalises C via norm_loading).  We compare
+    Cholesky-based predict, cvhmax uses Joseph-form via lax.scan). We compare
     shapes and finiteness rather than exact values.
     """
     import torch
@@ -449,8 +448,7 @@ def test_poisson_cvi_step_parity():
     from cvhmax.cvi import Params, Poisson
     from jax import vmap
 
-    # Build params — cvhmax normalises C internally via norm_loading,
-    # so H will differ from the reference H_np.  We test shapes + finiteness.
+    # Both implementations use the same unnormalized loading C.
     C_jax = jnp.array(C_np)
     params = Params(C=C_jax, d=jnp.array(d_np), R=jnp.asarray(0.0))
     y_jax = jnp.array(y_np)

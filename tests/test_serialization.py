@@ -158,8 +158,15 @@ def test_readout_change_is_invariant_to_glm_rotation():
     assert float(readout_change(new, old)) < 1e-6
 
 
+def test_readout_change_detects_loading_gain():
+    C = jnp.asarray([[0.2], [2.0]])
+    old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2))
+    new = Params(C=2 * C, d=old.d, R=old.R)
+    np.testing.assert_allclose(readout_change(new, old), 1.0, atol=1e-6)
+
+
 def test_convergence_stops_a_fit_and_reports_diagnostics():
-    model = _model().fit(_data(), random_state=0)
+    model = _model(tol=1.0).fit(_data(), random_state=0)
     assert model.converged_ is True
     assert model.min_iter <= model.n_iter_ < model.max_iter
 

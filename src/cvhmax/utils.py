@@ -1,4 +1,3 @@
-from collections.abc import Callable
 from functools import partial
 
 import jax
@@ -15,9 +14,6 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
-
-EPS = 1e-6
-
 
 def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
     """Approximate bounded LBFGS solver mirroring SciPy defaults.
@@ -301,53 +297,6 @@ def latent_mask(latent_spec):
     right = jnp.zeros_like(left)  # the rest SSM dimensions are for the imaginary part.
     M = jnp.column_stack([left, right])
     return M
-
-
-@jax.jit
-def norm_loading(w, axis=0):
-    """Normalise loadings along the requested axis.
-
-    Parameters
-    ----------
-    w : Array
-        Loading matrix.
-    axis : int, default=0
-        Axis along which to compute norms.
-
-    Returns
-    -------
-    Array
-        Normalised loadings.
-    """
-    _norm = partial(
-        _norm_except_axis,
-        norm=partial(jnp.linalg.norm, keepdims=True),
-        axis=axis,
-    )
-    return w / (_norm(w) + EPS)
-
-
-def _norm_except_axis(v: Array, norm: Callable[[Array], float], axis: int | None):
-    """Apply a norm across all axes except the specified one.
-
-    Parameters
-    ----------
-    v : Array
-        Input tensor.
-    norm : Callable[[Array], float]
-        Norm function applied to slices.
-    axis : int | None
-        Axis exempt from the norm operation.
-
-    Returns
-    -------
-    Array
-        Tensor of norms broadcast across the exempt axis.
-    """
-    if axis is None:
-        return norm(v)
-    else:
-        return jax.vmap(norm, in_axes=axis, out_axes=axis)(v)
 
 
 def training_progress():

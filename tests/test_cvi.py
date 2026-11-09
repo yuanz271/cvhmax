@@ -12,39 +12,33 @@ from cvhmax.cvi import (
     Poisson,
     Gaussian,
 )
-from cvhmax.cvhm import CVHM
+from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
-from cvhmax.utils import norm_loading
 
 
 def test_gaussian_initialize_info_values(rng):
-    """Gaussian.initialize_info produces j = H^T R^{-1}(y-d), J = H^T R^{-1} H.
-
-    Gaussian.initialize_info calls ``trial_info_repr(y, valid_y, H, d, R)``
-    which vmaps ``bin_info_repr`` over the time axis.  This test verifies
-    the Gaussian observation information formula directly.
-    """
-    T, N, L = 30, 8, 2
-    C_raw = jnp.array(rng.standard_normal((N, L)))
+    """Gaussian information increments use C in latent space."""
+    T, N, K = 30, 8, 2
+    C = jnp.array(rng.standard_normal((N, K)))
     d = jnp.array(rng.standard_normal(N))
     R = jnp.eye(N) * 0.5
-    M = jnp.eye(L)
-
-    H = norm_loading(C_raw) @ M  # effective observation matrix
+    params = Params(C=C, d=d, R=R)
 
     y = jnp.array(rng.standard_normal((T, N)))  # single trial
     valid_y = jnp.ones(T)
 
     # Compute expected values directly using the correct formula
-    J_exp_single = H.T @ jnp.linalg.solve(R, H)  # (L, L)
-    j_exp = (H.T @ jnp.linalg.solve(R, (y - d).T)).T  # (T, L)
-    J_exp = jnp.tile(J_exp_single, (T, 1, 1))  # (T, L, L)
+    J_exp_single = C.T @ jnp.linalg.solve(R, C)  # (K, K)
+    j_exp = (C.T @ jnp.linalg.solve(R, (y - d).T)).T  # (T, K)
+    J_exp = jnp.tile(J_exp_single, (T, 1, 1))  # (T, K, K)
 
     # Apply mask
     j_exp = jnp.where(jnp.expand_dims(valid_y, -1), j_exp, 0)
 
-    # Verify shapes
-    chex.assert_shape([j_exp, J_exp], [(T, L), (T, L, L)])
+    j, J = Gaussian.initialize_info(params, y, valid_y)
+    chex.assert_shape([j, J], [(T, K), (T, K, K)])
+    npt.assert_allclose(j, j_exp, rtol=1e-6, atol=1e-6)
+    npt.assert_allclose(J, J_exp, rtol=1e-6, atol=1e-6)
 
     # Verify key properties
     # J should be symmetric positive semi-definite
@@ -53,6 +47,79 @@ def test_gaussian_initialize_info_values(rng):
     )
     eigvals = np.linalg.eigvalsh(np.asarray(J_exp_single))
     assert np.all(eigvals >= -1e-10), f"J has negative eigenvalues: {eigvals}"
+
+
+def test_gaussian_initialize_info_preserves_unequal_loading_gains():
+    """Information increments use the fitted loading without normalization."""
+    C = jnp.array([[0.2], [2.0]])
+    d = jnp.array([0.1, -0.2])
+    R = jnp.diag(jnp.array([0.5, 0.8]))
+    y = jnp.array([[0.6, 1.4], [-0.2, 0.4]])
+    params = Params(C=C, d=d, R=R)
+
+    j, J = Gaussian.initialize_info(params, y, jnp.ones(y.shape[0]))
+    expected_j = (C.T @ jnp.linalg.solve(R, (y - d).T)).T
+    expected_J = C.T @ jnp.linalg.solve(R, C)
+    npt.assert_allclose(j, expected_j, rtol=1e-6, atol=1e-6)
+    npt.assert_allclose(J, jnp.broadcast_to(expected_J, J.shape), rtol=1e-6, atol=1e-6)
+
+    # Lifting with a non-identity state mask is equivalent to H = C @ M.
+    M = jnp.array([[0.5, 1.0]])
+    H = C @ M
+    state_j, state_J = lift(j, J, M)
+    expected_state_j = (H.T @ jnp.linalg.solve(R, (y - d).T)).T
+    expected_state_J = H.T @ jnp.linalg.solve(R, H)
+    npt.assert_allclose(state_j, expected_state_j, rtol=1e-6, atol=1e-6)
+    npt.assert_allclose(
+        state_J, jnp.broadcast_to(expected_state_J, state_J.shape), rtol=1e-6, atol=1e-6
+    )
+
+
+def test_gaussian_smoothing_with_unequal_loading_gains():
+    """State-space inference matches dense GP conditioning with the same C."""
+    C = np.array([[0.2], [2.0]])
+    d = np.array([0.1, -0.2])
+    R = np.diag([0.5, 0.8])
+    y = np.array([[0.6, 1.4], [-0.2, 0.4], [0.9, -0.3], [0.7, 1.0]])
+    kernel = HidaMatern(sigma=1.1, rho=2.0, omega=0.0, order=1, s=1e-5)
+    params = Params(C=jnp.asarray(C), d=jnp.asarray(d), R=jnp.asarray(R))
+    model = CVHM(n_components=1, dt=0.5, kernels=[kernel], params=params)
+    means, covariances = model.infer(jnp.asarray(y))
+
+    times = np.arange(len(y)) * model.dt
+    lags = np.abs(times[:, None] - times[None, :])
+    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(len(y))
+    precision = np.linalg.solve(prior, np.eye(len(y)))
+    precision += (C.T @ np.linalg.solve(R, C)).item() * np.eye(len(y))
+    expected_covariance = np.linalg.solve(precision, np.eye(len(y)))
+    information = (C.T @ np.linalg.solve(R, (y - d).T)).ravel()
+    expected_mean = expected_covariance @ information
+
+    npt.assert_allclose(means[0, :, 0], expected_mean, rtol=1e-5, atol=1e-5)
+    npt.assert_allclose(
+        covariances[0, :, 0, 0], np.diag(expected_covariance), rtol=1e-5, atol=1e-5
+    )
+
+
+def test_poisson_update_pseudo_preserves_unequal_loading_gains():
+    """Poisson pseudo-observations use the same raw loading as the GLM."""
+    C = jnp.array([[0.2], [2.0]])
+    d = jnp.array([0.1, -0.2])
+    params = Params(C=C, d=d, R=jnp.asarray(0.0))
+    y = jnp.array([[[2.0, 1.0]]])
+    m = jnp.array([[[0.3]]])
+    V = jnp.array([[[[0.4]]]])
+    j = jnp.zeros_like(m)
+    J = jnp.zeros_like(V)
+
+    actual_j, actual_J = Poisson.update_pseudo(
+        params, y, jnp.ones((1, 1)), m, V, j, J, lr=1.0
+    )
+    rates = jnp.exp(C[:, 0] * m[0, 0, 0] + d + 0.5 * C[:, 0] ** 2 * V[0, 0, 0, 0])
+    precision = jnp.sum(C[:, 0] ** 2 * rates)
+    information = jnp.sum((y[0, 0] - rates) * C[:, 0]) + precision * m[0, 0, 0]
+    npt.assert_allclose(actual_j[0, 0, 0], information, rtol=1e-6, atol=1e-6)
+    npt.assert_allclose(actual_J[0, 0, 0, 0], precision, rtol=1e-6, atol=1e-6)
 
 
 def test_gaussian_update_pseudo_noop():
@@ -126,8 +193,7 @@ def test_poisson_cvi_bin_stats_latent_equivalence(rng):
     Temporary equivalence test for the refactor.  Remove after migration.
     """
     N, K = 5, 3
-    C_raw = jnp.array(rng.standard_normal((N, K)) * 0.3)
-    C = norm_loading(C_raw)
+    C = jnp.array(rng.standard_normal((N, K)) * 0.3)
     d = jnp.array(rng.standard_normal(N))
     y = jnp.array(rng.poisson(5.0, size=N).astype(float))
 
@@ -172,7 +238,6 @@ def test_gaussian_e2e(linear_gaussian_data):
     data = linear_gaussian_data
     y = jnp.array(data["y"])
     x_true = np.asarray(data["x_true"]).squeeze()  # (T,)
-    T = data["T"]
 
     kernels = [HidaMatern(sigma=1.0, rho=50.0, omega=0.0, order=0)]
     model = CVHM(
