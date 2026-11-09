@@ -4,12 +4,11 @@
 
 ### Added
 
-- Added broadcastable element-wise observation masks for fitting and inference.
+- Added broadcastable element-wise observation masks for fitting and inference,
+  while retaining whole-bin masks shaped `(trials, time)`.
 
 ### Changed
 
-- Changed whole-bin observation masks to use shape `(trials, time, 1)` so they
-  broadcast to the data shape.
 - Restricted Gaussian observation noise to diagonal covariance and updated its
   readout using masked posterior second moments.
 - Recomputed the final posterior after fitting so it matches the final readout.

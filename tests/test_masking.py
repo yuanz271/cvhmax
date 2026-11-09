@@ -177,8 +177,12 @@ def test_broadcast_masks_and_final_posterior(observation):
     time_mask = jnp.array([[[True], [True], [False], [True], [True], [True]],
                            [[True], [False], [True], [True], [True], [True]]])
     neuron_mask = jnp.array([[[True, False, True]], [[False, True, True]]])
-    for mask in (time_mask, neuron_mask):
-        broadcast = jnp.broadcast_to(mask, y.shape)
+    masks = (
+        (time_mask, jnp.broadcast_to(time_mask, y.shape)),
+        (time_mask[..., 0], jnp.broadcast_to(time_mask, y.shape)),
+        (neuron_mask, jnp.broadcast_to(neuron_mask, y.shape)),
+    )
+    for mask, broadcast in masks:
         for actual, expected in zip(model.infer(y, mask), model.infer(y, broadcast)):
             npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
         compact, full = _model(observation), _model(observation)
@@ -201,14 +205,21 @@ def test_broadcast_masks_and_final_posterior(observation):
 def test_single_trial_broadcast_masks():
     y = jnp.asarray(np.random.default_rng(7).normal(size=(6, 3)))
     model = _model()
-    for mask in (
-        jnp.array([[True], [True], [False], [True], [True], [True]]),
-        jnp.array([[True, False, True]]),
-    ):
-        for actual, expected in zip(
-            model.infer(y, mask), model.infer(y, jnp.broadcast_to(mask, y.shape))
-        ):
+    time_mask = jnp.array([[True], [True], [False], [True], [True], [True]])
+    neuron_mask = jnp.array([[True, False, True]])
+    masks = (
+        (time_mask, jnp.broadcast_to(time_mask, y.shape)),
+        (time_mask[:, 0], jnp.broadcast_to(time_mask, y.shape)),
+        (neuron_mask, jnp.broadcast_to(neuron_mask, y.shape)),
+    )
+    for mask, broadcast in masks:
+        for actual, expected in zip(model.infer(y, mask), model.infer(y, broadcast)):
             npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
+    legacy, expanded = _model(), _model()
+    legacy.fit(y, time_mask[:, 0], random_state=0)
+    expanded.fit(y, time_mask, random_state=0)
+    for actual, expected in zip(legacy.posterior, expanded.posterior):
+        npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
 
 
 def test_masked_gaussian_model_round_trip(tmp_path):
@@ -323,3 +334,8 @@ def test_pad_trials_broadcasts_neuron_and_time_masks():
     npt.assert_array_equal(mask[0, 3:], False)
     npt.assert_array_equal(mask[1], np.broadcast_to(masks[1], (5, 3)))
     npt.assert_array_equal(lengths, [3, 5])
+
+    time_masks = [jnp.array([True, False, True]), jnp.array([True, True, False, True, True])]
+    _, legacy_mask, _ = pad_trials(ys, time_masks)
+    npt.assert_array_equal(legacy_mask[0, :3], np.broadcast_to(time_masks[0][:, None], (3, 3)))
+    npt.assert_array_equal(legacy_mask[1], np.broadcast_to(time_masks[1][:, None], (5, 3)))

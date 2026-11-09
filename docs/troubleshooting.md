@@ -3,8 +3,8 @@
 ## Shape Errors
 
 - Verify `y` is `(trials, time, features)` or `(time, features)`.
-- Ensure `valid_y` is broadcastable to `y`; use `(trials, time, 1)` for
-  whole-bin masks or `(trials, 1, features)` for trial-level neuron masks.
+- Use `(trials, time)` or `(trials, time, 1)` for whole-bin masks, or a mask
+  broadcastable to `y`, such as `(trials, 1, features)`, for neuron masks.
 - During fitting, each feature must be observed in at least one time bin.
 
 ## Numerical Instability

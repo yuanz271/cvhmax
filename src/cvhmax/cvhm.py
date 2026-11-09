@@ -47,11 +47,13 @@ class _FitState(NamedTuple):
 def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array]:
     """Broadcast the observation mask and add a trial axis when needed."""
     y = jnp.asarray(y)
-    valid_y = (
-        jnp.ones_like(y, dtype=bool)
-        if valid_y is None
-        else jnp.broadcast_to(jnp.asarray(valid_y, dtype=bool), y.shape)
-    )
+    if valid_y is None:
+        valid_y = jnp.ones_like(y, dtype=bool)
+    else:
+        valid_y = jnp.asarray(valid_y, dtype=bool)
+        if valid_y.shape == y.shape[:-1]:
+            valid_y = valid_y[..., None]
+        valid_y = jnp.broadcast_to(valid_y, y.shape)
     if y.ndim == 2:
         y, valid_y = y[None, ...], valid_y[None, ...]
     return jnp.where(valid_y, y, 0.0), valid_y
@@ -321,7 +323,8 @@ class CVHM:
         y : Array
             Observations shaped `(trials, time, features)` or `(time, features)`.
         valid_y : Array, optional
-            Boolean observation mask broadcastable to `y`; defaults to all observed.
+            Boolean mask broadcastable to `y`, or a whole-bin mask shaped
+            `(trials, time)` (or `(time,)` for one trial). Defaults to all observed.
         random_state : int | None, optional
             Seed used for initialization. Drawn from `secrets` when absent.
 
@@ -506,7 +509,8 @@ class CVHM:
         y : Array
             Observations shaped `(trials, time, features)` or `(time, features)`.
         valid_y : Array, optional
-            Boolean observation mask broadcastable to `y`; defaults to all observed.
+            Boolean mask broadcastable to `y`, or a whole-bin mask shaped
+            `(trials, time)` (or `(time,)` for one trial). Defaults to all observed.
 
         Returns
         -------

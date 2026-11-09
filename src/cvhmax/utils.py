@@ -378,7 +378,7 @@ def pad_trials(
     y_list : list[Array]
         Per-trial observations, each shaped ``(T_i, obs_dim (N))``.
     valid_y_list : list[Array] or None
-        Per-trial masks broadcastable to ``(T_i, N)``.
+        Per-trial masks shaped ``(T_i,)`` or broadcastable to ``(T_i, N)``.
         If ``None``, all original entries are treated as observed.
 
     Returns
@@ -403,11 +403,13 @@ def pad_trials(
     for i, y_i in enumerate(y_list):
         T_i = y_i.shape[0]
         y = y.at[i, :T_i].set(y_i)
-        mask = (
-            jnp.ones_like(y_i, dtype=bool)
-            if valid_y_list is None
-            else jnp.broadcast_to(jnp.asarray(valid_y_list[i], dtype=bool), y_i.shape)
-        )
+        if valid_y_list is None:
+            mask = jnp.ones_like(y_i, dtype=bool)
+        else:
+            mask = jnp.asarray(valid_y_list[i], dtype=bool)
+            if mask.shape == y_i.shape[:-1]:
+                mask = mask[..., None]
+            mask = jnp.broadcast_to(mask, y_i.shape)
         valid_y = valid_y.at[i, :T_i].set(mask)
 
     return y, valid_y, trial_lengths

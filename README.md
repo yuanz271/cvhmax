@@ -84,7 +84,8 @@ m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
 Use `model.fit_transform(...)` when you only need the posterior means. The
 readout uses its fitted loading matrix directly; the fixed GP kernel amplitudes
 set the latent prior scale. `valid_y` can mask individual neurons and broadcast
-to the shape of `y`. Gaussian observation noise is diagonal. For smoother latent
+to the shape of `y`; whole-bin masks shaped `(trials, time)` are also supported.
+Gaussian observation noise is diagonal. For smoother latent
 trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
 The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen

@@ -7,12 +7,13 @@ Sessions are stacked on the trial axis; there is no new session axis:
 
 ```text
 y:       (trials, time, neurons)
-valid_y: broadcastable to y, or None
+valid_y: broadcastable to y, a whole-bin mask, or None
 ```
 
 For example, `valid_y` may have shape `(trials, time, neurons)`,
-`(trials, time, 1)` to share each time-bin mask across neurons, or
-`(trials, 1, neurons)` to share each trial-neuron availability across time.
+`(trials, time)` or `(trials, time, 1)` to share each time-bin mask across
+neurons, or `(trials, 1, neurons)` to share each trial-neuron availability
+across time. For one trial, `(time,)` is also a whole-bin mask.
 The shared axis has size 1 in an actual JAX array; a zero-sized axis is not a
 broadcast wildcard. `None` means all supplied entries are observed.
 
@@ -62,15 +63,17 @@ likelihood.
 
 ## Public data contract
 
-1. Accept `valid_y=None` or a mask broadcastable to the supplied `y` using
+1. Accept `valid_y=None`, a whole-bin mask shaped `(trials, time)` (or
+   `(time,)` for one trial), or a mask broadcastable to the supplied `y` using
    ordinary JAX broadcasting. For batched `y`, explicitly support the full
-   shape, `(trials, time, 1)`, and `(trials, 1, neurons)`. A two-dimensional
-   `(trials, time)` mask must use an explicit trailing singleton axis to mean
-   a time-bin mask; do not infer a missing axis from ambiguous dimensions.
-2. At the `fit()`/`infer()` boundary, convert the mask to boolean and broadcast
-   it to `y.shape` once. For a single-trial `(time, neurons)` input, broadcast
-   to that shape before adding the trial axis. `None` creates an all-true mask.
-   Core routines receive the canonical full-shape mask.
+   shape, `(trials, time, 1)`, and `(trials, 1, neurons)`.
+2. At the `fit()`/`infer()` boundary, convert the mask to boolean, expand a
+   whole-bin mask with a trailing singleton axis, and broadcast to `y.shape`
+   once. In an ambiguous shape, `y.shape[:-1]` takes whole-bin-mask precedence;
+   use explicit singleton axes for other interpretations. For a single-trial
+   `(time, neurons)` input, broadcast before adding the trial axis. `None`
+   creates an all-true mask. Core routines receive the canonical full-shape
+   mask.
 3. Masked values may be filled with any finite placeholder; sanitize them with
    `where` **before** likelihood calculations, rather than multiplying missing
    values by zero after arithmetic. After broadcasting, `CVHM.fit()` must raise
@@ -78,9 +81,9 @@ likelihood.
    across all trials. `CVHM.infer()` may use any observed subset because the
    readout has already been fitted.
 4. Update `pad_trials` to return a mask with the same shape as its padded `y`.
-   Per-trial input masks must broadcast to `(time_i, neurons)`; a
-   `valid_y_list` of `None` means all supplied entries are observed. Every
-   padded entry is masked.
+   Per-trial masks may be shaped `(time_i,)` or broadcastable to
+   `(time_i, neurons)`; a `valid_y_list` of `None` means all supplied entries
+   are observed. Every padded entry is masked.
 5. Update local callers, tests, and examples for the broadcastable-mask
    contract. Do not add a separate session dimension or silently interpret
    missing-neuron zeros as observations.
@@ -300,7 +303,7 @@ a partially updated fit.
   Verify the state-space result using `H = C @ M`.
 - **Poisson observed subset:** compare pseudo-observation information and the
   readout objective/gradient with a direct sum over observed neurons.
-- **Broadcast masks:** for each of `(trials, time, 1)` and
+- **Broadcast masks:** for each of `(trials, time)`, `(trials, time, 1)`, and
   `(trials, 1, neurons)`, compare inference and readout results with that mask
   explicitly broadcast to the full shape. `None` matches an all-observed mask.
   Check the Poisson valid-bin count after broadcasting a time-shared neuron mask.
@@ -424,8 +427,8 @@ these single-run timings are not a controlled comparison of mask overhead.
 
 ## Done when
 
-`CVHM.fit()` and `infer()` accept `valid_y=None` or a mask broadcastable to
-`y`; the canonical internal mask has the same shape as `y`. Missing neurons
+`CVHM.fit()` and `infer()` accept `valid_y=None`, a whole-bin mask, or a mask
+broadcastable to `y`; the canonical internal mask has the same shape as `y`. Missing neurons
 affect neither inference nor fitted readouts. After `fit()`, `model.latent`,
 `model.posterior`, and `infer()` agree under the final fitted parameters.
 Gaussian and Poisson paths meet the mathematical tests above; all-observed

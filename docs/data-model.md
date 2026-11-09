@@ -13,14 +13,17 @@ This page defines the canonical shapes and masking conventions used by cvhmax.
 `None` means all supplied entries are observed. Common batched mask shapes are:
 
 - `(trials, time, N)`: individual neuron-time entries;
-- `(trials, time, 1)`: whole time bins, shared across neurons;
+- `(trials, time)` or `(trials, time, 1)`: whole time bins, shared across neurons;
 - `(trials, 1, N)`: neuron availability constant over time within each trial.
 
-The API broadcasts the mask to `y.shape`. A time-bin mask shaped
-`(trials, time)` needs an explicit trailing singleton axis. Missing neurons may be filled
-with any finite value in `y`; they contribute neither readout information nor
-readout updates. Every neuron must be observed at least once across training
-trials and time bins. An already-fitted model can infer from any subset.
+For a single-trial `(time, N)` input, `(time,)` is also a whole-bin mask. The
+API expands these whole-bin masks and broadcasts them to `y.shape`. In an
+ambiguous shape, a mask matching `y.shape[:-1]` is interpreted as a whole-bin
+mask; use an explicit singleton axis to specify another interpretation. Missing
+neurons may be filled with any finite value in `y`; they contribute neither
+readout information nor readout updates. Every neuron must be observed at least
+once across training trials and time bins. An already-fitted model can infer
+from any subset.
 
 ### How masking works
 
