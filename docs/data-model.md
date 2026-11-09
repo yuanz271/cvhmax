@@ -68,9 +68,9 @@ total state dimension is therefore `L = 2 * sum(kernel.nple)` over all
 | `z`, `Z` | `(trials, T, L)` / `(trials, T, L, L)` | state | information-form SDE posterior |
 | `m`, `V` | `(trials, T, K)` / `(trials, T, K, K)` | latent | GP posterior mean / covariance |
 
-The built-in readouts use `C` directly, without normalizing its rows or columns.
-Its entries therefore retain observation-specific loading magnitudes. In the
-SDE state space, the corresponding observation matrix is `H = C @ M`.
+The built-in readouts use the loading matrix `C`, whose entries retain
+observation-specific magnitudes. In the SDE state space, the corresponding
+observation matrix is `H = C @ M`.
 
 ## Latent Outputs
 

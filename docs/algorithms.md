@@ -77,12 +77,12 @@ pseudo-observations — each bin's starting point incorporates causal
 information from all prior bins.  This is a state-space operation owned
 by CVHM, keeping CVI free of dynamics knowledge.
 
-Gaussian and Poisson readouts use the fitted latent-space loading `Params.C`
-directly, without row or column normalization. The state-space observation
-matrix remains `H = C @ M`: CVHM applies `M` when lifting the latent
-information increments into the SDE state space. The fixed GP kernel amplitudes
-set the prior scale of the latent processes; `C` retains observation-specific
-gains. The convergence metric compares these same unnormalized loadings.
+Gaussian and Poisson readouts use the fitted latent-space loading `Params.C`.
+The state-space observation matrix is `H = C @ M`: CVHM applies `M` when
+lifting the latent information increments into the SDE state space. The fixed
+GP kernel amplitudes set the prior scale of the latent processes; `C` retains
+observation-specific gains. The convergence metric compares the same loading
+matrix.
 
 ## Gaussian Parameterizations
 

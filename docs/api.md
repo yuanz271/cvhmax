@@ -47,9 +47,9 @@ policy.
 - `Gaussian`, `Poisson`: built-in readouts
 - `Params`: convenience container of `C`, `d`, `R` (no `M` — that lives in CVHM)
 
-The built-in readouts use `Params.C` directly without normalizing its rows or
-columns. Fixed GP kernel amplitudes set the latent prior scale, while `C`
-retains observation-specific gains.
+The built-in readouts use the loading matrix `Params.C`. Fixed GP kernel
+amplitudes set the latent prior scale, while `C` retains observation-specific
+gains.
 
 CVI methods work entirely in latent space `(K)`. The params structure is
 opaque to CVHM — each subclass may use any pytree-compatible container.
