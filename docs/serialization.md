@@ -131,7 +131,7 @@ A representative manifest is:
 }
 ```
 
-For Gaussian, `Params.R` is an observation covariance matrix. For Poisson,
+For Gaussian, `Params.R` is a positive diagonal observation covariance matrix. For Poisson,
 `Params.R` is the scalar JAX sentinel `jnp.asarray(0.0)`; it is serialized as a
 scalar array and is not used as a covariance.
 

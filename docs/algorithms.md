@@ -82,7 +82,21 @@ The state-space observation matrix is `H = C @ M`: CVHM applies `M` when
 lifting the latent information increments into the SDE state space. The fixed
 GP kernel amplitudes set the prior scale of the latent processes; `C` retains
 observation-specific gains. The convergence metric compares the same loading
-matrix.
+matrix. After the last readout update, `fit()` performs a final inference pass:
+`latent` and `posterior` describe the posterior under the final parameters.
+
+Gaussian observation noise is diagonal. For observed neuron mask `w` and
+variance vector `r = diag(R)`, Gaussian information increments are
+`J = C.T @ diag(w / r) @ C` and `j = C.T @ (w * (y - d) / r)`. The readout
+update uses posterior second moments `V + m m.T` and updates each neuron's
+loading, bias, and variance from its observed entries. Poisson CVI and the
+existing readout objective likewise sum only observed neuron contributions.
+Initialization fills missing entries with per-neuron observed means for Factor
+Analysis only; subsequent updates use the actual observation mask. For Poisson,
+FA count-space loadings are scaled to log-rate space, with a half-count per
+neuron used only to initialize a finite baseline rate. The retained Poisson
+readout objective uses the variance-adjusted log rate in its count term and is
+not the exact expected Poisson log-likelihood; masking does not change it.
 
 ## Gaussian Parameterizations
 
@@ -141,10 +155,10 @@ j = Hᵀ R⁻¹ (y − d)  observation information vector
 
 Computed by `bin_info_repr` in `utils.py` (with `trial_info_repr` and `batch_info_repr` as vmapped wrappers over time and trial axes respectively). In the Poisson CVI path, `(j, J)` are pseudo-observations updated iteratively rather than computed from a closed-form likelihood.
 
-When a bin is masked (`valid_y = 0`), both `j` and `J` are set to zero by
-`bin_info_repr`, so the filter update `Z_post = Z_pred + J`,
-`z_post = z_pred + j` reduces to a no-op at that bin — the posterior
-equals the prediction.
+When an entire bin is masked (`valid_y = 0` for every neuron), `j` and `J`
+are zero, so the filtering update is a no-op. Smoothing may still use
+observations from other time bins. A partially masked bin contributes
+information only from its observed neurons.
 
 ### Variable name glossary
 

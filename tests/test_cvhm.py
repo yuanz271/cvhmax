@@ -286,7 +286,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     n_components = 1
 
     y = jnp.zeros((trials, T, obs_dim), dtype=jnp.float64)
-    valid_y = jnp.ones((trials, T), dtype=jnp.uint8)
+    valid_y = jnp.ones((trials, T, 1), dtype=bool)
 
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
     model = CVHM(

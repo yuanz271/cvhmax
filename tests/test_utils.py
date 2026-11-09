@@ -97,7 +97,7 @@ def test_trial_info_repr_analytic(rng):
     d = jnp.array(rng.standard_normal(N))
     R = jnp.eye(N) * 0.5
     y = jnp.array(rng.standard_normal((T, N)))
-    valid_y = jnp.ones(T)
+    valid_y = jnp.ones((T, N), dtype=bool)
 
     j, J = trial_info_repr(y, valid_y, C, d, R)
 
@@ -121,12 +121,12 @@ def test_bin_info_repr_mask(rng):
     y = jnp.array(rng.standard_normal(N))
 
     # Unmasked: normal computation
-    j_on, J_on = bin_info_repr(y, jnp.array(1.0), C, d, R)
+    j_on, J_on = bin_info_repr(y, jnp.ones(N, dtype=bool), C, d, R)
     assert jnp.any(j_on != 0)
     assert jnp.any(J_on != 0)
 
     # Masked: zero information
-    j_off, J_off = bin_info_repr(y, jnp.array(0.0), C, d, R)
+    j_off, J_off = bin_info_repr(y, jnp.zeros(N, dtype=bool), C, d, R)
     npt.assert_array_equal(np.asarray(j_off), 0.0)
     npt.assert_array_equal(np.asarray(J_off), 0.0)
 
@@ -140,7 +140,7 @@ def test_trial_info_repr_mask(rng):
     y = jnp.array(rng.standard_normal((T, N)))
 
     # Mask out bins 0, 3, 7
-    valid_y = jnp.ones(T).at[jnp.array([0, 3, 7])].set(0.0)
+    valid_y = jnp.ones((T, N), dtype=bool).at[jnp.array([0, 3, 7])].set(False)
 
     j, J = trial_info_repr(y, valid_y, C, d, R)
 
@@ -176,7 +176,7 @@ class TestPadTrials:
         y_list = self._make_trials([300, 500, 250])
         y, valid_y, trial_lengths = pad_trials(y_list)
         assert y.shape == (3, 500, 4)
-        assert valid_y.shape == (3, 500)
+        assert valid_y.shape == (3, 500, 4)
         assert trial_lengths.shape == (3,)
         npt.assert_array_equal(np.asarray(trial_lengths), [300, 500, 250])
 
@@ -203,14 +203,14 @@ class TestPadTrials:
     def test_preserves_original_mask(self):
         y_list = self._make_trials([10, 15])
         # Mark bins 0 and 3 as missing in trial 0
-        mask0 = jnp.ones(10, dtype=jnp.uint8).at[0].set(0).at[3].set(0)
-        mask1 = jnp.ones(15, dtype=jnp.uint8)
+        mask0 = jnp.ones((10, 1), dtype=bool).at[0].set(False).at[3].set(False)
+        mask1 = jnp.ones((15, 1), dtype=bool)
         _, valid_y, _ = pad_trials(y_list, valid_y_list=[mask0, mask1])
         # Original missing values preserved
-        assert int(valid_y[0, 0]) == 0
-        assert int(valid_y[0, 3]) == 0
+        npt.assert_array_equal(np.asarray(valid_y[0, 0]), 0)
+        npt.assert_array_equal(np.asarray(valid_y[0, 3]), 0)
         # Other original bins still observed
-        assert int(valid_y[0, 1]) == 1
+        npt.assert_array_equal(np.asarray(valid_y[0, 1]), 1)
         # Padded bins masked
         npt.assert_array_equal(np.asarray(valid_y[0, 10:]), 0)
 

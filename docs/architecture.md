@@ -105,17 +105,16 @@ latent space:
 
 | Method | Input | Output |
 |--------|-------|--------|
-| `initialize_params` | observations | opaque params |
+| `initialize_params` | observations | readout params |
 | `initialize_info` | params, observations | `(j, J)` in latent space |
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
 | `update_readout` | params, observations, posterior `(m, V)` | updated params |
 
-### Duck-typed params
+### Readout params
 
-The params structure is opaque to CVHM.  Each CVI subclass may use any
-pytree-compatible container — a tuple, a dataclass, an equinox `Module`,
-or anything else.  The built-in `Gaussian` and `Poisson` readouts use the
-`Params` dataclass (with fields `C`, `d`, `R`), but this is not required.
+Readout algorithms receive their parameter state explicitly. The built-in
+`Gaussian` and `Poisson` readouts use the Equinox `Params` container with
+fields `C`, `d`, and `R`; CVHM's convergence metric compares those fields.
 
 ## Benefits
 

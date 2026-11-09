@@ -129,27 +129,23 @@ def bin_info_repr(
     y : Array
         Observations for one bin, shape ``(N,)``.
     valid_y : Array
-        Observation mask for one bin, shape ``()``. When zero, both ``j``
-        and ``J`` are set to zero so the bin contributes no information
-        to the filter update.
+        Observation mask for one bin, shape ``(N,)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
         Bias term, shape ``(N,)``.
     R : Array
-        Observation covariance, shape ``(N, N)``.
+        Diagonal observation-noise covariance, shape ``(N, N)``.
 
     Returns
     -------
     tuple[Array, Array]
         ``(j, J)`` with shapes ``(L,)`` and ``(L, L)``.
     """
-    J = C.T @ jnp.linalg.solve(R, C)
-    j = C.T @ jnp.linalg.solve(R, y - d)
-
-    j: Array = jnp.where(valid_y, j, 0)
-    J: Array = jnp.where(valid_y, J, 0)
-
+    precision = jnp.where(valid_y, 1.0 / jnp.diag(R), 0.0)
+    residual = jnp.where(valid_y, y - d, 0.0)
+    J = C.T @ (precision[:, None] * C)
+    j = C.T @ (precision * residual)
     return j, J
 
 
@@ -165,13 +161,13 @@ def trial_info_repr(
     y : Array
         Observations for one trial, shape ``(T, N)``.
     valid_y : Array
-        Observation mask for one trial, shape ``(T,)``.
+        Observation mask for one trial, shape ``(T, N)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
         Bias term, shape ``(N,)``.
     R : Array
-        Observation covariance, shape ``(N, N)``.
+        Diagonal observation-noise covariance, shape ``(N, N)``.
 
     Returns
     -------
@@ -193,13 +189,13 @@ def batch_info_repr(
     y : Array
         Observations, shape ``(trials, T, N)``.
     valid_y : Array
-        Observation mask, shape ``(trials, T)``.
+        Observation mask, shape ``(trials, T, N)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
         Bias term, shape ``(N,)``.
     R : Array
-        Observation covariance, shape ``(N, N)``.
+        Diagonal observation-noise covariance, shape ``(N, N)``.
 
     Returns
     -------
@@ -323,56 +319,29 @@ def training_progress():
     )
 
 
-def ridge_estimate(y, valid_y, m, V, lam=0.1):
-    """Solve a ridge regression for the observation model.
+def ridge_estimate(y, valid_y, m, V, R, lam=0.1):
+    """Update Gaussian loadings and diagonal noise from masked moments.
 
-    Parameters
-    ----------
-    y : Array
-        Observations.
-    valid_y : Array
-        Observation mask aligned with `y`.
-    m : Array
-        Posterior means.
-    V : Array
-        Posterior covariances (unused but kept for API parity).
-    lam : float, default=0.1
-        Ridge penalty scaling.
-
-    Returns
-    -------
-    tuple[Array, Array, Array]
-        Loading matrix, bias vector, and observation covariance.
+    Conditional on the current noise variances, solve the expected ridge
+    objective for each neuron. Then update its noise variance from expected
+    residual squares, including latent posterior uncertainty.
     """
-
-    T, y_dim = y.shape
-    _, z_dim = m.shape
-
-    m1 = jnp.column_stack([jnp.ones((T, 1)), m])
-
-    assert m1.shape == (T, z_dim + 1)
-
-    valid_y = jnp.expand_dims(valid_y, -1)  # (T, 1)
-    y = jnp.where(valid_y, y, 0)  # apply mask to y
-    m1 = jnp.where(valid_y, m1, 0)  # apply mask to m1
-
-    zy = m1.T @ y  # (z + 1, t) (t, y) -> (z + 1, y)
-    zz = m1.T @ m1  # (z + 1, t) (t, z + 1) -> (z + 1, z + 1)
-    eye = jnp.eye(zz.shape[0])
-    w = jnp.linalg.solve(zz + lam * eye, zy)  # (z + 1, z + 1) (z + 1, y) -> (z + 1, y)
-
-    r = y - m1 @ w  # (t, y)
-    n_valid = jnp.maximum(jnp.sum(valid_y), 1.0)
-    R = r.T @ r / n_valid  # (y, y)
-
-    d, C = jnp.split(w, [1], axis=0)  # (1, y), (z, y)
-
-    d = jnp.squeeze(d)
-    C = C.T
-    assert d.shape == (y_dim,)
-    assert C.shape == (y_dim, z_dim)
-
-    return C, d, R
+    n_time, n_latents = m.shape
+    augmented = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
+    second = augmented[:, :, None] * augmented[:, None, :]
+    second = second.at[:, 1:, 1:].add(V)
+    observed = valid_y.astype(m.dtype)
+    y = jnp.where(valid_y, y, 0.0)
+    A = jnp.einsum("tn,tij->nij", observed, second)
+    b = jnp.einsum("tn,ti->ni", y, augmented)
+    regularizer = lam * jnp.diag(R)[:, None, None] * jnp.eye(n_latents + 1)
+    beta = jnp.linalg.solve(A + regularizer, b[..., None])[..., 0]
+    d, C = beta[:, 0], beta[:, 1:]
+    residual = jnp.where(valid_y, y - (m @ C.T + d), 0.0)
+    uncertainty = jnp.einsum("nk,tkl,nl->tn", C, V, C)
+    variance = jnp.sum(jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0)
+    variance = variance / jnp.sum(observed, axis=0)
+    return C, d, jnp.diag(variance)
 
 
 def filter_array(arr: Array, mask: Array) -> Array:
@@ -409,16 +378,16 @@ def pad_trials(
     y_list : list[Array]
         Per-trial observations, each shaped ``(T_i, obs_dim (N))``.
     valid_y_list : list[Array] or None
-        Per-trial masks, each shaped ``(T_i,)``.
-        If ``None``, all original bins are treated as observed.
+        Per-trial masks broadcastable to ``(T_i, N)``.
+        If ``None``, all original entries are treated as observed.
 
     Returns
     -------
     y : Array
         Padded observations, shape ``(n_trials, T_max, obs_dim (N))``.
     valid_y : Array
-        Combined mask, shape ``(n_trials, T_max)``.  Padded positions and
-        originally missing bins are zero.
+        Combined mask, shape ``(n_trials, T_max, N)``. Padded positions and
+        originally missing entries are false.
     trial_lengths : Array
         Original length of each trial, shape ``(n_trials,)``, for use
         with :func:`unpad_trials`.
@@ -429,15 +398,17 @@ def pad_trials(
     n_trials = len(y_list)
 
     y = jnp.zeros((n_trials, T_max, N), dtype=y_list[0].dtype)
-    valid_y = jnp.zeros((n_trials, T_max), dtype=jnp.uint8)
+    valid_y = jnp.zeros((n_trials, T_max, N), dtype=bool)
 
     for i, y_i in enumerate(y_list):
         T_i = y_i.shape[0]
         y = y.at[i, :T_i].set(y_i)
-        if valid_y_list is not None:
-            valid_y = valid_y.at[i, :T_i].set(valid_y_list[i])
-        else:
-            valid_y = valid_y.at[i, :T_i].set(1)
+        mask = (
+            jnp.ones_like(y_i, dtype=bool)
+            if valid_y_list is None
+            else jnp.broadcast_to(jnp.asarray(valid_y_list[i], dtype=bool), y_i.shape)
+        )
+        valid_y = valid_y.at[i, :T_i].set(mask)
 
     return y, valid_y, trial_lengths
 

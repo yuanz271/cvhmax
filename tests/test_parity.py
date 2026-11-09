@@ -452,7 +452,7 @@ def test_poisson_cvi_step_parity():
     C_jax = jnp.array(C_np)
     params = Params(C=C_jax, d=jnp.array(d_np), R=jnp.asarray(0.0))
     y_jax = jnp.array(y_np)
-    valid_y_jax = jnp.ones((1, T))
+    valid_y_jax = jnp.ones((1, T, N), dtype=bool)
 
     j_jax, J_jax = vmap(Poisson.initialize_info, in_axes=(None, 0, 0))(
         params,
@@ -692,7 +692,7 @@ def test_poisson_cvi_bin_stats_convention():
     H_np = rng.standard_normal((N, state_dim)) * 0.3
     d_np = np.ones(N) * 0.5
     y_np = np.array([2.0, 3.0, 1.0])
-    valid_y_np = np.ones(1)
+    valid_y_np = np.ones(N)
 
     # --- cvhmax ---
     k_jax, K_jax = poisson_cvi_bin_stats(
@@ -909,7 +909,7 @@ def test_observation_info_parity():
     d_np = rng.standard_normal(N)
     R_np = np.eye(N) * 0.5
     y_np = rng.standard_normal((1, T, N))
-    valid_y_np = np.ones((1, T))
+    valid_y_np = np.ones((1, T, N))
 
     # --- reference ---
     to_t = lambda x: torch.tensor(x, dtype=torch.float64)

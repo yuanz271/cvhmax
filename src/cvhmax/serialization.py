@@ -121,6 +121,11 @@ def _validate_params_shapes(
     if observation == "Gaussian":
         if R.ndim != 2 or R.shape != (C.shape[0], C.shape[0]):
             raise ValueError("Gaussian Params.R must be an (N, N) covariance matrix")
+        variances = np.diag(R)
+        if not np.all(np.isfinite(variances) & (variances > 0)) or not np.array_equal(
+            R, np.diag(variances)
+        ):
+            raise ValueError("Gaussian Params.R must be a positive diagonal covariance")
     elif observation == "Poisson":
         if R.ndim != 0 or float(R) != 0.0:
             raise ValueError("Poisson Params.R must be the scalar zero sentinel")
@@ -287,6 +292,8 @@ def save(model: Any, path: str | os.PathLike[str]) -> None:
     """
     _validate_builtin_observation(model.observation)
     manifest = build_manifest(model)
+    if model.params is not None:
+        _validate_params_shapes(model.params, model.n_components, model.observation)
     params_payload = None if model.params is None else _serialize_params(model.params)
     if params_payload is not None and len(params_payload) > _MAX_PARAMS_BYTES:
         raise ValueError("Serialized parameters are too large")

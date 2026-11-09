@@ -30,12 +30,18 @@ Public exports live in `src/cvhmax/__init__.py`:
 
 Source: `src/cvhmax/cvhm.py`
 
+`valid_y` may be `None` or a boolean mask broadcastable to `y`, including
+`(trials, time, 1)` for missing bins and `(trials, 1, neurons)` for neuron
+availability. Fitting requires each neuron to be observed in at least one bin.
+Trials share one readout; session-specific loading drift is not represented.
+
 `CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
 saving posterior or latent caches. The serialization uses the
 `get_config()`/`from_config()` protocol on both `CVHM` and `HidaMatern`.
-`CVHM.infer(...)` recomputes posterior state without updating fitted readout
-parameters. See `serialization.md` for the archive format and compatibility
-policy.
+After fitting, `CVHM.posterior` and `CVHM.latent` describe the same posterior
+under the final readout parameters. `CVHM.infer(...)` recomputes the GP
+posterior without updating fitted parameters. See `serialization.md` for the
+archive format and compatibility policy.
 
 ## CVI and Readouts
 
@@ -47,12 +53,13 @@ policy.
 - `Gaussian`, `Poisson`: built-in readouts
 - `Params`: convenience container of `C`, `d`, `R` (no `M` — that lives in CVHM)
 
-The built-in readouts use the loading matrix `Params.C`. Fixed GP kernel
-amplitudes set the latent prior scale, while `C` retains observation-specific
-gains.
+The built-in readouts use the loading matrix `Params.C`. Gaussian `Params.R`
+is a positive diagonal observation-noise covariance; Poisson uses a scalar zero
+sentinel. Fixed GP kernel amplitudes set the latent prior scale, while `C`
+retains observation-specific gains.
 
-CVI methods work entirely in latent space `(K)`. The params structure is
-opaque to CVHM — each subclass may use any pytree-compatible container.
+CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
+explicitly and compares their `C`, `d`, and `R` fields for convergence.
 
 Source: `src/cvhmax/cvi.py`
 

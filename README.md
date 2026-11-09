@@ -58,7 +58,7 @@ from cvhmax.hm import HidaMatern
 
 # Observations shaped (trials, time, features)
 y = jnp.asarray(...)            # substitute your data
-valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+valid_y = jnp.ones_like(y, dtype=bool)
 
 n_latents = 2
 dt = 1.0
@@ -83,8 +83,9 @@ m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
 
 Use `model.fit_transform(...)` when you only need the posterior means. The
 readout uses its fitted loading matrix directly; the fixed GP kernel amplitudes
-set the latent prior scale. For smoother latent trajectories, use higher-order
-kernels (e.g. `order=2` for Matern-5/2).
+set the latent prior scale. `valid_y` can mask individual neurons and broadcast
+to the shape of `y`. Gaussian observation noise is diagonal. For smoother latent
+trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
 The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen
 readout, holding the data, readout, and other kernel hyperparameters fixed:

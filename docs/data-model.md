@@ -9,34 +9,32 @@ This page defines the canonical shapes and masking conventions used by cvhmax.
 
 ## Masking
 
-- `valid_y`: binary mask aligned to the first two axes of `y`
-- Shape is typically `(trials, time)` and must be broadcastable to `y`
-- `1` indicates observed entries, `0` indicates missing/padded bins
+`valid_y` is a boolean mask broadcastable to `y`; `True` means observed.
+`None` means all supplied entries are observed. Common batched mask shapes are:
+
+- `(trials, time, N)`: individual neuron-time entries;
+- `(trials, time, 1)`: whole time bins, shared across neurons;
+- `(trials, 1, N)`: neuron availability constant over time within each trial.
+
+The API broadcasts the mask to `y.shape`. A time-bin mask shaped
+`(trials, time)` needs an explicit trailing singleton axis. Missing neurons may be filled
+with any finite value in `y`; they contribute neither readout information nor
+readout updates. Every neuron must be observed at least once across training
+trials and time bins. An already-fitted model can infer from any subset.
 
 ### How masking works
 
-A missing observation should contribute no information to the latent state
-estimate. The information filter update is additive:
+Gaussian information increments sum the contributions of observed neurons
+using diagonal noise variance; Poisson increments likewise sum only observed
+neurons. The filter update is additive:
 
 ```
 Z_post = Z_pred + J
 z_post = z_pred + j
 ```
 
-When `valid_y[t] = 0`, both `j[t]` and `J[t]` are set to zero, so the
-filter update at that time bin reduces to:
-
-```
-Z_post = Z_pred
-z_post = z_pred
-```
-
-The posterior at a masked bin equals the prediction — no observation
-information is incorporated. This is implemented in `bin_info_repr`
-(`utils.py`), which applies `jnp.where(valid_y, ·, 0)` to both `j` and
-`J` after computing them. Since `bin_info_repr` operates on a single bin
-where `valid_y` is a scalar, the mask zeros out the entire vector/matrix
-rather than individual entries.
+A fully masked bin contributes zero `j` and `J`. The smoothed posterior can
+still use information from other time bins.
 
 ## Dimensions
 
@@ -94,7 +92,7 @@ y_list = [y_trial_0, y_trial_1, y_trial_2]  # (300, N), (500, N), (250, N)
 
 # Pad to rectangular arrays
 y, valid_y, trial_lengths = pad_trials(y_list)
-# y.shape == (3, 500, N),  valid_y.shape == (3, 500)
+# y.shape == (3, 500, N),  valid_y.shape == (3, 500, N)
 
 # Fit as usual — padded bins have valid_y=0 so the filter skips them
 model = CVHM(n_components=2, dt=0.01, kernels=[HidaMatern() for _ in range(2)])
@@ -113,7 +111,7 @@ mv_list = unpad_trials(model.posterior, trial_lengths)
 ### How it works
 
 `pad_trials` zero-pads shorter trials along the time axis and sets
-`valid_y = 0` for padded bins.  Because the information filter adds `j`
+`valid_y = 0` for every neuron in padded bins. Because the information filter adds `j`
 and `J` at each bin (see [Masking](#masking) above), padded bins
 contribute zero information and the filter falls through to a pure
 prediction step.

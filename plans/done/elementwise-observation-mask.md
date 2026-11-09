@@ -155,9 +155,14 @@ complete observations. Initialize from training data only:
 4. Continue allowing callers to provide initial `Params` directly.
 
 This is a deterministic initialization heuristic, not missing-data Factor
-Analysis. Evaluate sensitivity to initialization on synthetic sessions. The
-input contract assumes every neuron is observed in at least one training
-session.
+Analysis. For a Poisson readout, convert the FA initialization from count
+space to log-rate space: let `mean_rate = (observed_count_sum + 0.5) /
+observed_bin_count`, use `log(mean_rate)` for the initial bias, and divide each
+FA loading row by `mean_rate`. The half-count is used only at initialization;
+the fitted objective is unchanged. This conversion avoids a saturated
+initial log rate when the FA count-space mean exceeds the rate clipping limit.
+Evaluate sensitivity to initialization on synthetic sessions. The input
+contract assumes every neuron is observed in at least one training session.
 
 ### Poisson fitting
 
@@ -385,6 +390,37 @@ JAX_ENABLE_X64=1 JAX_PLATFORMS=cuda,cpu uv run --no-sync pytest tests/test_gpu.p
 uv run --no-sync ruff check src/cvhmax tests/test_cvi.py tests/test_filtering.py
 git diff --check
 ```
+
+## Validation evidence
+
+With x64 enabled, the implemented mask, Gaussian M-step, and final inference
+passed the CPU suite (126 passed, 40 skipped), the slow VdP benchmark (5
+passed), and all-observed plus partially observed CPU–GPU parity (2 passed).
+
+The specified shared-trajectory synthetic experiment produced:
+
+| Readout | Held-out $R^2$ (sessions 1, 2) | Latent $R^2$ (sessions 1, 2) | Iterations | Converged |
+|---------|--------------------------------|-------------------------------|------------|-----------|
+| Gaussian | 0.8504, 0.8457 | 0.9476, 0.9450 | 100 | No |
+| Poisson | 0.7081, 0.6948 | 0.3245, 0.1841 | 100 | No |
+
+Both fits reached the specified iteration cap; the positive reconstruction
+scores do not establish convergence. In particular, Poisson latent recovery is
+weaker than Gaussian recovery on this synthetic example.
+
+A small all-observed Gaussian one-step comparison using the `y`, `m`, and `V`
+of `test_masked_gaussian_m_step_matches_conditional_objective`, an all-true
+mask, and initial `R=I` gave a loading difference of approximately `1.30`
+in Frobenius norm versus the previous mean-only ridge update. The previous
+residual covariance had an off-diagonal entry of approximately `0.186`; the
+new covariance is diagonal. This illustrates the intentional objective change,
+not a general effect-size estimate.
+
+A CPU run over all-observed and session-constant masks with `(trials, time,
+neurons, latents) = (2, 256, 12, 2)` had a cumulative process peak RSS of
+about 1.5 GiB. The first all-observed Gaussian fit took 6.6 seconds and the
+subsequent session-mask fit 1.3 seconds, including JAX compilation/warmup;
+these single-run timings are not a controlled comparison of mask overhead.
 
 ## Done when
 

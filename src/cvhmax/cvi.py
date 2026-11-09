@@ -10,7 +10,6 @@ from jax.scipy.linalg import cho_factor, cho_solve
 from equinox import Module
 
 from .utils import (
-    filter_array,
     trial_info_repr,
     lbfgs_solve,
     ridge_estimate,
@@ -47,12 +46,23 @@ def fa_init(ys, n_components, random_state):
     return ms, C, d
 
 
+def _initialization_data(y: Array, valid_y: Array) -> tuple[Array, Array, Array]:
+    """Prepare observed bins and mean-filled data for Factor Analysis."""
+    y = y.reshape(-1, y.shape[-1])
+    valid_y = valid_y.reshape(y.shape)
+    active = jnp.any(valid_y, axis=1)
+    y, valid_y = y[active], valid_y[active]
+    observed = jnp.where(valid_y, y, 0.0)
+    means = jnp.sum(observed, axis=0) / jnp.sum(valid_y, axis=0)
+    return observed, valid_y, jnp.where(valid_y, y, means)
+
+
 class Params(Module):
     """Container of CVI readout parameters.
 
-    This is a convenience container used by the built-in Gaussian and Poisson
-    readouts.  Custom observation models may use any pytree-compatible
-    structure — CVHM treats params as opaque.
+    This container is used by the built-in Gaussian and Poisson readouts.
+    CVHM's convergence metric compares the readout fields ``C``, ``d``, and
+    ``R``.
 
     Attributes
     ----------
@@ -61,7 +71,7 @@ class Params(Module):
     d : Array
         Bias vector with shape ``(obs_dim (N),)``.
     R : Array
-        Observation covariance. Typically ``(obs_dim (N), obs_dim (N))``.
+        Diagonal Gaussian observation covariance with shape ``(N, N)``.
         For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
     """
 
@@ -165,7 +175,7 @@ class CVI:
         y : Array
             Observations shaped ``(time, obs_dim (N))``.
         valid_y : Array
-            Observation mask, shape ``(time,)``.
+            Observation mask, shape ``(time, obs_dim (N))``.
 
         Returns
         -------
@@ -192,8 +202,8 @@ class CVI:
         initialisation.  This allows callers to supply pre-set
         parameters (e.g. the true readout in a simulation).
 
-        The returned params structure is opaque to CVHM — each CVI
-        subclass may use any pytree-compatible container.
+        CVHM's convergence metric compares the returned state's ``C``, ``d``,
+        and ``R`` fields.
 
         Parameters
         ----------
@@ -257,7 +267,7 @@ class Gaussian(CVI):
         y : Array
             Observation tensor shaped ``(time, obs_dim)``.
         valid_y : Array
-            Observation mask, shape ``(time,)``.
+            Observation mask, shape ``(time, obs_dim)``.
 
         Returns
         -------
@@ -297,9 +307,10 @@ class Gaussian(CVI):
             Updated parameters and the (unused) negative log-likelihood proxy.
         """
         y = y.reshape(-1, y.shape[-1])
-        valid_y = valid_y.ravel()
+        valid_y = valid_y.reshape(y.shape)
         m = m.reshape(-1, m.shape[-1])
-        C, d, R = ridge_estimate(y, valid_y, m, P)
+        P = P.reshape(-1, *P.shape[-2:])
+        C, d, R = ridge_estimate(y, valid_y, m, P, params.R)
         return Params(C=C, d=d, R=R), jnp.nan
 
     @classmethod
@@ -336,9 +347,8 @@ class Gaussian(CVI):
         if params is not None:
             return params
 
-        y = filter_array(y, valid_y)
-        _, C, d = fa_init(y, n_factors, random_state)
-
+        _, _, filled = _initialization_data(y, valid_y)
+        _, C, d = fa_init(filled, n_factors, random_state)
         return Params(C=C, d=d, R=jnp.eye(y.shape[-1]))
 
 
@@ -350,7 +360,10 @@ def poisson_trial_nell(
     V: Array,
     gamma: float = 10.0,
 ) -> float:
-    """Average negative expected log-likelihood across trials.
+    """Average Poisson readout objective per observed time bin.
+
+    The count term uses the variance-adjusted log rate. This retained
+    objective is not the exact expected Poisson log-likelihood.
 
     Parameters
     ----------
@@ -370,25 +383,20 @@ def poisson_trial_nell(
     Returns
     -------
     float
-        Trial-averaged negative expected log-likelihood.
+        Readout objective averaged over observed time bins.
     """
     C, d = params
-    n_valid_bins = jnp.sum(valid_y)
+    n_valid_bins = jnp.sum(jnp.any(valid_y, axis=-1))
 
-    def bin_nell(y_t, m_t, V_t):
+    def bin_nell(y_t, mask_t, m_t, V_t):
         lin = C @ m_t + d
-        quad = jnp.einsum(
-            "ni,in->n", C, V_t @ C.T
-        )  # (Y, Z) (T, Z, Z) (Z, Y) -> (T, Y, Y)
+        quad = jnp.einsum("ni,in->n", C, V_t @ C.T)
         eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
-        lam = jnp.exp(eta)
-        return jnp.sum(lam - eta * y_t, axis=-1)
+        observed_y = jnp.where(mask_t, y_t, 0.0)
+        return jnp.sum(jnp.where(mask_t, jnp.exp(eta) - eta * observed_y, 0.0))
 
-    C_reg = gamma * jnp.linalg.norm(C) / n_valid_bins
-    bin_nells = vmap(bin_nell)(y, m, V)
-    bin_nells = jnp.where(valid_y, bin_nells, 0)
-
-    return jnp.sum(bin_nells) / n_valid_bins + C_reg
+    bin_nells = vmap(bin_nell)(y, valid_y, m, V)
+    return (jnp.sum(bin_nells) + gamma * jnp.linalg.norm(C)) / n_valid_bins
 
 
 def poisson_cvi_bin_stats(
@@ -410,9 +418,7 @@ def poisson_cvi_bin_stats(
     y : Array
         Observed counts for the bin.
     valid_y : Array
-        Observation mask for one bin, shape ``()``. When zero, both ``k``
-        and ``K`` are set to zero so the bin contributes no
-        pseudo-observation gradient to the CVI update.
+        Observation mask for one bin, shape ``(obs_dim,)``.
     H : Array
         Effective observation matrix.
     d : Array
@@ -439,16 +445,11 @@ def poisson_cvi_bin_stats(
     eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
     lam = jnp.exp(eta)
 
-    grad_m = (y - lam) @ H
-    grad_V = -0.5 * jnp.einsum("ni, n, nj -> ij", H, lam, H)
-
-    K = -2 * grad_V
-    k = grad_m - 2 * grad_V @ m
-
-    k = jnp.where(valid_y, k, 0)
-    K = jnp.where(valid_y, K, 0)
-
-    return k, K
+    observed_y = jnp.where(valid_y, y, 0.0)
+    observed_lam = jnp.where(valid_y, lam, 0.0)
+    grad_m = (observed_y - observed_lam) @ H
+    K = jnp.einsum("ni,n,nj->ij", H, observed_lam, H)
+    return grad_m + K @ m, K
 
 
 def poisson_cvi_bin_stats_latent(
@@ -475,7 +476,7 @@ def poisson_cvi_bin_stats_latent(
     y : Array
         Observed counts for the bin, shape ``(obs_dim (N),)``.
     valid_y : Array
-        Observation mask for one bin, shape ``()``.
+        Observation mask for one bin, shape ``(obs_dim (N),)``.
     C : Array
         Loading matrix, shape ``(obs_dim (N), latent_dim (K))``.
     d : Array
@@ -492,16 +493,11 @@ def poisson_cvi_bin_stats_latent(
     eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
     lam = jnp.exp(eta)
 
-    grad_m = (y - lam) @ C
-    grad_V = -0.5 * jnp.einsum("ni, n, nj -> ij", C, lam, C)
-
-    K = -2 * grad_V
-    k = grad_m - 2 * grad_V @ m
-
-    k = jnp.where(valid_y, k, 0)
-    K = jnp.where(valid_y, K, 0)
-
-    return k, K
+    observed_y = jnp.where(valid_y, y, 0.0)
+    observed_lam = jnp.where(valid_y, lam, 0.0)
+    grad_m = (observed_y - observed_lam) @ C
+    K = jnp.einsum("ni,n,nj->ij", C, observed_lam, C)
+    return grad_m + K @ m, K
 
 
 class Poisson(CVI):
@@ -528,7 +524,7 @@ class Poisson(CVI):
         y : Array
             Observation tensor shaped ``(time, obs_dim (N))``.
         valid_y : Array
-            Observation mask, shape ``(time,)``.
+            Observation mask, shape ``(time, obs_dim (N))``.
 
         Returns
         -------
@@ -579,13 +575,13 @@ class Poisson(CVI):
         Returns
         -------
         tuple[Params, float]
-            Updated parameters and the negative expected log-likelihood.
+            Updated parameters and the unregularized readout objective.
         """
         C = params.C
         d = params.d
 
         y = y.reshape(-1, y.shape[-1])
-        valid_y = valid_y.ravel()
+        valid_y = valid_y.reshape(y.shape)
         m = m.reshape(-1, m.shape[-1])
         V = V.reshape(-1, *V.shape[-2:])
 
@@ -681,15 +677,16 @@ class Poisson(CVI):
         if params is not None:
             return params
 
-        y = filter_array(y, valid_y)
-        m, C, d = fa_init(y, n_factors, random_state)
-
-        n_bins, n_obs = y.shape
-        V = jnp.zeros((n_bins, n_factors, n_factors))  # dummy variance
-
+        y, valid_y, filled = _initialization_data(y, valid_y)
+        m, C, _ = fa_init(filled, n_factors, random_state)
+        counts = jnp.sum(valid_y, axis=0)
+        mean_rate = (jnp.sum(y, axis=0) + 0.5) / counts
+        # FA operates on counts; the Poisson readout operates on log rates.
+        C = C / mean_rate[:, None]
+        d = jnp.log(mean_rate)
+        V = jnp.zeros((y.shape[0], n_factors, n_factors))
         C, d = lbfgs_solve(
-            (C, d),
-            partial(poisson_trial_nell, y=y, valid_y=jnp.ones(y.shape[:1]), m=m, V=V),
+            (C, d), partial(poisson_trial_nell, y=y, valid_y=valid_y, m=m, V=V)
         )
 
         return Params(C=C, d=d, R=jnp.asarray(0.0))

@@ -2,8 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Added broadcastable element-wise observation masks for fitting and inference.
+
 ### Changed
 
+- Changed whole-bin observation masks to use shape `(trials, time, 1)` so they
+  broadcast to the data shape.
+- Restricted Gaussian observation noise to diagonal covariance and updated its
+  readout using masked posterior second moments.
+- Recomputed the final posterior after fitting so it matches the final readout.
 - Removed loading normalization from Gaussian and Poisson readouts and the
   convergence metric. Fixed GP kernels set the latent prior scale, and fitted
   loadings retain observation-specific gains.

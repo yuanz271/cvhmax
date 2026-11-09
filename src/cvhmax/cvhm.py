@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from os import PathLike
 from typing import Any, NamedTuple
 
-import chex
 import jax
 from jax import Array, vmap
 from jax import numpy as jnp
@@ -25,6 +24,49 @@ class _ScaledDynamics(NamedTuple):
     forward_noise: Array
     backward: Array
     backward_noise: Array
+
+
+class _InferenceContext(NamedTuple):
+    Af: Array
+    Pf: Array
+    Ab: Array
+    Pb: Array
+    z0: Array
+    Z0: Array
+    M: Array
+
+
+class _FitState(NamedTuple):
+    iteration: Array
+    params: Any
+    patience: Array
+    converged: Array
+    failed: Array
+
+
+def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array]:
+    """Broadcast the observation mask and add a trial axis when needed."""
+    y = jnp.asarray(y)
+    valid_y = (
+        jnp.ones_like(y, dtype=bool)
+        if valid_y is None
+        else jnp.broadcast_to(jnp.asarray(valid_y, dtype=bool), y.shape)
+    )
+    if y.ndim == 2:
+        y, valid_y = y[None, ...], valid_y[None, ...]
+    return jnp.where(valid_y, y, 0.0), valid_y
+
+
+def _validate_gaussian_noise(params: Params, n_observations: int) -> None:
+    """Validate a caller-supplied diagonal observation covariance."""
+    R = jnp.asarray(params.R)
+    if R.shape != (n_observations, n_observations):
+        raise ValueError("Gaussian R must have shape (neurons, neurons)")
+    diagonal = jnp.diag(R)
+    if not bool(jnp.all(jnp.isfinite(diagonal) & (diagonal > 0))) or not bool(
+        jnp.all(R == jnp.diag(diagonal))
+    ):
+        raise ValueError("Gaussian R must be a positive diagonal covariance")
 
 
 def _relative_change(value_new: Array, value_old: Array) -> Array:
@@ -123,6 +165,8 @@ class CVHM:
             raise ValueError(
                 f"min_iter ({self.min_iter}) must not exceed max_iter ({self.max_iter})"
             )
+        if self.params is not None and issubclass(self.cvi, Gaussian):
+            _validate_gaussian_noise(self.params, self.params.C.shape[0])
 
     def _scaled_kernel_dynamics(self, tau):
         """Return correlation-scaled, Cholesky-stabilized dynamics."""
@@ -225,6 +269,50 @@ class CVHM:
 
         return M
 
+    def _inference_context(self, n_trials: int) -> _InferenceContext:
+        """Prepare the fixed dynamics and stationary state for inference."""
+        dynamics = self._scaled_kernel_dynamics(self.dt)
+        Af, Qf, Ab, Qb, Q0 = self._matrices_from_dynamics(dynamics)
+        L = Af.shape[0]
+        return _InferenceContext(
+            Af, cho_inv(Qf), Ab, cho_inv(Qb),
+            jnp.tile(jnp.zeros(L), (n_trials, 1)),
+            jnp.tile(cho_inv(Q0), (n_trials, 1, 1)),
+            self.latent_mask(),
+        )
+
+    def _infer_state(self, params, y, valid_y, context):
+        """Infer SDE information and projected GP moments for fixed readout."""
+        Af, Pf, Ab, Pb, z0, Z0, M = context
+        jl, Jl = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0))(
+            params, y, valid_y
+        )
+        smooth_batch = vmap(
+            lambda jk, Jk, zk0, Zk0: bifilter(jk, Jk, zk0, Zk0, Af, Pf, Ab, Pb)
+        )
+        fwd_batch = vmap(
+            lambda jk, Jk, zk0, Zk0: information_filter(
+                (zk0, Zk0), (jk, Jk), Af, Pf
+            )
+        )
+        j, J = lift(jl, Jl, M)
+        zp, Zp, _, _ = fwd_batch(j, J, z0, Z0)
+        m, V = project(zp, Zp, M)
+        jl, Jl = self.cvi.update_pseudo(params, y, valid_y, m, V, jl, Jl, 1.0)
+
+        def cvi_step(_, carry):
+            jl, Jl = carry
+            j, J = lift(jl, Jl, M)
+            z, Z = smooth_batch(j, J, z0, Z0)
+            m, V = project(z, Z, M)
+            return self.cvi.update_pseudo(params, y, valid_y, m, V, jl, Jl, self.lr)
+
+        jl, Jl = jax.lax.fori_loop(0, self.cvi_iter, cvi_step, (jl, Jl))
+        j, J = lift(jl, Jl, M)
+        z, Z = smooth_batch(j, J, z0, Z0)
+        m, V = project(z, Z, M)
+        return z, Z, m, V
+
     def fit(self, y: Array, valid_y: Array | None = None, *, random_state=None):
         """Fit the CVHM model to observations using CVI-EM.
 
@@ -233,8 +321,7 @@ class CVHM:
         y : Array
             Observations shaped `(trials, time, features)` or `(time, features)`.
         valid_y : Array, optional
-            Binary mask matching `y` that flags observed entries. Missing values
-            default to all ones when omitted.
+            Boolean observation mask broadcastable to `y`; defaults to all observed.
         random_state : int | None, optional
             Seed used for initialization. Drawn from `secrets` when absent.
 
@@ -249,176 +336,51 @@ class CVHM:
         >>> from cvhmax.cvhm import CVHM
         >>> from cvhmax.hm import HidaMatern
         >>> y = jnp.asarray(...)  # (trials, time, features)
-        >>> valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+        >>> valid_y = jnp.ones_like(y, dtype=bool)
         >>> kernels = [HidaMatern(order=0) for _ in range(2)]
         >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels, observation="Gaussian")
         >>> model.fit(y, valid_y=valid_y, random_state=0)
         """
-        if valid_y is None:
-            valid_y = jnp.ones(y.shape[:-1], dtype=jnp.uint)
-
-        if y.ndim == 2:
-            y = jnp.expand_dims(y, 0)
-            valid_y = jnp.expand_dims(valid_y, 0)
-
-        chex.assert_equal_shape_prefix((y, valid_y), 2)
-
+        y, valid_y = _prepare_observations(y, valid_y)
+        if not bool(jnp.all(jnp.any(valid_y, axis=(0, 1)))):
+            raise ValueError("Every neuron must be observed at least once during fitting")
         if random_state is None:
             random_state = secrets.randbits(32)
-
-        params = self.params = self.cvi.initialize_params(
-            y,
-            valid_y,
-            self.n_components,
-            random_state=random_state,
-            params=self.params,
+        if issubclass(self.cvi, Gaussian) and self.params is not None:
+            _validate_gaussian_noise(self.params, y.shape[-1])
+        params = self.cvi.initialize_params(
+            y, valid_y, self.n_components, random_state=random_state, params=self.params
         )
-
-        dynamics = self._scaled_kernel_dynamics(self.dt)
-        Af, Qf, Ab, Qb, Q0 = self._matrices_from_dynamics(dynamics)
-
-        Pf = cho_inv(Qf)
-        Pb = cho_inv(Qb)
-
-        # >>> Make stationary distribution
-        n_trials = jnp.size(y, 0)
-        n_bins = jnp.size(y, 1)
-        L = Af.shape[0]
-        z0 = jnp.zeros(L)
-        Z0 = cho_inv(Q0)
-        z0 = jnp.tile(z0, (n_trials, 1))
-        Z0 = jnp.tile(Z0, (n_trials, 1, 1))
-        # <<<
-
-        # >>> Make dummy variables
-        z = jnp.zeros((n_trials, n_bins, L))
-        Z = jnp.zeros((n_trials, n_bins, L, L))
-        m = jnp.zeros((n_trials, n_bins, self.n_components))
-        V = jnp.zeros((n_trials, n_bins, self.n_components, self.n_components))
-        # <<<
-
-        M = self.latent_mask()
-
-        # Initialize pseudo-observations in latent space
-        jl, Jl = vmap(
-            self.cvi.initialize_info, in_axes=(None, 0, 0)
-        )(params, y, valid_y)
-
-        smooth_batch = vmap(
-            lambda jk, Jk, zk0, Zk0: bifilter(jk, Jk, zk0, Zk0, Af, Pf, Ab, Pb)
-        )
-        fwd_batch = vmap(
-            lambda jk, Jk, zk0, Zk0: information_filter(
-                (zk0, Zk0), (jk, Jk), Af, Pf
-            )
-        )
-
-        def em_step(iter, carry):
-            params, _, _, jl, Jl, *_ = carry
-
-            # Refresh pseudo-obs from current params.  For conjugate
-            # (Gaussian) readouts the pseudo-observations are a
-            # deterministic function of the readout parameters.  For
-            # non-conjugate (Poisson) readouts this provides a warm
-            # restart.
-            jl, Jl = vmap(
-                self.cvi.initialize_info, in_axes=(None, 0, 0)
-            )(params, y, valid_y)
-
-            # Forward-filter warm-up: lift the per-bin pseudo-obs to
-            # state space, run a forward information filter, project
-            # the *predicted* moments back to latent space, and refine
-            # the pseudo-obs.  This provides a sequentially coherent
-            # initialisation (owned by CVHM, not CVI) that replaces
-            # the forward-filter pass previously inside
-            # Poisson.initialize_info.  For conjugate readouts the
-            # update is idempotent.
-            j_w, J_w = lift(jl, Jl, M)
-            zp, Zp, _, _ = fwd_batch(j_w, J_w, z0, Z0)
-            m_w, V_w = project(zp, Zp, M)
-            jl, Jl = self.cvi.update_pseudo(
-                params, y, valid_y, m_w, V_w, jl, Jl, 1.0
-            )
-
-            # CVI iterations: CVI ↔ filtering via CVHM bridge
-            def cvi_step(i, carry_cvi):
-                jl, Jl = carry_cvi
-                # Lift latent → state
-                j, J = lift(jl, Jl, M)
-                # Filter in state space
-                z, Z = smooth_batch(j, J, z0, Z0)
-                # Project state → latent
-                m, V = project(z, Z, M)
-                # CVI update in latent space
-                jl, Jl = self.cvi.update_pseudo(
-                    params, y, valid_y, m, V, jl, Jl, self.lr
-                )
-                return jl, Jl
-
-            jl, Jl = jax.lax.fori_loop(0, self.cvi_iter, cvi_step, (jl, Jl))
-
-            # Final smooth after CVI converges
-            j, J = lift(jl, Jl, M)
-            z, Z = smooth_batch(j, J, z0, Z0)
-            m, V = project(z, Z, M)
-
-            # M-step: update observation model
-            params, nell = self.cvi.update_readout(params, y, valid_y, m, V)
-
-            return params, z, Z, jl, Jl, m, V, nell
+        context = self._inference_context(y.shape[0])
+        gaussian = issubclass(self.cvi, Gaussian)
 
         with training_progress() as pbar:
             task_id = pbar.add_task(
                 "Training", total=self.max_iter, nell=jnp.nan, nell_display="n/a"
             )
 
-            init_carry = (
-                0,
-                params,
-                z,
-                Z,
-                jl,
-                Jl,
-                m,
-                V,
-                params,
-                False,
-                0,
-                False,
-                jnp.inf,
-                jnp.nan,
-            )
+            initial = _FitState(0, params, 0, False, False)
 
-            def cond(carry):
-                iteration, _, _, _, _, _, _, _, _, _, _, converged, _, _ = carry
-                return (iteration < self.max_iter) & (~converged)
+            def cond(state):
+                return (state.iteration < self.max_iter) & ~state.converged & ~state.failed
 
-            def body(carry):
-                (
-                    iteration, cur_params, z, Z, jl, Jl, m, V,
-                    prev_params, has_prev, patience, converged, metric, nell,
-                ) = carry
-
-                new_params, z, Z, jl, Jl, m, V, nell = em_step(
-                    iteration, (cur_params, z, Z, jl, Jl, m, V, nell)
-                )
+            def body(state):
+                _, _, m, V = self._infer_state(state.params, y, valid_y, context)
+                updated, nell = self.cvi.update_readout(state.params, y, valid_y, m, V)
                 metric = jnp.where(
-                    has_prev, readout_change(new_params, prev_params), jnp.inf
+                    state.iteration > 0, readout_change(updated, state.params), jnp.inf
                 )
-
-                iteration_new = iteration + 1
-
-                # Consecutive-passing patience: count only when
-                # iteration >= min_iter, metric is finite and <= tol
+                iteration = state.iteration + 1
                 passing = (
-                    jnp.isfinite(metric)
-                    & (metric <= self.tol)
-                    & (iteration_new >= self.min_iter)
+                    jnp.isfinite(metric) & (metric <= self.tol) & (iteration >= self.min_iter)
                 )
-                patience = jnp.where(passing, patience + 1, 0)
+                patience = jnp.where(passing, state.patience + 1, 0)
                 converged = passing & (patience >= self.convergence_patience)
-
-                # Progress bar update (iteration is 0-indexed)
+                if gaussian:
+                    variance = jnp.diag(updated.R)
+                    failed = jnp.any(~jnp.isfinite(variance) | (variance <= 0))
+                else:
+                    failed = jnp.array(False)
                 jax.debug.callback(
                     lambda step_i, x: pbar.update(
                         task_id,
@@ -428,27 +390,24 @@ class CVHM:
                             f"{float(x):.3f}" if math.isfinite(float(x)) else "n/a"
                         ),
                     ),
-                    iteration,
+                    state.iteration,
                     nell,
                     ordered=True,
                 )
+                return _FitState(iteration, updated, patience, converged, failed)
 
-                return (
-                    iteration_new, new_params, z, Z, jl, Jl, m, V,
-                    new_params, True, patience, converged, metric, nell,
-                )
+            result = jax.lax.while_loop(cond, body, initial)
 
-            final_carry = jax.lax.while_loop(cond, body, init_carry)
-
-        (
-            iteration, params, z, Z, jl, Jl, m, V,
-            _, _, _, converged, _, _,  # noqa: E741
-        ) = final_carry
-        self.params = params
+        if bool(result.failed):
+            raise FloatingPointError("Gaussian observation variance became non-positive or non-finite")
+        if gaussian:
+            _validate_gaussian_noise(result.params, y.shape[-1])
+        z, Z, m, V = self._infer_state(result.params, y, valid_y, context)
+        self.params = result.params
         self.latent = (z, Z)
         self.posterior = (m, V)
-        self.converged_ = bool(converged)
-        self.n_iter_ = int(iteration)
+        self.converged_ = bool(result.converged)
+        self.n_iter_ = int(result.iteration)
         return self
 
     def get_config(self) -> dict:
@@ -547,7 +506,7 @@ class CVHM:
         y : Array
             Observations shaped `(trials, time, features)` or `(time, features)`.
         valid_y : Array, optional
-            Binary observation mask. Missing values default to all ones.
+            Boolean observation mask broadcastable to `y`; defaults to all observed.
 
         Returns
         -------
@@ -561,52 +520,12 @@ class CVHM:
         """
         if self.params is None:
             raise RuntimeError("Cannot infer with an unfitted model")
-        if valid_y is None:
-            valid_y = jnp.ones(y.shape[:-1], dtype=jnp.uint)
-        if y.ndim == 2:
-            y = jnp.expand_dims(y, 0)
-            valid_y = jnp.expand_dims(valid_y, 0)
-        chex.assert_equal_shape_prefix((y, valid_y), 2)
-
-        dynamics = self._scaled_kernel_dynamics(self.dt)
-        Af, Qf, Ab, Qb, Q0 = self._matrices_from_dynamics(dynamics)
-        Pf, Pb = cho_inv(Qf), cho_inv(Qb)
-        n_trials, n_bins = y.shape[:2]
-        L = Af.shape[0]
-        z0 = jnp.tile(jnp.zeros(L), (n_trials, 1))
-        Z0 = jnp.tile(cho_inv(Q0), (n_trials, 1, 1))
-        M = self.latent_mask()
-        jl, Jl = vmap(self.cvi.initialize_info, in_axes=(None, 0, 0))(
-            self.params, y, valid_y
-        )
-        smooth_batch = vmap(
-            lambda jk, Jk, zk0, Zk0: bifilter(jk, Jk, zk0, Zk0, Af, Pf, Ab, Pb)
-        )
-        fwd_batch = vmap(
-            lambda jk, Jk, zk0, Zk0: information_filter(
-                (zk0, Zk0), (jk, Jk), Af, Pf
-            )
-        )
-        j_w, J_w = lift(jl, Jl, M)
-        zp, Zp, _, _ = fwd_batch(j_w, J_w, z0, Z0)
-        m_w, V_w = project(zp, Zp, M)
-        jl, Jl = self.cvi.update_pseudo(
-            self.params, y, valid_y, m_w, V_w, jl, Jl, 1.0
-        )
-
-        def cvi_step(_, carry):
-            jl, Jl = carry
-            j, J = lift(jl, Jl, M)
-            z, Z = smooth_batch(j, J, z0, Z0)
-            m, V = project(z, Z, M)
-            return self.cvi.update_pseudo(
-                self.params, y, valid_y, m, V, jl, Jl, self.lr
-            )
-
-        jl, Jl = jax.lax.fori_loop(0, self.cvi_iter, cvi_step, (jl, Jl))
-        j, J = lift(jl, Jl, M)
-        z, Z = smooth_batch(j, J, z0, Z0)
-        return project(z, Z, M)
+        y, valid_y = _prepare_observations(y, valid_y)
+        if issubclass(self.cvi, Gaussian):
+            _validate_gaussian_noise(self.params, y.shape[-1])
+        context = self._inference_context(y.shape[0])
+        _, _, m, V = self._infer_state(self.params, y, valid_y, context)
+        return m, V
 
     def transform(self, y: Array, valid_y: Array):
         """Infer latent trajectories for new data.
@@ -646,7 +565,7 @@ class CVHM:
         >>> from cvhmax.cvhm import CVHM
         >>> from cvhmax.hm import HidaMatern
         >>> y = jnp.asarray(...)
-        >>> valid_y = jnp.ones_like(y[..., 0], dtype=jnp.uint8)
+        >>> valid_y = jnp.ones_like(y, dtype=bool)
         >>> kernels = [HidaMatern(order=0) for _ in range(2)]
         >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels)
         >>> m = model.fit_transform(y, valid_y)
