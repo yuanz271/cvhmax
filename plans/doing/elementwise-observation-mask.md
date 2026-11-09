@@ -306,6 +306,12 @@ but different observed neuron subsets:
 - Fit with the fixed GP prior, `random_state=42`, `max_iter=100`, `tol=1e-4`,
   `min_iter=2`, `convergence_patience=2`, `cvi_iter=5`, and `lr=0.1`. Report
   the iteration count and convergence status.
+- After fitting, recompute the posterior with
+  `model.infer(y, valid_y=training_mask)`. Use these posterior moments with the
+  final `model.params` for all held-out predictions and latent-recovery scores.
+  `fit()` currently stores posterior moments computed before its final readout
+  update, so its cached posterior is not necessarily conditioned on the final
+  parameters. Keep held-out entries masked during this inference.
 - For Gaussian, predict each held-out neuron by $d_n+c_n^\top m_{st}$. For
   Poisson, use the posterior expected rate
   $\exp(d_n+c_n^\top m_{st}+\tfrac12 c_n^\top V_{st}c_n)$ with the existing
