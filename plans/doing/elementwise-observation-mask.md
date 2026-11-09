@@ -230,6 +230,39 @@ estimate. If the expected residual variance degenerates to zero or becomes
 non-finite, report the numerical failure; do not silently introduce a noise
 floor that changes the objective.
 
+## Posterior consistency after fitting
+
+After the final readout update, `CVHM.fit()` must perform one final inference
+pass using the final parameters, training data, and training mask. This pass
+must not update the readout again. It populates both representations of the
+same posterior:
+
+- `model.latent = (z, Z)`: SDE state posterior in information form;
+- `model.posterior = (m, V)`: GP latent posterior in moment form.
+
+For the data and mask passed to `fit()`, require these invariants up to
+numerical tolerance:
+
+```python
+import numpy as np
+from cvhmax import project
+
+projected = project(*model.latent, model.latent_mask())
+inferred = model.infer(y, valid_y=training_mask)
+for cached, from_state, fresh in zip(model.posterior, projected, inferred):
+    np.testing.assert_allclose(cached, from_state, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(cached, fresh, rtol=1e-6, atol=1e-8)
+```
+
+Implement one shared inference helper for the filtering, CVI, and projection
+path. The helper receives the readout parameters explicitly and returns both
+posterior representations. The EM E-step, the final post-training pass, and
+`infer()` use that helper, with fixed dynamics reused where practical.
+`infer()` remains non-mutating and returns only `(m, V)`. Keep initialized and
+updated parameters local during training; publish the fitted parameters and
+cached outputs only after final inference succeeds, so a failure does not leave
+a partially updated fit.
+
 ## Implementation sequence
 
 1. Update the `y`/`valid_y` contract at `CVHM.fit`, `CVHM.infer`, the `CVI`
@@ -243,9 +276,13 @@ floor that changes the objective.
 6. Implement the diagonal-Gaussian conditional loading and noise updates
    above. Include posterior covariance in the sufficient statistics, and
    document the intentional all-observed behavior change.
-7. Update `README.md`, `docs/api.md`, `docs/data-model.md`,
-   `docs/algorithms.md`, and affected docstrings. Document the shared-readout
-   assumption and the separate need for session-specific loading drift.
+7. Use one shared inference helper for the EM E-step, `infer()`, and a final
+   post-training pass. Store consistent `model.latent` and `model.posterior`
+   under the final fitted parameters.
+8. Update `README.md`, `docs/api.md`, `docs/data-model.md`,
+   `docs/algorithms.md`, and affected docstrings. Document posterior
+   consistency, the shared-readout assumption, and the separate need for
+   session-specific loading drift.
 
 ## Mathematical and integration tests
 
@@ -270,6 +307,10 @@ floor that changes the objective.
 - **Gaussian M-step:** compare the masked conditional updates against a small
   dense reference for the objective above. Verify that the returned `R` is
   diagonal with finite positive variances.
+- **Posterior consistency:** for Gaussian and Poisson fits with a partial mask,
+  compare `model.posterior` with `model.latent` projected using
+  `model.latent_mask()`, and with `model.infer(y, valid_y)`. Check that the
+  final inference does not update the fitted readout parameters.
 - **Joint sessions:** run the reproducible shared-latent synthetic experiment
   below. Evaluate latent recovery only up to the model's applicable gauge.
 - **Observation availability:** fitting fails at the public boundary when
@@ -306,12 +347,10 @@ but different observed neuron subsets:
 - Fit with the fixed GP prior, `random_state=42`, `max_iter=100`, `tol=1e-4`,
   `min_iter=2`, `convergence_patience=2`, `cvi_iter=5`, and `lr=0.1`. Report
   the iteration count and convergence status.
-- After fitting, recompute the posterior with
-  `model.infer(y, valid_y=training_mask)`. Use these posterior moments with the
-  final `model.params` for all held-out predictions and latent-recovery scores.
-  `fit()` currently stores posterior moments computed before its final readout
-  update, so its cached posterior is not necessarily conditioned on the final
-  parameters. Keep held-out entries masked during this inference.
+- After fitting, use `model.posterior` with the final `model.params` for all
+  held-out predictions and latent-recovery scores. Verify it matches
+  `model.infer(y, valid_y=training_mask)` and the projection of `model.latent`.
+  Keep held-out entries masked during both fitting and inference.
 - For Gaussian, predict each held-out neuron by $d_n+c_n^\top m_{st}$. For
   Poisson, use the posterior expected rate
   $\exp(d_n+c_n^\top m_{st}+\tfrac12 c_n^\top V_{st}c_n)$ with the existing
@@ -351,7 +390,8 @@ git diff --check
 
 `CVHM.fit()` and `infer()` accept `valid_y=None` or a mask broadcastable to
 `y`; the canonical internal mask has the same shape as `y`. Missing neurons
-affect neither inference nor fitted readouts; Gaussian and Poisson paths meet
-the mathematical tests above; all-observed behavior is
-accounted for; documentation states the shared-readout and session-identifiability
-limits; and the validation commands pass.
+affect neither inference nor fitted readouts. After `fit()`, `model.latent`,
+`model.posterior`, and `infer()` agree under the final fitted parameters.
+Gaussian and Poisson paths meet the mathematical tests above; all-observed
+behavior is accounted for; documentation states the shared-readout and
+session-identifiability limits; and the validation commands pass.
