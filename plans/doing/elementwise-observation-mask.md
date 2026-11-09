@@ -24,15 +24,22 @@ Changing a missing entry's finite placeholder value must not change the result.
 
 - Each trial has an independent GP trajectory. Stacking sessions as trials
   does not align their time points or force their trajectories to match.
-- Retain the current single shared readout `C, d, R` across all trials. In
-  particular, this assumes a matched neuron's loading is shared across its
-  sessions.
-- Session-specific loading drift is **not** implemented by this mask alone.
-  If a session contains multiple trials that should share a drifting readout,
-  a later model must add session-specific readouts and a trial-to-session map.
+- Assume no loading drift: a matched neuron has the same loading row `C`
+  across sessions. Retain one shared readout `C, d, R` across all trials.
+  Shared `d` and `R` are additional model assumptions; no loading drift alone
+  does not imply that they are shared.
+- Constrain Gaussian observation-noise covariance `R` to be diagonal for all
+  fits, including fully observed data. The latent processes and loadings
+  explain cross-neuron covariability. This is a change from the current
+  full-covariance Gaussian model.
+- Session-specific readout parameters are outside this plan. If needed later,
+  they require a trial-to-session map when a session has multiple trials.
 - The current model uses one `dt` and one set of fixed GP kernels across
   trials. Resample recordings to a common time grid or extend the dynamics
   separately.
+- Require every neuron to be observed in at least one time bin across all
+  training trials. Reject a fit with an observation dimension that is never
+  present, rather than trying to estimate its readout parameters.
 - A common latent coordinate system is only identifiable under the shared
   readout/prior assumptions and sufficient cross-session anchors. Feature
   masking alone does not identify a shared space when sessions are unlinked.
@@ -55,6 +62,9 @@ likelihood.
 2. Use boolean masks internally. Masked values may be filled with any finite
    placeholder; sanitize them with `where` **before** likelihood calculations,
    rather than multiplying missing values by zero after arithmetic.
+   `CVHM.fit()` must raise an error before initialization if any neuron is
+   masked at every time bin across all trials. `CVHM.infer()` may use any
+   observed subset because the readout has already been fitted.
 3. Update `pad_trials` to return a mask with the same shape as its padded `y`.
    Per-trial input masks have shape `(time_i, neurons)`. An unpadded bin defaults
    to all neurons observed; every padded entry is masked.
@@ -66,36 +76,30 @@ likelihood.
 
 ### Gaussian readout
 
-For one bin, let $\mathcal O$ be the observed neuron indices. Compute latent
-information using the observed rows of `C`, `d`, and the observed principal
-submatrix of `R`:
+The Gaussian residual covariance is $R=\operatorname{diag}(r)$, where
+$r_n>0$ is neuron $n$'s observation-noise variance. This is the covariance of
+the residual $\varepsilon$ conditional on the latent, not the total observation
+covariance.
+
+For mask value $w_n\in\{0,1\}$ and loading row $c_n^\top$, compute the
+latent information by summing observed neurons:
 
 $$
-J=C_{\mathcal O}^\top R_{\mathcal O\mathcal O}^{-1}C_{\mathcal O},
+J=\sum_n \frac{w_n}{r_n}c_n c_n^\top,
 \qquad
-j=C_{\mathcal O}^\top R_{\mathcal O\mathcal O}^{-1}
-(y_{\mathcal O}-d_{\mathcal O}).
+j=\sum_n \frac{w_n}{r_n}c_n(y_n-d_n).
 $$
 
-Keep JAX shapes static. For the diagonal mask matrix $D$, define
+Use fixed-shape JAX array operations and sanitize missing values with `where`
+before arithmetic. A fully masked bin contributes zero information. CVHM
+continues to lift latent information using its existing state mask `M`; the
+state-space observation matrix is still `H = C @ M` on observed rows.
 
-$$
-\widetilde C=DC,\qquad
-\widetilde R=DRD+(I-D),\qquad
-\widetilde y=D(y-d).
-$$
-
-Solves with $\widetilde R$ give the same $j$ and $J$ as the observed-submatrix
-formulation, including a zero information increment when all neurons are
-missing. Construct $\widetilde y$ with a mask-aware `where`. CVHM continues to
-lift latent information using its existing state mask `M`; the state-space
-observation matrix is still `H = C @ M` on observed rows.
-
-The current Gaussian model has a **full** observation covariance `R`. Do not
-replace $R_{\mathcal O\mathcal O}^{-1}$ with an observed block of $R^{-1}$:
-those are generally different. If masks are constant within a session, reuse
-per-pattern calculations where practical; measure performance before adding
-caching machinery.
+Keep `Params.R` as an `(N, N)` diagonal matrix for Gaussian readouts; use its
+diagonal variance vector for the calculations above. Poisson retains its
+scalar zero sentinel. Validate caller-supplied Gaussian `R` at the public API
+boundary as a positive diagonal covariance rather than silently discarding
+its off-diagonal entries.
 
 ### Poisson readout
 
@@ -104,14 +108,23 @@ contributions **before** summing over neurons. A fully masked bin contributes
 zero information and zero likelihood. Preserve the `Params.R` JAX scalar zero
 sentinel.
 
-For the readout objective, aggregate observed-neuron terms per valid time bin;
-retain the existing normalization convention for all-observed data. Ensure
-that its gradient and the CVI statistics use a consistent stated objective.
-The current `poisson_trial_nell` multiplies the observed count by its
-variance-adjusted `eta`; review that expression against the expected Poisson
-log-likelihood before claiming objective consistency. Any correction that
-changes the all-observed objective must be documented and tested rather than
-hidden inside the masking change.
+Preserve the current `poisson_trial_nell` objective, including its
+variance-adjusted `eta` in the count term and its existing rate clipping. The
+CVI update and this objective are not the same expected-log-likelihood
+formulation; do not claim objective consistency or change either formulation as
+part of masking.
+
+The current objective divides the summed per-neuron terms and loading penalty
+by the number of valid time bins. With feature-level masks, count a time bin as
+valid when at least one neuron is observed:
+
+```python
+n_valid_bins = valid_y.any(axis=-1).sum()
+```
+
+Sum only observed neuron terms before dividing. This preserves the existing
+all-observed scaling, but it does not give sessions with different numbers of
+neurons equal weight.
 
 ## Initialization and readout fitting
 
@@ -129,9 +142,9 @@ complete observations. Initialize from training data only:
 4. Continue allowing callers to provide initial `Params` directly.
 
 This is a deterministic initialization heuristic, not missing-data Factor
-Analysis. Evaluate sensitivity to initialization on synthetic sessions. A
-neuron never observed anywhere in training cannot have its readout parameters
-estimated from that dataset.
+Analysis. Evaluate sensitivity to initialization on synthetic sessions. The
+input contract assumes every neuron is observed in at least one training
+session.
 
 ### Poisson fitting
 
@@ -147,61 +160,103 @@ bin, ignores posterior covariance `V`, and estimates a full residual covariance
 from those complete residuals. It cannot simply be reused with per-neuron
 masks.
 
-Keep the full-covariance model unless a separate modeling decision changes it.
-Design a masked Gaussian readout update from the observed-data expected
-objective, using posterior means and covariances. For full `R`, this requires
-accounting for each observed covariance submatrix and for missing-observation
-uncertainty; zero-filling residuals or pairwise covariance estimates are not
-sufficient in general and may yield an invalid covariance. A missing-data EM
-update that uses conditional moments of the missing observations is one
-candidate. State the objective and regularization explicitly and verify the
-update against a small dense calculation before integrating it.
+Use the diagonal-noise expected objective and update each neuron using only
+its observed bins. For posterior mean $m_{bt}$ and covariance $V_{bt}$, let
 
-**Decision gate:** the full-covariance masked M-step must be specified and
-validated before claiming Gaussian training support. The existing all-observed
-ridge update is an approximation that omits `V`; a mathematically correct
-masked update may therefore change all-observed training behavior. Measure and
-document that change rather than claiming exact training parity. If two neurons
-are never co-observed, their noise cross-covariance is not identified by those
-data; a diagonal or session-specific noise structure would be a separate
-explicit modeling decision, not a silent fallback.
+$$
+\widetilde m_{bt}=\begin{pmatrix}1\\m_{bt}\end{pmatrix},\qquad
+\widetilde V_{bt}=\begin{pmatrix}0&0\\0&V_{bt}\end{pmatrix},\qquad
+\beta_n=\begin{pmatrix}d_n\\c_n\end{pmatrix}.
+$$
+
+With $w_{btn}$ the mask and $N_n=\sum_{bt}w_{btn}>0$, form the sufficient
+statistics
+
+$$
+A_n=\sum_{bt}w_{btn}
+(\widetilde m_{bt}\widetilde m_{bt}^\top+\widetilde V_{bt}),\qquad
+b_n=\sum_{bt}w_{btn}y_{btn}\widetilde m_{bt}.
+$$
+
+For the existing ridge strength $\lambda=0.1$, use the conditional objective
+
+$$
+\mathcal Q_n(\beta_n,r_n)=\frac{N_n}{2}\log r_n+
+\frac{1}{2r_n}\sum_{bt}w_{btn}
+\left[(y_{btn}-\beta_n^\top\widetilde m_{bt})^2
++c_n^\top V_{bt}c_n\right]
++\frac{\lambda}{2}\lVert\beta_n\rVert_2^2.
+$$
+
+The ridge penalty includes the bias, as in the existing `ridge_estimate()`.
+Holding the current $r_n$ fixed, solve for the updated loading and bias:
+
+$$
+(A_n+\lambda r_n I)\beta_n^{+}=b_n.
+$$
+
+Then update the noise variance conditionally using the new $d_n,c_n$:
+
+$$
+r_n^{+}=\frac{1}{N_n}\sum_{bt}w_{btn}
+\left[(y_{btn}-d_n^{+}-(c_n^{+})^\top m_{bt})^2
++(c_n^{+})^\top V_{bt}c_n^{+}\right].
+$$
+
+Form the residual expression directly rather than subtracting large sufficient
+statistics. Solve the systems rather than forming inverses. This is a
+conditional loading update followed by a conditional noise update, not a claim
+of joint closed-form optimization over both.
+
+The existing all-observed ridge update ignores `V` and estimates full `R`;
+the new objective and diagonal-noise model intentionally change that
+behavior. Document and measure the all-observed change rather than claiming
+training parity. At least one observation per neuron makes each $N_n$ positive,
+but does not guarantee precise loading estimation or a strictly positive noise
+estimate. If the expected residual variance degenerates to zero or becomes
+non-finite, report the numerical failure; do not silently introduce a noise
+floor that changes the objective.
 
 ## Implementation sequence
 
 1. Update the `y`/`valid_y` contract at `CVHM.fit`, `CVHM.infer`, the `CVI`
    interface, and `pad_trials`; migrate local examples and tests.
-2. Implement masked Gaussian information increments with the fixed-shape full
-   covariance formulation above. Keep the `lift`/`M` bridge unchanged.
+2. Constrain Gaussian `Params.R` to a positive diagonal matrix and implement
+   masked Gaussian information increments as weighted sums over observed
+   neurons. Keep the `lift`/`M` bridge unchanged.
 3. Implement masked Poisson CVI increments and per-neuron objective contributions.
 4. Implement the documented mask-aware initialization heuristic.
 5. Implement and validate masked Poisson readout fitting.
-6. Resolve the full-covariance Gaussian M-step decision gate, then implement and
-   validate its readout fitting update. Do not silently switch to diagonal `R`.
+6. Implement the diagonal-Gaussian conditional loading and noise updates
+   above. Include posterior covariance in the sufficient statistics, and
+   document the intentional all-observed behavior change.
 7. Update `README.md`, `docs/api.md`, `docs/data-model.md`,
    `docs/algorithms.md`, and affected docstrings. Document the shared-readout
    assumption and the separate need for session-specific loading drift.
 
 ## Mathematical and integration tests
 
-- **All observed:** Gaussian information increments and Poisson CVI increments
-  reproduce the current all-observed calculations. Test the existing Poisson
-  objective's all-observed behavior unless its discrepancy above is resolved
-  explicitly.
-- **Gaussian observed subset:** with a non-diagonal `R`, compare `j` and `J`
-  against a dense computation using the explicitly selected observed rows and
-  `R` submatrix. Verify the state-space result using `H = C @ M`.
+- **All observed:** with diagonal `R`, Gaussian information increments
+  reproduce the current calculation. Poisson CVI increments and objective
+  reproduce the current all-observed calculations, including the documented
+  objective discrepancy.
+- **Gaussian observed subset:** compare `j` and `J` against a dense
+  computation using explicitly selected observed rows and diagonal `R`.
+  Verify the state-space result using `H = C @ M`.
 - **Poisson observed subset:** compare pseudo-observation information and the
   readout objective/gradient with a direct sum over observed neurons.
 - **Time padding:** a fully masked bin contributes no observation information;
   `pad_trials` returns the correct element-wise mask for variable trial lengths.
 - **Missing-value invariance:** changing finite placeholder values for masked
   neurons leaves inference and readout updates unchanged.
-- **Gaussian M-step:** compare the selected masked update against a small dense
-  reference objective and validate finite symmetric positive-definite `R`.
-- **Joint sessions:** on synthetic sessions with partial neuron overlap and a
-  shared readout, recover finite latent posteriors and useful held-out
-  predictions. Evaluate latent recovery only up to the model's applicable
-  gauge; do not require the sessions' independent trajectories to match.
+- **Gaussian M-step:** compare the masked conditional updates against a small
+  dense reference for the objective above. Verify that the returned `R` is
+  diagonal with finite positive variances.
+- **Joint sessions:** run the reproducible shared-latent synthetic experiment
+  below. Evaluate latent recovery only up to the model's applicable gauge.
+- **Observation availability:** fitting fails at the public boundary when
+  any neuron is missing at every time bin in every trial; inference may use a
+  subset of the neurons from an already fitted model.
 - **Numerical stability:** posterior moments remain finite and covariance
   matrices symmetric positive-semidefinite within tolerance under the intended
   masks and fixed kernel scales.
@@ -209,6 +264,47 @@ explicit modeling decision, not a silent fallback.
 Keep held-out neurons/time bins out of initialization and parameter fitting. Use
 fixed seeds and compare at the trial/session level, not individual entries as
 independent subjects.
+
+### Shared-latent synthetic sessions
+
+Construct two trials as sessions with the **same realized latent trajectory**
+but different observed neuron subsets:
+
+- Using seed `42`, generate two independent latent coordinates from the same
+  fixed Matérn-3/2 GP prior (`sigma=1`, `rho=6`, `dt=1`) for 256 time bins.
+  Reuse the resulting trajectory in both sessions.
+- Use 12 neurons with one shared loading `C`. For neuron $n=0,\ldots,11$,
+  set its loading row to $0.7(\cos(2\pi n/12),\sin(2\pi n/12))$.
+  Session 1 records neurons 0–7; session 2 records neurons 4–11. Thus four
+  matched neurons anchor the shared space, and every neuron is recorded in at
+  least one session.
+- Generate Gaussian observations using `d=0`, noise covariance `R=0.05 I`, and
+  independent noise draws between sessions. Generate Poisson observations with
+  `d=log(8)` and independent count draws between sessions.
+- Hold out recorded entry `(s, t, n)` when `(s + t + n) % 5 == 0`, where
+  session indices start at zero. This retains more than `K` observed neurons
+  per time bin. Derive preprocessing, initialization, and fitted parameters
+  only from the remaining observed entries.
+- Fit with the fixed GP prior, `random_state=42`, `max_iter=100`, `tol=1e-4`,
+  `min_iter=2`, `convergence_patience=2`, `cvi_iter=5`, and `lr=0.1`. Report
+  the iteration count and convergence status.
+- For Gaussian, predict each held-out neuron by $d_n+c_n^\top m_{st}$. For
+  Poisson, use the posterior expected rate
+  $\exp(d_n+c_n^\top m_{st}+\tfrac12 c_n^\top V_{st}c_n)$ with the existing
+  clipping policy. For each session, score held-out predictions against that
+  session's per-neuron training means. Require held-out $R^2 > 0$ for each
+  session, alongside finite posterior moments.
+- For latent recovery, fit **one common** orthogonal alignment from the pooled
+  posterior means of both sessions to the known trajectory. Apply that same
+  alignment to both sessions and require each session's latent $R^2$ against a
+  zero-mean baseline to exceed zero. Do not fit a different rotation per
+  session: that would not test for a shared coordinate system.
+
+The identical trajectory is a controlled synthetic alignment check, not an
+assumption that independently recorded real sessions are time-aligned. CVHM
+still treats trials as independent realizations when fitting. This experiment
+therefore does not by itself test posterior-uncertainty calibration under the
+independent-trial generative assumption.
 
 ## Validation
 
