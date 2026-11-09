@@ -50,7 +50,7 @@ def test_gaussian_initialize_info_values(rng):
 
 
 def test_gaussian_initialize_info_preserves_unequal_loading_gains():
-    """Information increments use the fitted loading without normalization."""
+    """Gaussian information increments preserve unequal loading gains."""
     C = jnp.array([[0.2], [2.0]])
     d = jnp.array([0.1, -0.2])
     R = jnp.diag(jnp.array([0.5, 0.8]))
@@ -102,7 +102,7 @@ def test_gaussian_smoothing_with_unequal_loading_gains():
 
 
 def test_poisson_update_pseudo_preserves_unequal_loading_gains():
-    """Poisson pseudo-observations use the same raw loading as the GLM."""
+    """Poisson pseudo-observations preserve unequal loading gains."""
     C = jnp.array([[0.2], [2.0]])
     d = jnp.array([0.1, -0.2])
     params = Params(C=C, d=d, R=jnp.asarray(0.0))

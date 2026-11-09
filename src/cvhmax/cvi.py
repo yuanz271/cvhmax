@@ -57,7 +57,7 @@ class Params(Module):
     Attributes
     ----------
     C : Array
-        Unnormalized loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
+        Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
     d : Array
         Bias vector with shape ``(obs_dim (N),)``.
     R : Array

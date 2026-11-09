@@ -448,7 +448,7 @@ def test_poisson_cvi_step_parity():
     from cvhmax.cvi import Params, Poisson
     from jax import vmap
 
-    # Both implementations use the same unnormalized loading C.
+    # Both implementations use the same loading C.
     C_jax = jnp.array(C_np)
     params = Params(C=C_jax, d=jnp.array(d_np), R=jnp.asarray(0.0))
     y_jax = jnp.array(y_np)

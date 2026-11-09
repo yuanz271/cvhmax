@@ -38,7 +38,7 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
 
 
 def readout_change(params_new: Params, params_old: Params) -> Array:
-    """Return the raw GLM parameter change modulo latent rotation."""
+    """Return the GLM parameter change modulo latent rotation."""
     C_new, C_old = params_new.C, params_old.C
     left, _, right = jnp.linalg.svd(C_new.T @ C_old, full_matrices=False)
     delta_C = _relative_change(C_new @ (left @ right), C_old)
