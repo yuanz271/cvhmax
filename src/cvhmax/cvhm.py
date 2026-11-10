@@ -41,9 +41,9 @@ class _FitState(NamedTuple):
 
     iteration: int
     params: Any
-    patience: int
+    patience: int | Array
     converged: bool
-    failed: bool
+    failed: bool | Array
 
 
 def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array]:
@@ -389,7 +389,7 @@ class CVHM:
                     variance = jnp.diag(updated.R)
                     failed = jnp.any(~jnp.isfinite(variance) | (variance <= 0))
                 else:
-                    failed = jnp.array(False)
+                    failed = False
                 jax.debug.callback(
                     lambda step_i, x: pbar.update(
                         task_id,
