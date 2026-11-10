@@ -1,4 +1,4 @@
-"""Mathematical and integration tests for neuron-level observation masks."""
+"""Mathematical and integration tests for feature-level observation masks."""
 
 import os
 import subprocess
@@ -14,12 +14,12 @@ from cvhmax.cvi import (
     MAX_LOGRATE,
     Gaussian,
     Params,
-    poisson_cvi_bin_stats_latent,
-    poisson_trial_nell,
+    poisson_cvi_step_stats_latent,
+    poisson_readout_objective,
 )
 from cvhmax.cvhm import CVHM, lift, project
 from cvhmax.hm import HidaMatern
-from cvhmax.utils import pad_trials
+from cvhmax.utils import pad_sequences
 
 
 def test_masked_gaussian_information_matches_observed_rows():
@@ -90,7 +90,7 @@ def test_masked_poisson_information_and_objective():
         return (total + gamma * jnp.linalg.norm(C)) / 2
 
     def objective(params):
-        return poisson_trial_nell(params, y, mask, means, covariances, gamma)
+        return poisson_readout_objective(params, y, mask, means, covariances, gamma)
 
     npt.assert_allclose(objective((C, d)), reference((C, d)), rtol=1e-10, atol=1e-10)
     actual_grad = jax.grad(objective)((C, d))
@@ -98,7 +98,7 @@ def test_masked_poisson_information_and_objective():
     for actual, expected in zip(actual_grad, expected_grad):
         npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
-    j, J = poisson_cvi_bin_stats_latent(means[0], covariances[0], y[0], mask[0], C, d)
+    j, J = poisson_cvi_step_stats_latent(means[0], covariances[0], y[0], mask[0], C, d)
     observed_C = np.asarray(C)[[0, 2]]
     observed_d = np.asarray(d)[[0, 2]]
     observed_y = np.asarray(y[0])[[0, 2]]
@@ -110,7 +110,7 @@ def test_masked_poisson_information_and_objective():
     npt.assert_allclose(J, expected_J, rtol=1e-10, atol=1e-10)
 
 
-def test_all_observed_poisson_objective_preserves_bin_scaling():
+def test_all_observed_poisson_objective_preserves_step_scaling():
     C = jnp.array([[0.2], [0.7]])
     d = jnp.array([0.1, -0.2])
     y = jnp.array([[1.0, 3.0], [2.0, 1.0]])
@@ -118,7 +118,7 @@ def test_all_observed_poisson_objective_preserves_bin_scaling():
     V = jnp.array([[[0.3]], [[0.4]]])
     eta = jnp.minimum(m @ C.T + d + 0.5 * V[:, 0, 0, None] * C[:, 0] ** 2, MAX_LOGRATE)
     expected = (jnp.sum(jnp.exp(eta) - y * eta) + 0.3 * jnp.linalg.norm(C)) / len(y)
-    actual = poisson_trial_nell((C, d), y, jnp.ones_like(y, dtype=bool), m, V, gamma=0.3)
+    actual = poisson_readout_objective((C, d), y, jnp.ones_like(y, dtype=bool), m, V, gamma=0.3)
     npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
 
@@ -180,11 +180,11 @@ def test_broadcast_masks_and_final_posterior(observation):
     model = _model(observation)
     time_mask = jnp.array([[[True], [True], [False], [True], [True], [True]],
                            [[True], [False], [True], [True], [True], [True]]])
-    neuron_mask = jnp.array([[[True, False, True]], [[False, True, True]]])
+    feature_mask = jnp.array([[[True, False, True]], [[False, True, True]]])
     masks = (
         (time_mask, jnp.broadcast_to(time_mask, y.shape)),
         (time_mask[..., 0], jnp.broadcast_to(time_mask, y.shape)),
-        (neuron_mask, jnp.broadcast_to(neuron_mask, y.shape)),
+        (feature_mask, jnp.broadcast_to(feature_mask, y.shape)),
     )
     for mask, broadcast in masks:
         for actual, expected in zip(model.infer(y, mask), model.infer(y, broadcast)):
@@ -197,7 +197,7 @@ def test_broadcast_masks_and_final_posterior(observation):
     for actual, expected in zip(model.infer(y), model.infer(y, jnp.ones_like(y, dtype=bool))):
         npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
 
-    mask = jnp.broadcast_to(neuron_mask, y.shape).at[0, 2, 0].set(False)
+    mask = jnp.broadcast_to(feature_mask, y.shape).at[0, 2, 0].set(False)
     model.fit(y, valid_y=mask, random_state=0)
     projected = project(*model.latent, model.latent_mask())
     fresh = model.infer(y, valid_y=mask)
@@ -206,15 +206,15 @@ def test_broadcast_masks_and_final_posterior(observation):
         npt.assert_allclose(cached, inferred, rtol=1e-6, atol=1e-8)
 
 
-def test_single_trial_broadcast_masks():
+def test_single_sequence_broadcast_masks():
     y = jnp.asarray(np.random.default_rng(7).normal(size=(6, 3)))
     model = _model()
     time_mask = jnp.array([[True], [True], [False], [True], [True], [True]])
-    neuron_mask = jnp.array([[True, False, True]])
+    feature_mask = jnp.array([[True, False, True]])
     masks = (
         (time_mask, jnp.broadcast_to(time_mask, y.shape)),
         (time_mask[:, 0], jnp.broadcast_to(time_mask, y.shape)),
-        (neuron_mask, jnp.broadcast_to(neuron_mask, y.shape)),
+        (feature_mask, jnp.broadcast_to(feature_mask, y.shape)),
     )
     for mask, broadcast in masks:
         for actual, expected in zip(model.infer(y, mask), model.infer(y, broadcast)):
@@ -253,7 +253,7 @@ def test_missing_values_are_excluded_from_fit_and_inference():
         npt.assert_allclose(a, b, rtol=1e-8, atol=1e-8)
 
 
-def test_fit_requires_each_neuron_to_be_observed():
+def test_fit_requires_each_feature_to_be_observed():
     y = jnp.ones((2, 4, 3))
     mask = jnp.array([[[True, False, True]], [[True, False, True]]])
     model = _model()
@@ -263,23 +263,23 @@ def test_fit_requires_each_neuron_to_be_observed():
 
 
 @pytest.mark.parametrize("observation", ["Gaussian", "Poisson"])
-def test_joint_sessions_share_latent_coordinates(observation):
-    """Two partially observed sessions recover a common synthetic trajectory."""
+def test_joint_sequences_share_latent_coordinates(observation):
+    """Two partially observed sequences recover a common synthetic trajectory."""
     rng = np.random.default_rng(42)
-    n_time, n_neurons, n_latents = 256, 12, 2
+    n_time, n_features, n_latents = 256, 12, 2
     kernel = HidaMatern(sigma=1.0, rho=6.0, omega=0.0, order=1)
     lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
     prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
     latent = np.linalg.cholesky(prior) @ rng.standard_normal((n_time, n_latents))
-    angles = 2 * np.pi * np.arange(n_neurons) / n_neurons
+    angles = 2 * np.pi * np.arange(n_features) / n_features
     C = 0.7 * np.column_stack((np.cos(angles), np.sin(angles)))
     linear = latent @ C.T
     if observation == "Gaussian":
-        y = linear[None, ...] + rng.normal(scale=np.sqrt(0.05), size=(2, n_time, n_neurons))
+        y = linear[None, ...] + rng.normal(scale=np.sqrt(0.05), size=(2, n_time, n_features))
     else:
-        y = rng.poisson(np.exp(np.log(8.0) + linear), size=(2, n_time, n_neurons)).astype(float)
+        y = rng.poisson(np.exp(np.log(8.0) + linear), size=(2, n_time, n_features)).astype(float)
 
-    available = np.zeros((2, n_neurons), dtype=bool)
+    available = np.zeros((2, n_features), dtype=bool)
     available[0, :8] = True
     available[1, 4:] = True
     s, t, n = np.indices(y.shape)
@@ -300,27 +300,27 @@ def test_joint_sessions_share_latent_coordinates(observation):
         predictions = np.exp(np.minimum(predictions + 0.5 * variance, MAX_LOGRATE))
 
     heldout_r2 = []
-    for session in range(2):
-        count = training_mask[session].sum(axis=0)
+    for sequence in range(2):
+        count = training_mask[sequence].sum(axis=0)
         baseline = np.divide(
-            np.where(training_mask[session], y[session], 0).sum(axis=0),
-            count, out=np.zeros(n_neurons), where=count > 0,
+            np.where(training_mask[sequence], y[sequence], 0).sum(axis=0),
+            count, out=np.zeros(n_features), where=count > 0,
         )
-        target = y[session][holdout[session]]
-        expected = predictions[session][holdout[session]]
-        reference = np.broadcast_to(baseline, (n_time, n_neurons))[holdout[session]]
+        target = y[sequence][holdout[sequence]]
+        expected = predictions[sequence][holdout[sequence]]
+        reference = np.broadcast_to(baseline, (n_time, n_features))[holdout[sequence]]
         r2 = 1 - np.sum((target - expected) ** 2) / np.sum((target - reference) ** 2)
         heldout_r2.append(r2)
-        assert r2 > 0, (observation, session, r2)
+        assert r2 > 0, (observation, sequence, r2)
 
     truth = np.broadcast_to(latent, means.shape)
     U, _, Vt = np.linalg.svd(means.reshape(-1, n_latents).T @ truth.reshape(-1, n_latents))
     aligned = means @ (U @ Vt)
     latent_r2 = []
-    for session in range(2):
-        score = 1 - np.sum((aligned[session] - latent) ** 2) / np.sum(latent**2)
+    for sequence in range(2):
+        score = 1 - np.sum((aligned[sequence] - latent) ** 2) / np.sum(latent**2)
         latent_r2.append(score)
-        assert score > 0, (observation, session, score)
+        assert score > 0, (observation, sequence, score)
     assert np.isfinite(covariances).all()
     print(
         f"{observation}: iterations={model.n_iter_}, converged={model.converged_}, "
@@ -329,23 +329,23 @@ def test_joint_sessions_share_latent_coordinates(observation):
     )
 
 
-def test_two_session_vdp_example(tmp_path):
-    """The VdP example fits overlapping sessions in a shared coordinate space."""
+def test_overlapping_features_vdp_example(tmp_path):
+    """The VdP example fits overlapping sequences in a shared coordinate space."""
     script = """
 import sys
 import numpy as np
-from examples.demo_vdp import run_two_session_case
-model, scores = run_two_session_case(T=100, max_iter=3, out_path=sys.argv[1])
+from examples.demo_vdp import run_overlapping_features_case
+model, scores = run_overlapping_features_case(T=100, max_iter=3, out_path=sys.argv[1])
 assert model.posterior[0].shape == (2, 100, 2)
 assert model.params.C.shape == (60, 2)
-assert scores['recorded_neurons'] == [40, 40]
-assert scores['overlap_neurons'] == 20
+assert scores['recorded_features'] == [40, 40]
+assert scores['overlap_features'] == 20
 assert np.isfinite(scores['heldout_r2']).all()
 assert np.isfinite(scores['latent_r2']).all()
 """
     env = {**os.environ, "JAX_ENABLE_X64": "1", "JAX_PLATFORMS": "cpu", "MPLBACKEND": "Agg"}
     subprocess.run(
-        [sys.executable, "-c", script, str(tmp_path / "sessions.pdf")],
+        [sys.executable, "-c", script, str(tmp_path / "overlap.pdf")],
         check=True,
         capture_output=True,
         text=True,
@@ -353,10 +353,10 @@ assert np.isfinite(scores['latent_r2']).all()
     )
 
 
-def test_pad_trials_broadcasts_neuron_and_time_masks():
+def test_pad_sequences_broadcasts_feature_and_time_masks():
     ys = [jnp.ones((3, 3)), jnp.ones((5, 3))]
     masks = [jnp.array([[True, False, True]]), jnp.array([[True], [True], [False], [True], [True]])]
-    _, mask, lengths = pad_trials(ys, masks)
+    _, mask, lengths = pad_sequences(ys, masks)
     assert mask.shape == (2, 5, 3)
     npt.assert_array_equal(mask[0, :3], np.broadcast_to(masks[0], (3, 3)))
     npt.assert_array_equal(mask[0, 3:], False)
@@ -364,6 +364,6 @@ def test_pad_trials_broadcasts_neuron_and_time_masks():
     npt.assert_array_equal(lengths, [3, 5])
 
     time_masks = [jnp.array([True, False, True]), jnp.array([True, True, False, True, True])]
-    _, legacy_mask, _ = pad_trials(ys, time_masks)
+    _, legacy_mask, _ = pad_sequences(ys, time_masks)
     npt.assert_array_equal(legacy_mask[0, :3], np.broadcast_to(time_masks[0][:, None], (3, 3)))
     npt.assert_array_equal(legacy_mask[1], np.broadcast_to(time_masks[1][:, None], (5, 3)))

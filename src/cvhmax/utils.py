@@ -116,20 +116,20 @@ def real_repr(c):
     return jnp.block([[c.real, -c.imag], [c.imag, c.real]])
 
 
-def bin_info_repr(
+def step_info_repr(
     y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
-    """Compute Gaussian observation information for a single bin.
+    """Compute Gaussian observation information for a single time step.
 
-    Operates on one bin of observations and returns
+    Operates on one time step of observations and returns
     information vectors ``j`` and matrices ``J``.
 
     Parameters
     ----------
     y : Array
-        Observations for one bin, shape ``(N,)``.
+        Observations for one time step, shape ``(N,)``.
     valid_y : Array
-        Observation mask for one bin, shape ``(N,)``.
+        Observation mask for one time step, shape ``(N,)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
@@ -149,19 +149,19 @@ def bin_info_repr(
     return j, J
 
 
-def trial_info_repr(
+def sequence_info_repr(
     y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
-    """Compute Gaussian observation information for a single trial.
+    """Compute Gaussian observation information for a single sequence.
 
-    Vmaps :func:`bin_info_repr` over the leading (time) axis of ``y``.
+    Vmaps :func:`step_info_repr` over the leading (time) axis of ``y``.
 
     Parameters
     ----------
     y : Array
-        Observations for one trial, shape ``(T, N)``.
+        Observations for one sequence, shape ``(T, N)``.
     valid_y : Array
-        Observation mask for one trial, shape ``(T, N)``.
+        Observation mask for one sequence, shape ``(T, N)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
@@ -174,22 +174,22 @@ def trial_info_repr(
     tuple[Array, Array]
         ``(j, J)`` with shapes ``(T, L)`` and ``(T, L, L)``.
     """
-    return jax.vmap(partial(bin_info_repr, C=C, d=d, R=R))(y, valid_y)
+    return jax.vmap(partial(step_info_repr, C=C, d=d, R=R))(y, valid_y)
 
 
 def batch_info_repr(
     y: Array, valid_y: Array, C: Array, d: Array, R: Array
 ) -> tuple[Array, Array]:
-    """Compute Gaussian observation information for multiple trials.
+    """Compute Gaussian observation information for multiple sequences.
 
-    Vmaps :func:`trial_info_repr` over the leading (trial) axis of ``y``.
+    Vmaps :func:`sequence_info_repr` over the leading (sequence) axis of ``y``.
 
     Parameters
     ----------
     y : Array
-        Observations, shape ``(trials, T, N)``.
+        Observations, shape ``(sequences, T, N)``.
     valid_y : Array
-        Observation mask, shape ``(trials, T, N)``.
+        Observation mask, shape ``(sequences, T, N)``.
     C : Array
         Observation matrix, shape ``(N, L)``.
     d : Array
@@ -200,10 +200,10 @@ def batch_info_repr(
     Returns
     -------
     tuple[Array, Array]
-        ``(j, J)`` with shapes ``(trials, T, L)`` and
-        ``(trials, T, L, L)``.
+        ``(j, J)`` with shapes ``(sequences, T, L)`` and
+        ``(sequences, T, L, L)``.
     """
-    return jax.vmap(partial(trial_info_repr, C=C, d=d, R=R))(y, valid_y)
+    return jax.vmap(partial(sequence_info_repr, C=C, d=d, R=R))(y, valid_y)
 
 
 def conjtrans(x):
@@ -323,7 +323,7 @@ def ridge_estimate(y, valid_y, m, V, R, lam=0.1):
     """Update Gaussian loadings and diagonal noise from masked moments.
 
     Conditional on the current noise variances, solve the expected ridge
-    objective for each neuron. Then update its noise variance from expected
+    objective for each feature. Then update its noise variance from expected
     residual squares, including latent posterior uncertainty.
     """
     n_time, n_latents = m.shape
@@ -362,43 +362,43 @@ def filter_array(arr: Array, mask: Array) -> Array:
     return arr[mask > 0]
 
 
-def pad_trials(
+def pad_sequences(
     y_list: list[Array], valid_y_list: list[Array] | None = None
 ) -> tuple[Array, Array, Array]:
-    """Pad variable-length trials into rectangular arrays.
+    """Pad variable-length sequences into rectangular arrays.
 
-    Shorter trials are right-padded (zeros appended after the last
-    time bin) and the corresponding mask entries are set to zero so
-    that the information filter treats padded bins as missing data.
+    Shorter sequences are right-padded (zeros appended after the last
+    time step) and the corresponding mask entries are set to zero so
+    that the information filter treats padded time steps as missing data.
     Any pre-existing missing values (``valid_y == 0``) inside original
-    trials are preserved.
+    sequences are preserved.
 
     Parameters
     ----------
     y_list : list[Array]
-        Per-trial observations, each shaped ``(T_i, obs_dim (N))``.
+        Per-sequence observations, each shaped ``(T_i, obs_dim (N))``.
     valid_y_list : list[Array] or None
-        Per-trial masks shaped ``(T_i,)`` or broadcastable to ``(T_i, N)``.
+        Per-sequence masks shaped ``(T_i,)`` or broadcastable to ``(T_i, N)``.
         If ``None``, all original entries are treated as observed.
 
     Returns
     -------
     y : Array
-        Padded observations, shape ``(n_trials, T_max, obs_dim (N))``.
+        Padded observations, shape ``(n_sequences, T_max, obs_dim (N))``.
     valid_y : Array
-        Combined mask, shape ``(n_trials, T_max, N)``. Padded positions and
+        Combined mask, shape ``(n_sequences, T_max, N)``. Padded positions and
         originally missing entries are false.
-    trial_lengths : Array
-        Original length of each trial, shape ``(n_trials,)``, for use
-        with :func:`unpad_trials`.
+    sequence_lengths : Array
+        Original length of each sequence, shape ``(n_sequences,)``, for use
+        with :func:`unpad_sequences`.
     """
-    trial_lengths = jnp.asarray([y_i.shape[0] for y_i in y_list])
-    T_max = int(jnp.max(trial_lengths))
+    sequence_lengths = jnp.asarray([y_i.shape[0] for y_i in y_list])
+    T_max = int(jnp.max(sequence_lengths))
     N = y_list[0].shape[-1]
-    n_trials = len(y_list)
+    n_sequences = len(y_list)
 
-    y = jnp.zeros((n_trials, T_max, N), dtype=y_list[0].dtype)
-    valid_y = jnp.zeros((n_trials, T_max, N), dtype=bool)
+    y = jnp.zeros((n_sequences, T_max, N), dtype=y_list[0].dtype)
+    valid_y = jnp.zeros((n_sequences, T_max, N), dtype=bool)
 
     for i, y_i in enumerate(y_list):
         T_i = y_i.shape[0]
@@ -412,28 +412,28 @@ def pad_trials(
             mask = jnp.broadcast_to(mask, y_i.shape)
         valid_y = valid_y.at[i, :T_i].set(mask)
 
-    return y, valid_y, trial_lengths
+    return y, valid_y, sequence_lengths
 
 
-def unpad_trials(arrays, trial_lengths):
+def unpad_sequences(arrays, sequence_lengths):
     """Strip padding from rectangular arrays.
 
     Parameters
     ----------
     arrays : Array or tuple[Array, ...]
-        Padded array(s) with trials on axis 0 and time on axis 1.
+        Padded array(s) with sequences on axis 0 and time on axis 1.
         If a tuple, each element is unpadded independently.
-    trial_lengths : array-like
-        Original length of each trial.
+    sequence_lengths : array-like
+        Original length of each sequence.
 
     Returns
     -------
     list[Array] or list[tuple[Array, ...]]
-        Per-trial slices with padding removed.  Returns a list of arrays
+        Per-sequence slices with padding removed.  Returns a list of arrays
         when *arrays* is a single array, or a list of tuples when *arrays*
         is a tuple.
     """
-    lengths = [int(tl) for tl in trial_lengths]
+    lengths = [int(tl) for tl in sequence_lengths]
 
     if isinstance(arrays, tuple):
         return [tuple(a[i, : lengths[i]] for a in arrays) for i in range(len(lengths))]

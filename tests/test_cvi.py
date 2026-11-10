@@ -7,8 +7,8 @@ from sklearn.linear_model import LinearRegression
 
 from cvhmax.cvi import (
     Params,
-    poisson_cvi_bin_stats,
-    poisson_cvi_bin_stats_latent,
+    poisson_cvi_step_stats,
+    poisson_cvi_step_stats_latent,
     Poisson,
     Gaussian,
 )
@@ -24,7 +24,7 @@ def test_gaussian_initialize_info_values(rng):
     R = jnp.eye(N) * 0.5
     params = Params(C=C, d=d, R=R)
 
-    y = jnp.array(rng.standard_normal((T, N)))  # single trial
+    y = jnp.array(rng.standard_normal((T, N)))  # single sequence
     valid_y = jnp.ones((T, N), dtype=bool)
 
     # Compute expected values directly using the correct formula
@@ -137,7 +137,7 @@ def test_gaussian_update_pseudo_noop():
 
 
 def test_poisson_cvi_masked_zero():
-    """Masked bins contribute zero CVI gradients (k=0, K=0)."""
+    """Masked time steps contribute zero CVI gradients (k=0, K=0)."""
     N, L = 5, 3
     z = jnp.ones(L)
     Z = jnp.eye(L) * 2.0
@@ -146,12 +146,12 @@ def test_poisson_cvi_masked_zero():
     d = jnp.zeros(N)
 
     # Unmasked: normal computation
-    k_on, K_on = poisson_cvi_bin_stats(z, Z, y, jnp.ones(N, dtype=bool), H, d)
+    k_on, K_on = poisson_cvi_step_stats(z, Z, y, jnp.ones(N, dtype=bool), H, d)
     assert jnp.any(k_on != 0)
     assert jnp.any(K_on != 0)
 
     # Masked: zero gradients
-    k_off, K_off = poisson_cvi_bin_stats(z, Z, y, jnp.zeros(N, dtype=bool), H, d)
+    k_off, K_off = poisson_cvi_step_stats(z, Z, y, jnp.zeros(N, dtype=bool), H, d)
     npt.assert_array_equal(np.asarray(k_off), 0.0)
     npt.assert_array_equal(np.asarray(K_off), 0.0)
 
@@ -184,7 +184,7 @@ def test_poisson_cvi_gradient_direction(rng):
     assert not jnp.allclose(j_new, j), "CVI update produced no change"
 
 
-def test_poisson_cvi_bin_stats_latent_equivalence(rng):
+def test_poisson_cvi_step_stats_latent_equivalence(rng):
     """Latent-space Poisson CVI stats match state-space version when M = I.
 
     Temporary equivalence test for the refactor.  Remove after migration.
@@ -202,10 +202,10 @@ def test_poisson_cvi_bin_stats_latent_equivalence(rng):
 
     # State-space version with H = C @ I = C
     H = C  # since M = I
-    k_state, K_state = poisson_cvi_bin_stats(z_state, Z_state, y, jnp.ones(N, dtype=bool), H, d)
+    k_state, K_state = poisson_cvi_step_stats(z_state, Z_state, y, jnp.ones(N, dtype=bool), H, d)
 
     # Latent-space version
-    k_latent, K_latent = poisson_cvi_bin_stats_latent(
+    k_latent, K_latent = poisson_cvi_step_stats_latent(
         m_latent, V_latent, y, jnp.ones(N, dtype=bool), C, d
     )
 
@@ -216,8 +216,8 @@ def test_poisson_cvi_bin_stats_latent_equivalence(rng):
     npt.assert_allclose(np.asarray(K_latent), np.asarray(K_state), atol=1e-4)
 
 
-def test_poisson_cvi_bin_stats_latent_masked(rng):
-    """Masked bins contribute zero CVI gradients from latent-space stats."""
+def test_poisson_cvi_step_stats_latent_masked(rng):
+    """Masked time steps contribute zero CVI gradients from latent-space stats."""
     N, K = 5, 3
     C = jnp.array(rng.standard_normal((N, K)) * 0.3)
     d = jnp.zeros(N)
@@ -225,7 +225,7 @@ def test_poisson_cvi_bin_stats_latent_masked(rng):
     V = jnp.eye(K)
     y = jnp.ones(N) * 10.0
 
-    k_off, K_off = poisson_cvi_bin_stats_latent(m, V, y, jnp.zeros(N, dtype=bool), C, d)
+    k_off, K_off = poisson_cvi_step_stats_latent(m, V, y, jnp.zeros(N, dtype=bool), C, d)
     npt.assert_array_equal(np.asarray(k_off), 0.0)
     npt.assert_array_equal(np.asarray(K_off), 0.0)
 

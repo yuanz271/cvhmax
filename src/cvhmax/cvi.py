@@ -10,7 +10,7 @@ from jax.scipy.linalg import cho_factor, cho_solve
 from equinox import Module
 
 from .utils import (
-    trial_info_repr,
+    sequence_info_repr,
     lbfgs_solve,
     ridge_estimate,
 )
@@ -26,7 +26,7 @@ def fa_init(ys, n_components, random_state):
     Parameters
     ----------
     ys : Array
-        Observations flattened to `(time * trials, features)`.
+        Observations flattened to `(time * sequences, features)`.
     n_components : int
         Number of latent factors to extract.
     random_state : int
@@ -47,7 +47,7 @@ def fa_init(ys, n_components, random_state):
 
 
 def _initialization_data(y: Array, valid_y: Array) -> tuple[Array, Array, Array]:
-    """Prepare observed bins and mean-filled data for Factor Analysis."""
+    """Prepare observed time steps and mean-filled data for Factor Analysis."""
     y = y.reshape(-1, y.shape[-1])
     valid_y = valid_y.reshape(y.shape)
     active = jnp.any(valid_y, axis=1)
@@ -103,13 +103,13 @@ class CVI:
         params : Params
             Current readout parameter state.
         y : Array
-            Observations shaped `(trials, time, obs_dim (N))`.
+            Observations shaped `(sequences, time, obs_dim (N))`.
         valid_y : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(trials, time, latent_dim (K))`.
+            Posterior means shaped `(sequences, time, latent_dim (K))`.
         V : Array
-            Posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`.
+            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
 
         Returns
         -------
@@ -139,19 +139,19 @@ class CVI:
         params
             Current readout parameter state (opaque).
         y : Array
-            Observations shaped ``(trials, time, obs_dim (N))``.
+            Observations shaped ``(sequences, time, obs_dim (N))``.
         valid_y : Array
             Observation mask aligned with ``y``.
         m : Array
-            Posterior means shaped ``(trials, time, latent_dim (K))``.
+            Posterior means shaped ``(sequences, time, latent_dim (K))``.
         V : Array
             Posterior covariances shaped
-            ``(trials, time, latent_dim (K), latent_dim (K))``.
+            ``(sequences, time, latent_dim (K), latent_dim (K))``.
         j : Array
-            Pseudo-observation vectors shaped ``(trials, time, latent_dim (K))``.
+            Pseudo-observation vectors shaped ``(sequences, time, latent_dim (K))``.
         J : Array
             Pseudo-observation matrices shaped
-            ``(trials, time, latent_dim (K), latent_dim (K))``.
+            ``(sequences, time, latent_dim (K), latent_dim (K))``.
         lr : float
             Pseudo-observation learning rate.
 
@@ -208,7 +208,7 @@ class CVI:
         Parameters
         ----------
         y : Array
-            Observations shaped ``(trials, time, obs_dim)``.
+            Observations shaped ``(sequences, time, obs_dim)``.
         valid_y : Array
             Observation mask aligned with ``y``.
         n_factors : int
@@ -279,7 +279,7 @@ class Gaussian(CVI):
         C = params.C
         d = params.d
         R = params.R
-        return trial_info_repr(y, valid_y, C, d, R)
+        return sequence_info_repr(y, valid_y, C, d, R)
 
     @classmethod
     @override
@@ -293,13 +293,13 @@ class Gaussian(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim (N))`.
+            Observation tensor shaped `(sequences, time, obs_dim (N))`.
         valid_y : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(trials, time, latent_dim (K))`.
+            Posterior means shaped `(sequences, time, latent_dim (K))`.
         P : Array
-            Posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`.
+            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
 
         Returns
         -------
@@ -329,7 +329,7 @@ class Gaussian(CVI):
         Parameters
         ----------
         y : Array
-            Observation tensor shaped ``(trials, time, obs_dim)``.
+            Observation tensor shaped ``(sequences, time, obs_dim)``.
         valid_y : Array
             Observation mask aligned with ``y``.
         n_factors : int
@@ -352,7 +352,7 @@ class Gaussian(CVI):
         return Params(C=C, d=d, R=jnp.eye(y.shape[-1]))
 
 
-def poisson_trial_nell(
+def poisson_readout_objective(
     params: tuple[Array, Array],
     y: Array,
     valid_y: Array,
@@ -360,7 +360,7 @@ def poisson_trial_nell(
     V: Array,
     gamma: float = 10.0,
 ) -> float:
-    """Average Poisson readout objective per observed time bin.
+    """Average Poisson readout objective per observed time step.
 
     The count term uses the variance-adjusted log rate. This retained
     objective is not the exact expected Poisson log-likelihood.
@@ -370,36 +370,36 @@ def poisson_trial_nell(
     params : tuple[Array, Array]
         Loading matrix and bias vector `(C, d)`.
     y : Array
-        Observed counts with shape `(trial, time, obs_dim)`.
+        Counts with shape `(samples, obs_dim)`, flattened across sequences and time.
     valid_y : Array
         Observation mask aligned with `y`.
     m : Array
-        Posterior means with matching leading dimensions.
+        Posterior means with shape `(samples, latent_dim)`.
     V : Array
-        Posterior covariances.
+        Posterior covariances with shape `(samples, latent_dim, latent_dim)`.
     gamma : float, default=10.0
         Strength of loading matrix L2 regularisation.
 
     Returns
     -------
     float
-        Readout objective averaged over observed time bins.
+        Readout objective averaged over observed time steps.
     """
     C, d = params
-    n_valid_bins = jnp.sum(jnp.any(valid_y, axis=-1))
+    n_valid_steps = jnp.sum(jnp.any(valid_y, axis=-1))
 
-    def bin_nell(y_t, mask_t, m_t, V_t):
+    def step_objective(y_t, mask_t, m_t, V_t):
         lin = C @ m_t + d
         quad = jnp.einsum("ni,in->n", C, V_t @ C.T)
         eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
         observed_y = jnp.where(mask_t, y_t, 0.0)
         return jnp.sum(jnp.where(mask_t, jnp.exp(eta) - eta * observed_y, 0.0))
 
-    bin_nells = vmap(bin_nell)(y, valid_y, m, V)
-    return (jnp.sum(bin_nells) + gamma * jnp.linalg.norm(C)) / n_valid_bins
+    step_objectives = vmap(step_objective)(y, valid_y, m, V)
+    return (jnp.sum(step_objectives) + gamma * jnp.linalg.norm(C)) / n_valid_steps
 
 
-def poisson_cvi_bin_stats(
+def poisson_cvi_step_stats(
     z: Array,
     Z: Array,
     y: Array,
@@ -407,7 +407,7 @@ def poisson_cvi_bin_stats(
     H: Array,
     d: Array,
 ) -> tuple[Array, Array]:
-    """Poisson CVI gradients for a single bin.
+    """Poisson CVI gradients for a single time step.
 
     Parameters
     ----------
@@ -416,9 +416,9 @@ def poisson_cvi_bin_stats(
     Z : Array
         Information matrix.
     y : Array
-        Observed counts for the bin.
+        Observed counts for the time step.
     valid_y : Array
-        Observation mask for one bin, shape ``(obs_dim,)``.
+        Observation mask for one time step, shape ``(obs_dim,)``.
     H : Array
         Effective observation matrix.
     d : Array
@@ -452,7 +452,7 @@ def poisson_cvi_bin_stats(
     return grad_m + K @ m, K
 
 
-def poisson_cvi_bin_stats_latent(
+def poisson_cvi_step_stats_latent(
     m: Array,
     V: Array,
     y: Array,
@@ -460,9 +460,9 @@ def poisson_cvi_bin_stats_latent(
     C: Array,
     d: Array,
 ) -> tuple[Array, Array]:
-    """Poisson CVI gradients for a single bin in latent space.
+    """Poisson CVI gradients for a single time step in latent space.
 
-    Unlike :func:`poisson_cvi_bin_stats` which operates in state space with
+    Unlike :func:`poisson_cvi_step_stats` which operates in state space with
     information-form ``(z, Z)`` and ``H = C @ M``, this function works
     directly with latent-space moments ``(m, V)`` and loading ``C``.
 
@@ -474,9 +474,9 @@ def poisson_cvi_bin_stats_latent(
         Posterior covariance in latent space,
         shape ``(latent_dim (K), latent_dim (K))``.
     y : Array
-        Observed counts for the bin, shape ``(obs_dim (N),)``.
+        Observed counts for the time step, shape ``(obs_dim (N),)``.
     valid_y : Array
-        Observation mask for one bin, shape ``(obs_dim (N),)``.
+        Observation mask for one time step, shape ``(obs_dim (N),)``.
     C : Array
         Loading matrix, shape ``(obs_dim (N), latent_dim (K))``.
     d : Array
@@ -512,9 +512,9 @@ class Poisson(CVI):
     ) -> tuple[Array, Array]:
         """Initialise Poisson pseudo-observations in latent space.
 
-        Computes per-bin CVI gradients from a zero-mean prior in latent space.
+        Computes per-time-step CVI gradients from a zero-mean prior in latent space.
         Unlike the previous state-space implementation, this does not run a
-        forward filter — each bin is initialised independently.  The CVI
+        forward filter — each time step is initialised independently.  The CVI
         iterations in CVHM will refine the pseudo-observations.
 
         Parameters
@@ -540,7 +540,7 @@ class Poisson(CVI):
         m0 = jnp.zeros(K)
         V0 = jnp.eye(K)
 
-        j, J = vmap(partial(poisson_cvi_bin_stats_latent, C=C, d=d))(
+        j, J = vmap(partial(poisson_cvi_step_stats_latent, C=C, d=d))(
             jnp.broadcast_to(m0, (y.shape[0], K)),
             jnp.broadcast_to(V0, (y.shape[0], K, K)),
             y,
@@ -564,13 +564,13 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped `(trials, time, obs_dim (N))`.
+            Observation tensor shaped `(sequences, time, obs_dim (N))`.
         valid_y : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(trials, time, latent_dim (K))`.
+            Posterior means shaped `(sequences, time, latent_dim (K))`.
         V : Array
-            Posterior covariances shaped `(trials, time, latent_dim (K), latent_dim (K))`.
+            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
 
         Returns
         -------
@@ -586,10 +586,10 @@ class Poisson(CVI):
         V = V.reshape(-1, *V.shape[-2:])
 
         C, d = lbfgs_solve(
-            (C, d), partial(poisson_trial_nell, y=y, valid_y=valid_y, m=m, V=V)
+            (C, d), partial(poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V)
         )
 
-        nell = poisson_trial_nell((C, d), y=y, valid_y=valid_y, m=m, V=V, gamma=0.0)
+        nell = poisson_readout_objective((C, d), y=y, valid_y=valid_y, m=m, V=V, gamma=0.0)
         return Params(C=C, d=d, R=jnp.asarray(0.0)), nell
 
     @classmethod
@@ -611,20 +611,20 @@ class Poisson(CVI):
         params : Params
             Current readout parameter state.
         y : Array
-            Observation tensor shaped ``(trials, time, obs_dim (N))``.
+            Observation tensor shaped ``(sequences, time, obs_dim (N))``.
         valid_y : Array
             Observation mask aligned with ``y``.
         m : Array
-            Posterior means shaped ``(trials, time, latent_dim (K))``.
+            Posterior means shaped ``(sequences, time, latent_dim (K))``.
         V : Array
             Posterior covariances shaped
-            ``(trials, time, latent_dim (K), latent_dim (K))``.
+            ``(sequences, time, latent_dim (K), latent_dim (K))``.
         j : Array
             Current pseudo-observation vectors shaped
-            ``(trials, time, latent_dim (K))``.
+            ``(sequences, time, latent_dim (K))``.
         J : Array
             Current pseudo-observation matrices shaped
-            ``(trials, time, latent_dim (K), latent_dim (K))``.
+            ``(sequences, time, latent_dim (K), latent_dim (K))``.
         lr : float
             Learning rate for the convex combination.
 
@@ -635,7 +635,7 @@ class Poisson(CVI):
         """
         C = params.C
         d = params.d
-        k, K = vmap(vmap(partial(poisson_cvi_bin_stats_latent, C=C, d=d)))(
+        k, K = vmap(vmap(partial(poisson_cvi_step_stats_latent, C=C, d=d)))(
             m, V, y, valid_y
         )
 
@@ -659,7 +659,7 @@ class Poisson(CVI):
         Parameters
         ----------
         y : Array
-            Flattened observation tensor shaped ``(trials * time, obs_dim)``.
+            Flattened observation tensor shaped ``(sequences * time, obs_dim)``.
         valid_y : Array
             Observation mask aligned with ``y``.
         n_factors : int
@@ -686,7 +686,7 @@ class Poisson(CVI):
         d = jnp.log(mean_rate)
         V = jnp.zeros((y.shape[0], n_factors, n_factors))
         C, d = lbfgs_solve(
-            (C, d), partial(poisson_trial_nell, y=y, valid_y=valid_y, m=m, V=V)
+            (C, d), partial(poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V)
         )
 
         return Params(C=C, d=d, R=jnp.asarray(0.0))

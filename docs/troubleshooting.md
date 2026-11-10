@@ -2,10 +2,10 @@
 
 ## Shape Errors
 
-- Verify `y` is `(trials, time, features)` or `(time, features)`.
-- Use `(trials, time)` or `(trials, time, 1)` for whole-bin masks, or a mask
-  broadcastable to `y`, such as `(trials, 1, features)`, for neuron masks.
-- During fitting, each feature must be observed in at least one time bin.
+- Verify `y` is `(sequences, time, features)` or `(time, features)`.
+- Use `(sequences, time)` or `(sequences, time, 1)` for time-step masks, or a mask
+  broadcastable to `y`, such as `(sequences, 1, features)`, for feature masks.
+- During fitting, each feature must be observed in at least one time step.
 
 ## Numerical Instability
 

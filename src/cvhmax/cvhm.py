@@ -45,7 +45,7 @@ class _FitState(NamedTuple):
 
 
 def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array]:
-    """Broadcast the observation mask and add a trial axis when needed."""
+    """Broadcast the observation mask and add a sequence axis when needed."""
     y = jnp.asarray(y)
     if valid_y is None:
         valid_y = jnp.ones_like(y, dtype=bool)
@@ -63,7 +63,7 @@ def _validate_gaussian_noise(params: Params, n_observations: int) -> None:
     """Validate a caller-supplied diagonal observation covariance."""
     R = jnp.asarray(params.R)
     if R.shape != (n_observations, n_observations):
-        raise ValueError("Gaussian R must have shape (neurons, neurons)")
+        raise ValueError("Gaussian R must have shape (features, features)")
     diagonal = jnp.diag(R)
     if not bool(jnp.all(jnp.isfinite(diagonal) & (diagonal > 0))) or not bool(
         jnp.all(R == jnp.diag(diagonal))
@@ -103,6 +103,10 @@ def _validated_integer(value: Any, name: str, *, minimum: int) -> int:
 class CVHM:
     """Variational CVHM model wrapper for latent state inference and smoothing.
 
+    Sequences have independent latent trajectories and share the kernels,
+    time step, and readout. Feature indices identify the same variables across
+    sequences.
+
     Parameters
     ----------
     n_components : int
@@ -132,7 +136,7 @@ class CVHM:
     ----------
     posterior : tuple[Array, Array]
         Posterior mean and covariance. Shapes are
-        `(trials, time, latent_dim (K))` and `(trials, time, latent_dim (K), latent_dim (K))`
+        `(sequences, time, latent_dim (K))` and `(sequences, time, latent_dim (K), latent_dim (K))`
         after calling :meth:`fit`.
     """
 
@@ -271,15 +275,15 @@ class CVHM:
 
         return M
 
-    def _inference_context(self, n_trials: int) -> _InferenceContext:
+    def _inference_context(self, n_sequences: int) -> _InferenceContext:
         """Prepare the fixed dynamics and stationary state for inference."""
         dynamics = self._scaled_kernel_dynamics(self.dt)
         Af, Qf, Ab, Qb, Q0 = self._matrices_from_dynamics(dynamics)
         L = Af.shape[0]
         return _InferenceContext(
             Af, cho_inv(Qf), Ab, cho_inv(Qb),
-            jnp.tile(jnp.zeros(L), (n_trials, 1)),
-            jnp.tile(cho_inv(Q0), (n_trials, 1, 1)),
+            jnp.tile(jnp.zeros(L), (n_sequences, 1)),
+            jnp.tile(cho_inv(Q0), (n_sequences, 1, 1)),
             self.latent_mask(),
         )
 
@@ -321,10 +325,10 @@ class CVHM:
         Parameters
         ----------
         y : Array
-            Observations shaped `(trials, time, features)` or `(time, features)`.
+            Observations shaped `(sequences, time, features)` or `(time, features)`.
         valid_y : Array, optional
-            Boolean mask broadcastable to `y`, or a whole-bin mask shaped
-            `(trials, time)` (or `(time,)` for one trial). Defaults to all observed.
+            Boolean mask broadcastable to `y`, or a time-step mask shaped
+            `(sequences, time)` (or `(time,)` for one sequence). Defaults to all observed.
         random_state : int | None, optional
             Seed used for initialization. Drawn from `secrets` when absent.
 
@@ -338,7 +342,7 @@ class CVHM:
         >>> import jax.numpy as jnp
         >>> from cvhmax.cvhm import CVHM
         >>> from cvhmax.hm import HidaMatern
-        >>> y = jnp.asarray(...)  # (trials, time, features)
+        >>> y = jnp.asarray(...)  # (sequences, time, features)
         >>> valid_y = jnp.ones_like(y, dtype=bool)
         >>> kernels = [HidaMatern(order=0) for _ in range(2)]
         >>> model = CVHM(n_components=2, dt=1.0, kernels=kernels, observation="Gaussian")
@@ -346,7 +350,7 @@ class CVHM:
         """
         y, valid_y = _prepare_observations(y, valid_y)
         if not bool(jnp.all(jnp.any(valid_y, axis=(0, 1)))):
-            raise ValueError("Every neuron must be observed at least once during fitting")
+            raise ValueError("Every feature must be observed at least once during fitting")
         if random_state is None:
             random_state = secrets.randbits(32)
         if issubclass(self.cvi, Gaussian) and self.params is not None:
@@ -507,10 +511,10 @@ class CVHM:
         Parameters
         ----------
         y : Array
-            Observations shaped `(trials, time, features)` or `(time, features)`.
+            Observations shaped `(sequences, time, features)` or `(time, features)`.
         valid_y : Array, optional
-            Boolean mask broadcastable to `y`, or a whole-bin mask shaped
-            `(trials, time)` (or `(time,)` for one trial). Defaults to all observed.
+            Boolean mask broadcastable to `y`, or a time-step mask shaped
+            `(sequences, time)` (or `(time,)` for one sequence). Defaults to all observed.
 
         Returns
         -------
@@ -611,18 +615,18 @@ def project(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:
     Parameters
     ----------
     z : Array
-        Information vectors shaped ``(trials, time, state_dim (L))``.
+        Information vectors shaped ``(sequences, time, state_dim (L))``.
     Z : Array
         Information matrices shaped
-        ``(trials, time, state_dim (L), state_dim (L))``.
+        ``(sequences, time, state_dim (L), state_dim (L))``.
     M : Array
         Selection mask shaped ``(latent_dim (K), state_dim (L))``.
 
     Returns
     -------
     tuple[Array, Array]
-        Posterior means ``(trials, time, latent_dim (K))`` and covariances
-        ``(trials, time, latent_dim (K), latent_dim (K))`` in latent space.
+        Posterior means ``(sequences, time, latent_dim (K))`` and covariances
+        ``(sequences, time, latent_dim (K), latent_dim (K))`` in latent space.
     """
     return sde2gp(z, Z, M)
 
@@ -633,9 +637,9 @@ def sde2gp(z: Array, Z: Array, M: Array) -> tuple[Array, Array]:
     Parameters
     ----------
     z : Array
-        Information vectors shaped `(trials, time, state_dim (L))`.
+        Information vectors shaped `(sequences, time, state_dim (L))`.
     Z : Array
-        Information matrices shaped `(trials, time, state_dim (L), state_dim (L))`.
+        Information matrices shaped `(sequences, time, state_dim (L), state_dim (L))`.
     M : Array
         Selection mask shaped `(latent_dim (K), state_dim (L))` mapping
         SDE state coordinates to GP components.

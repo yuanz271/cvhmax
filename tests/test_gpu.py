@@ -48,11 +48,11 @@ def test_cvhm_cpu_gpu_parity(partial):
     """A representative CVHM fit agrees between CPU and CUDA backends."""
     gpu = jax.devices("gpu")[0]
     cpu = jax.devices("cpu")[0]
-    n_trials = 1
+    n_sequences = 1
     n_time = 6
     n_features = 2
     rng = np.random.default_rng(0)
-    y = rng.normal(size=(n_trials, n_time, n_features))
+    y = rng.normal(size=(n_sequences, n_time, n_features))
     mask = np.ones_like(y, dtype=bool)
     if partial:
         mask[0, ::2, 0] = False
@@ -67,9 +67,9 @@ def test_cvhm_cpu_gpu_parity(partial):
     assert all(device.platform == "cpu" for device in cpu_covariances.devices())
     assert all(device.platform == "gpu" for device in gpu_means.devices())
     assert all(device.platform == "gpu" for device in gpu_covariances.devices())
-    assert cpu_means.shape == gpu_means.shape == (n_trials, n_time, 1)
+    assert cpu_means.shape == gpu_means.shape == (n_sequences, n_time, 1)
     assert cpu_covariances.shape == gpu_covariances.shape == (
-        n_trials,
+        n_sequences,
         n_time,
         1,
         1,

@@ -2,11 +2,19 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Renamed `pad_trials` and `unpad_trials` to `pad_sequences` and
+  `unpad_sequences`; the unpadding keyword is now `sequence_lengths`.
+- Renamed `trial_info_repr` to `sequence_info_repr`, `bin_info_repr` to
+  `step_info_repr`, and `poisson_trial_nell` to `poisson_readout_objective`.
+  The Poisson CVI `*_bin_stats` helpers are now `*_step_stats`.
+
 ### Added
 
 - Added broadcastable element-wise observation masks for fitting and inference,
-  while retaining whole-bin masks shaped `(trials, time)`.
-- Added a synthetic two-session VdP example with partially overlapping neurons.
+  while retaining time-step masks shaped `(sequences, time)`.
+- Added a synthetic two-sequence VdP example with partially overlapping features.
 
 ### Changed
 

@@ -12,7 +12,7 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `Params`: readout parameter container
 - `HidaMatern`: kernel class for state-space dynamics
 - `Ks`, `make_Ks`: raw functional kernel API and static-order JAX wrapper
-- `pad_trials`, `unpad_trials`: utilities for variable-length trials
+- `pad_sequences`, `unpad_sequences`: utilities for variable-length sequences
 
 ## CVHM
 
@@ -30,11 +30,13 @@ Public exports live in `src/cvhmax/__init__.py`:
 
 Source: `src/cvhmax/cvhm.py`
 
-`valid_y` may be `None`, a whole-bin mask shaped `(trials, time)` (or `(time,)`
-for one trial), or a boolean mask broadcastable to `y`, including
-`(trials, time, 1)` and `(trials, 1, neurons)`. Fitting requires each neuron to
-be observed in at least one bin.
-Trials share one readout; session-specific loading drift is not represented.
+`valid_y` may be `None`, a time-step mask shaped `(sequences, time)` (or `(time,)`
+for one sequence), or a boolean mask broadcastable to `y`, including
+`(sequences, time, 1)` and `(sequences, 1, features)`. Fitting requires each
+feature to be observed in at least one time step. Sequences have independent
+latent trajectories but share kernels, `dt`, and the readout; feature indices
+must refer to the same variables across sequences. Sequence-specific readouts
+are not represented.
 
 `CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
 saving posterior or latent caches. The serialization uses the
@@ -106,11 +108,11 @@ Source: `src/cvhmax/hm.py`
 
 ## Utilities
 
-- `pad_trials(y_list, valid_y_list=None)` → `(y, valid_y, trial_lengths)`
-  Pad variable-length trials; per-trial masks may use `(time,)` or broadcast
-  to `(time, neurons)`.
-- `unpad_trials(arrays, trial_lengths)` → `list[Array]` or `list[tuple[Array, ...]]`
-  Strip padding from rectangular arrays back to per-trial slices.
+- `pad_sequences(y_list, valid_y_list=None)` → `(y, valid_y, sequence_lengths)`
+  Pad variable-length sequences; per-sequence masks may use `(time,)` or broadcast
+  to `(time, features)`.
+- `unpad_sequences(arrays, sequence_lengths)` → `list[Array]` or `list[tuple[Array, ...]]`
+  Strip padding from rectangular arrays back to per-sequence slices.
   Accepts a single array or a tuple of arrays.
 
 Source: `src/cvhmax/utils.py`

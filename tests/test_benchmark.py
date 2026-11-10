@@ -22,7 +22,7 @@ from jax import numpy as jnp
 from cvhmax.cvhm import CVHM
 from cvhmax.cvi import Params, Poisson
 from cvhmax.hm import HidaMatern
-from cvhmax.utils import pad_trials, unpad_trials
+from cvhmax.utils import pad_sequences, unpad_sequences
 
 # ---------------------------------------------------------------------------
 # Shared constants & helpers
@@ -30,7 +30,7 @@ from cvhmax.utils import pad_trials, unpad_trials
 
 R2_FLOOR = 0.96
 
-N_TRIALS = 10
+N_SEQUENCES = 10
 T = 500
 DT = 0.02
 MU = 1.0
@@ -44,13 +44,13 @@ def _vdp_rhs(state, mu):
     return np.array([v, mu * (1 - x**2) * v - x])
 
 
-def _simulate_vdp(rng, n_trials, T, dt, mu, noise_std=0.05):
+def _simulate_vdp(rng, n_sequences, T, dt, mu, noise_std=0.05):
     sqrt_dt = np.sqrt(dt)
-    out = np.empty((n_trials, T, 2))
-    for trial in range(n_trials):
+    out = np.empty((n_sequences, T, 2))
+    for sequence in range(n_sequences):
         s = np.array([2.0 + rng.normal(0, 0.1), rng.normal(0, 0.1)])
         for t in range(T):
-            out[trial, t] = s
+            out[sequence, t] = s
             s = s + _vdp_rhs(s, mu) * dt + noise_std * sqrt_dt * rng.standard_normal(2)
     return out
 
@@ -76,7 +76,7 @@ def _r2(m, x_true):
 
 def _make_data(rng):
     """Simulate VdP + Poisson observations (deterministic given rng)."""
-    x_raw = _simulate_vdp(rng, N_TRIALS, T, DT, MU)
+    x_raw = _simulate_vdp(rng, N_SEQUENCES, T, DT, MU)
     x_std = _standardize(x_raw)
 
     C_true = rng.standard_normal((N_OBS, N_LATENTS))
@@ -179,14 +179,14 @@ def test_benchmark_variable_length():
     _, y_np, x_std, _, _ = _make_data(rng)
     kernels = _kernels()
 
-    trial_lengths_np = rng.integers(250, 501, size=N_TRIALS)
+    sequence_lengths_np = rng.integers(250, 501, size=N_SEQUENCES)
     y_list = [
         jnp.asarray(y_np[i, :tl], dtype=jnp.float64)
-        for i, tl in enumerate(trial_lengths_np)
+        for i, tl in enumerate(sequence_lengths_np)
     ]
-    x_list = [x_std[i, :tl] for i, tl in enumerate(trial_lengths_np)]
+    x_list = [x_std[i, :tl] for i, tl in enumerate(sequence_lengths_np)]
 
-    y_padded, valid_y, trial_lengths = pad_trials(y_list)
+    y_padded, valid_y, sequence_lengths = pad_sequences(y_list)
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
@@ -194,7 +194,7 @@ def test_benchmark_variable_length():
     )
     model.fit(y_padded, valid_y=valid_y, random_state=42)
 
-    m_list = unpad_trials(model.posterior[0], trial_lengths)
+    m_list = unpad_sequences(model.posterior[0], sequence_lengths)
     m_all = np.concatenate([np.asarray(mi) for mi in m_list])
     x_all = np.concatenate(x_list)
 

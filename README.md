@@ -56,7 +56,7 @@ import jax.numpy as jnp
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
 
-# Observations shaped (trials, time, features)
+# Observations shaped (sequences, time, features)
 y = jnp.asarray(...)            # substitute your data
 valid_y = jnp.ones_like(y, dtype=bool)
 
@@ -78,13 +78,13 @@ model = CVHM(
     convergence_patience=2,
 )
 model.fit(y, valid_y=valid_y, random_state=0)
-m, V = model.posterior  # latents: (trials, time, n_latents) and covariances
+m, V = model.posterior  # latents: (sequences, time, n_latents) and covariances
 ```
 
 Use `model.fit_transform(...)` when you only need the posterior means. The
 readout uses its fitted loading matrix directly; the fixed GP kernel amplitudes
-set the latent prior scale. `valid_y` can mask individual neurons and broadcast
-to the shape of `y`; whole-bin masks shaped `(trials, time)` are also supported.
+set the latent prior scale. `valid_y` can mask individual features and broadcast
+to the shape of `y`; time-step masks shaped `(sequences, time)` are also supported.
 Gaussian observation noise is diagonal. For smoother latent
 trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
@@ -99,16 +99,16 @@ It writes `examples/demo_vdp_frozen_order0.pdf`,
 `examples/demo_vdp_frozen_order1.pdf`, and
 `examples/demo_vdp_frozen_order2.pdf`, and reports pooled R² for each case.
 
-The demo also fits two synthetic sessions with the same VdP trajectory. Each
-session records 40 neurons, with 20 shared neuron identities. It holds out 20%
-of recorded neuron-time entries, reports count-prediction R², truth-aligned
-latent R² using one rotation for both sessions, and the fit convergence status.
-It writes `examples/demo_vdp_sessions.pdf`. The shared trajectory and
-truth-based alignment are simulation diagnostics; real sessions need not have
-synchronized latents. Run just this case with:
+The demo also fits two synthetic sequences generated from the same VdP
+trajectory. Each observes 40 features, with 20 shared feature identities. It
+holds out 20% of observed feature-time entries and reports count-prediction R²,
+latent R² using one truth-based rotation for both sequences, and fit convergence
+status. It writes `examples/demo_vdp_overlap.pdf`. The fit treats the sequences
+as independent and does not use the simulated latent truth. Run just this case
+with:
 
 ```console
-JAX_ENABLE_X64=1 uv run python -c 'from examples.demo_vdp import run_two_session_case; run_two_session_case()'
+JAX_ENABLE_X64=1 uv run python -c 'from examples.demo_vdp import run_overlapping_features_case; run_overlapping_features_case()'
 ```
 
 ## Numerical stability
@@ -127,12 +127,15 @@ when they need other kernel families or state dimensions.
 
 ## Data model
 
-- **Observations (`y`)** -- `(trials, time, obs_dim)` or `(time, obs_dim)`.
+- **Observations (`y`)** -- `(sequences, time, obs_dim)` or `(time, obs_dim)`.
 - **Mask (`valid_y`)** -- binary, `1` = observed, `0` = missing/padded.
-- **Posterior mean (`m`)** -- `(trials, time, latent_dim)`.
-- **Posterior covariance (`V`)** -- `(trials, time, latent_dim, latent_dim)`.
+- **Posterior mean (`m`)** -- `(sequences, time, latent_dim)`.
+- **Posterior covariance (`V`)** -- `(sequences, time, latent_dim, latent_dim)`.
 
-JAX requires rectangular arrays for batched operations -- use `pad_trials` / `unpad_trials` for variable-length trials. See `docs/data-model.md` for details.
+Sequences have independent latent trajectories but share the kernels, time step,
+and readout. Feature indices must identify the same variables across sequences.
+JAX requires rectangular arrays for batched operations -- use `pad_sequences` /
+`unpad_sequences` for variable-length sequences. See `docs/data-model.md` for details.
 
 ## Citation
 

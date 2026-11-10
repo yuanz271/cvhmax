@@ -22,9 +22,9 @@ RTOL_PARITY = 1e-8 if X64_ENABLED else 1e-5
 
 from cvhmax.hm import HidaMatern, Ks, spectral_density
 from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
-from cvhmax.utils import real_repr, symm, conjtrans, gamma, trial_info_repr
+from cvhmax.utils import real_repr, symm, conjtrans, gamma, sequence_info_repr
 from cvhmax.filtering import predict, information_filter, bifilter
-from cvhmax.cvi import TAU, poisson_cvi_bin_stats
+from cvhmax.cvi import TAU, poisson_cvi_step_stats
 
 
 def _torch_and_ref_available():
@@ -245,7 +245,7 @@ def test_forward_filter_parity():
 
     rng = np.random.default_rng(99)
     T, L = 30, 2
-    n_trials = 1
+    n_sequences = 1
 
     # Build SSM from a known kernel
     sigma, rho, omega = 1.5, 2.0, 0.0
@@ -263,12 +263,12 @@ def test_forward_filter_parity():
     h0_np = np.zeros(state_dim)
 
     # Random pseudo-observations
-    j_np = rng.standard_normal((n_trials, T, state_dim)) * 0.1
-    J_np = np.tile(np.eye(state_dim) * 0.5, (n_trials, T, 1, 1))
+    j_np = rng.standard_normal((n_sequences, T, state_dim)) * 0.1
+    J_np = np.tile(np.eye(state_dim) * 0.5, (n_sequences, T, 1, 1))
 
     # --- Reference (PyTorch) ---
     # The reference forward filter expects h_0 as 1D (state_dim,) — a single
-    # initial information vector shared across all trials.
+    # initial information vector shared across all sequences.
     h_ref, J_filt_ref, _, _ = information_filter_forward_batch(
         torch.tensor(j_np, dtype=torch.float64),
         torch.tensor(J_np, dtype=torch.float64),
@@ -284,7 +284,7 @@ def test_forward_filter_parity():
     P_jax = jnp.linalg.inv(jnp.array(Q_real))
     z0_jax = jnp.array(h0_np)
     Z0_jax = jnp.array(Z0_np)
-    j_jax = jnp.array(j_np[0])  # single trial
+    j_jax = jnp.array(j_np[0])  # single sequence
     J_jax = jnp.array(J_np[0])
 
     _, _, z_filt, Z_filt = information_filter(
@@ -672,8 +672,8 @@ class TestDynamicsPipeline:
 
 @requires_ref
 @pytest.mark.parity
-def test_poisson_cvi_bin_stats_convention():
-    """Verify poisson_cvi_bin_stats matches reference using information form.
+def test_poisson_cvi_step_stats_convention():
+    """Verify poisson_cvi_step_stats matches reference using information form.
 
     The filter stores ``(z, Z)`` in information form where ``Z = J`` (precision)
     and ``z = h = J mu``.  Recovering moments: ``mu = Z^{-1} z``, ``Sigma = Z^{-1}``.
@@ -695,7 +695,7 @@ def test_poisson_cvi_bin_stats_convention():
     valid_y_np = np.ones(N)
 
     # --- cvhmax ---
-    k_jax, K_jax = poisson_cvi_bin_stats(
+    k_jax, K_jax = poisson_cvi_step_stats(
         jnp.array(z_np),
         jnp.array(Z_np),
         jnp.array(y_np),
@@ -895,7 +895,7 @@ def test_bifilter_merging_parity():
 @requires_ref
 @pytest.mark.parity
 def test_observation_info_parity():
-    """trial_info_repr matches reference get_information_representation.
+    """sequence_info_repr matches reference get_information_representation.
 
     Both compute ``J = C^T R^{-1} C`` and ``j = C^T R^{-1} (y - d)``.
     """
@@ -917,8 +917,8 @@ def test_observation_info_parity():
         to_t(y_np), to_t(C_np), to_t(d_np), to_t(R_np)
     )
 
-    # --- cvhmax (single trial) ---
-    j_jax, J_jax = trial_info_repr(
+    # --- cvhmax (single sequence) ---
+    j_jax, J_jax = sequence_info_repr(
         jnp.array(y_np[0]),
         jnp.array(valid_y_np[0]),
         jnp.array(C_np),
