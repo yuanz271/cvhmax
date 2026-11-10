@@ -192,7 +192,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     if manifest.get("version") != VERSION:
         raise ValueError(f"Unsupported serialization version: {manifest.get('version')!r}")
     model = manifest.get("model")
-    kernels = manifest.get("kernels")
+    kernels: list[dict[str, Any]] | None = manifest.get("kernels")
     params = manifest.get("params")
     if not isinstance(model, dict) or not isinstance(kernels, list) or not isinstance(params, dict):
         raise ValueError("Manifest has invalid model, kernels, or params metadata")
