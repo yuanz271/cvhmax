@@ -1,5 +1,9 @@
 """Mathematical and integration tests for neuron-level observation masks."""
 
+import os
+import subprocess
+import sys
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -322,6 +326,30 @@ def test_joint_sessions_share_latent_coordinates(observation):
         f"{observation}: iterations={model.n_iter_}, converged={model.converged_}, "
         f"heldout_r2={np.round(heldout_r2, 4).tolist()}, "
         f"latent_r2={np.round(latent_r2, 4).tolist()}"
+    )
+
+
+def test_two_session_vdp_example(tmp_path):
+    """The VdP example fits overlapping sessions in a shared coordinate space."""
+    script = """
+import sys
+import numpy as np
+from examples.demo_vdp import run_two_session_case
+model, scores = run_two_session_case(T=100, max_iter=3, out_path=sys.argv[1])
+assert model.posterior[0].shape == (2, 100, 2)
+assert model.params.C.shape == (60, 2)
+assert scores['recorded_neurons'] == [40, 40]
+assert scores['overlap_neurons'] == 20
+assert np.isfinite(scores['heldout_r2']).all()
+assert np.isfinite(scores['latent_r2']).all()
+"""
+    env = {**os.environ, "JAX_ENABLE_X64": "1", "JAX_PLATFORMS": "cpu", "MPLBACKEND": "Agg"}
+    subprocess.run(
+        [sys.executable, "-c", script, str(tmp_path / "sessions.pdf")],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     )
 
 

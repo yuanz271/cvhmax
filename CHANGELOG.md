@@ -6,6 +6,7 @@
 
 - Added broadcastable element-wise observation masks for fitting and inference,
   while retaining whole-bin masks shaped `(trials, time)`.
+- Added a synthetic two-session VdP example with partially overlapping neurons.
 
 ### Changed
 

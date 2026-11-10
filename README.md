@@ -99,6 +99,18 @@ It writes `examples/demo_vdp_frozen_order0.pdf`,
 `examples/demo_vdp_frozen_order1.pdf`, and
 `examples/demo_vdp_frozen_order2.pdf`, and reports pooled R² for each case.
 
+The demo also fits two synthetic sessions with the same VdP trajectory. Each
+session records 40 neurons, with 20 shared neuron identities. It holds out 20%
+of recorded neuron-time entries, reports count-prediction R², truth-aligned
+latent R² using one rotation for both sessions, and the fit convergence status.
+It writes `examples/demo_vdp_sessions.pdf`. The shared trajectory and
+truth-based alignment are simulation diagnostics; real sessions need not have
+synchronized latents. Run just this case with:
+
+```console
+JAX_ENABLE_X64=1 uv run python -c 'from examples.demo_vdp import run_two_session_case; run_two_session_case()'
+```
+
 ## Numerical stability
 
 The recommended inference path is `JAX_ENABLE_X64=1` with CVHM correlation

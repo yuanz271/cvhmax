@@ -1,7 +1,7 @@
 """Van der Pol oscillator demo: CVHM inference with frozen and estimated readout.
 
 Synthesises 2-D latent trajectories from the Van der Pol oscillator, generates
-Poisson spike counts through a known loading matrix, then runs five inference
+Poisson spike counts through a known loading matrix, then runs six inference
 cases:
 
 1. **Frozen readout, orders 0, 1, and 2** — loading and bias are fixed at
@@ -12,6 +12,8 @@ cases:
 3. **Variable-length trials** — trials are truncated to different lengths,
    padded with :func:`~cvhmax.utils.pad_trials`, fitted as usual, and
    unpadded with :func:`~cvhmax.utils.unpad_trials`, using order 1.
+4. **Two sessions** — the same synthetic trajectory generates independent spike
+   counts in two partially overlapping neuron populations.
 
 Usage::
 
@@ -24,7 +26,7 @@ from jax import config
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import Params, Poisson
+from cvhmax.cvi import MAX_LOGRATE, Params, Poisson
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_trials, unpad_trials
 
@@ -366,6 +368,9 @@ def main():
     # --- Case 5: Variable-length trials (pad/unpad showcase) ---
     run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng)
 
+    # --- Case 6: Shared latents with partially overlapping observations ---
+    run_two_session_case()
+
 
 def run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng):
     """Case 5: variable-length trials with pad/unpad workflow.
@@ -515,6 +520,148 @@ def run_padded_case(y_np, x_std, dt, n_latents, n_trials, rng):
     print("Saved examples/demo_vdp_padded.pdf")
 
     return r2
+
+
+def run_two_session_case(
+    *, T=500, dt=0.02, max_iter=100, out_path="examples/demo_vdp_sessions.pdf"
+):
+    """Fit two sessions with a shared VdP trajectory and overlapping neurons.
+
+    The sessions have independent spike counts generated with one shared
+    readout. Twenty percent of recorded neuron-time entries are held out.
+    After generation, the latent truth is used only for evaluating recovery;
+    it is not supplied to the fit.
+
+    Returns
+    -------
+    tuple[CVHM, dict]
+        Fitted model and session-level recovery statistics.
+    """
+    print("\n--- Two sessions with partially overlapping neurons ---")
+    rng = np.random.default_rng(2024)
+    latent, _, _ = standardize(simulate_vdp(1, T, dt, rng=rng))
+    latent = latent[0]
+    n_sessions, n_neurons, n_latents = 2, 60, 2
+
+    C_true = rng.standard_normal((n_neurons, n_latents)) * 0.3
+    d_true = np.full(n_neurons, np.log(5.0))
+    true_rate = np.exp(latent @ C_true.T + d_true)
+    counts = rng.poisson(true_rate, size=(n_sessions, T, n_neurons))
+
+    available = np.zeros((n_sessions, n_neurons), dtype=bool)
+    available[0, :40] = True
+    available[1, 20:] = True
+    session, time, neuron = np.indices(counts.shape)
+    held_out = available[:, None, :] & ((session + time + neuron) % 5 == 0)
+    valid_y = available[:, None, :] & ~held_out
+    y_train = np.where(valid_y, counts, 0)
+    print(
+        f"Sessions: {n_sessions}; recorded neurons: {available.sum(axis=1).tolist()}; "
+        f"overlap: {np.sum(available[0] & available[1])}; "
+        f"held-out recorded entries: {np.count_nonzero(held_out)}"
+    )
+
+    model = CVHM(
+        n_components=n_latents,
+        dt=dt,
+        kernels=make_kernels(n_latents, order=1),
+        observation="Poisson",
+        max_iter=max_iter,
+        tol=1e-4,
+        cvi_iter=5,
+    )
+    model.fit(
+        jnp.asarray(y_train, dtype=jnp.float64), jnp.asarray(valid_y), random_state=42
+    )
+    means, covariances = map(np.asarray, model.posterior)
+    C, d = np.asarray(model.params.C), np.asarray(model.params.d)
+
+    # One truth-based rotation is shared by both sessions; it is not used to fit.
+    truth = np.broadcast_to(latent, means.shape)
+    U, _, Vt = np.linalg.svd(means.reshape(-1, n_latents).T @ truth.reshape(-1, n_latents))
+    aligned = means @ (U @ Vt)
+    latent_r2 = [
+        1 - np.sum((aligned[s] - latent) ** 2) / np.sum((latent - latent.mean(axis=0)) ** 2)
+        for s in range(n_sessions)
+    ]
+
+    linear = np.einsum("btk,nk->btn", means, C) + d
+    variance = np.einsum("ni,btij,nj->btn", C, covariances, C)
+    predicted_rate = np.exp(np.minimum(linear + 0.5 * variance, MAX_LOGRATE))
+    heldout_r2 = []
+    for s in range(n_sessions):
+        n_observed = valid_y[s].sum(axis=0)
+        baseline = np.divide(
+            y_train[s].sum(axis=0), n_observed,
+            out=np.zeros(n_neurons), where=n_observed > 0,
+        )
+        target = counts[s][held_out[s]]
+        predicted = predicted_rate[s][held_out[s]]
+        reference = np.broadcast_to(baseline, (T, n_neurons))[held_out[s]]
+        heldout_r2.append(
+            1 - np.sum((target - predicted) ** 2) / np.sum((target - reference) ** 2)
+        )
+
+    print(f"Fit: iterations={model.n_iter_}, converged={model.converged_}")
+    print(f"Held-out count R² by session: {np.round(heldout_r2, 4).tolist()}")
+    print(f"Latent R² by session (one truth-based rotation): {np.round(latent_r2, 4).tolist()}")
+
+    times = np.arange(T) * dt
+    fig, axes = plt.subplots(3, 2, figsize=(14, 11), constrained_layout=True)
+    fig.suptitle(
+        "Two sessions: shared VdP latents, partially overlapping neurons\n"
+        f"Iterations: {model.n_iter_}; converged: {model.converged_}; "
+        f"held-out count R²: {heldout_r2[0]:.3f}, {heldout_r2[1]:.3f}"
+    )
+    colors = ("tab:blue", "tab:orange")
+    for dim in range(n_latents):
+        ax = axes[0, dim]
+        ax.plot(times, latent[:, dim], "k", label="True")
+        for s, color in enumerate(colors):
+            ax.plot(times, aligned[s, :, dim], color=color, alpha=0.75, label=f"Session {s + 1}")
+        ax.set(title=f"Latent {dim + 1}: truth-aligned", xlabel="Time (s)")
+        ax.legend(fontsize="small")
+
+    ax = axes[1, 0]
+    ax.plot(latent[:, 0], latent[:, 1], "k", alpha=0.6, label="True")
+    for s, color in enumerate(colors):
+        ax.plot(aligned[s, :, 0], aligned[s, :, 1], color=color, alpha=0.7, label=f"Session {s + 1}")
+    ax.set(title="Shared latent coordinates", xlabel="Latent 1", ylabel="Latent 2")
+    ax.legend(fontsize="small")
+    ax.set_aspect("equal", adjustable="datalim")
+
+    ax = axes[1, 1]
+    ax.imshow(available, aspect="auto", interpolation="nearest", cmap="Greys", vmin=0, vmax=1)
+    ax.set(
+        title="Neuron availability (black = recorded)", xlabel="Neuron index",
+        yticks=[0, 1], yticklabels=["Session 1", "Session 2"],
+    )
+
+    shared_neuron = 30
+    for s, color in enumerate(colors):
+        ax = axes[2, s]
+        mask = held_out[s, :, shared_neuron]
+        ax.plot(times, true_rate[:, shared_neuron], "k--", alpha=0.6, label="True rate")
+        ax.plot(times, predicted_rate[s, :, shared_neuron], color=color, label="Predicted rate")
+        ax.scatter(
+            times[mask], counts[s, mask, shared_neuron], color=color, s=9,
+            alpha=0.45, label="Held-out counts",
+        )
+        ax.set(
+            title=f"Session {s + 1}: shared neuron {shared_neuron}",
+            xlabel="Time (s)", ylabel="Count / bin",
+        )
+        ax.legend(fontsize="small")
+
+    fig.savefig(out_path)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+    return model, {
+        "heldout_r2": heldout_r2,
+        "latent_r2": latent_r2,
+        "recorded_neurons": available.sum(axis=1).tolist(),
+        "overlap_neurons": int(np.sum(available[0] & available[1])),
+    }
 
 
 if __name__ == "__main__":
