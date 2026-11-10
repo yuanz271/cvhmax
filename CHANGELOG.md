@@ -2,8 +2,11 @@
 
 ## Unreleased
 
+## 0.3.0
+
 ### Breaking changes
 
+- Restricted Gaussian observation noise to positive diagonal covariance.
 - Renamed `pad_trials` and `unpad_trials` to `pad_sequences` and
   `unpad_sequences`; the unpadding keyword is now `sequence_lengths`.
 - Renamed `trial_info_repr` to `sequence_info_repr`, `bin_info_repr` to
@@ -18,8 +21,7 @@
 
 ### Changed
 
-- Restricted Gaussian observation noise to diagonal covariance and updated its
-  readout using masked posterior second moments.
+- Updated the Gaussian readout using masked posterior second moments.
 - Recomputed the final posterior after fitting so it matches the final readout.
 - Removed loading normalization from Gaussian and Poisson readouts and the
   convergence metric. Fixed GP kernels set the latent prior scale, and fitted
