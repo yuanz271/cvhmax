@@ -2,9 +2,10 @@
 
 ## Shape Errors
 
-- Verify `y` is `(trials, time, features)` or `(time, features)`.
-- Ensure `valid_y` has shape `(trials, time)`, or shape `(time,)` when `y`
-  is provided as `(time, features)`.
+- Verify `y` is `(sequences, time, features)` or `(time, features)`.
+- Use `(sequences, time)` or `(sequences, time, 1)` for time-step masks, or a mask
+  broadcastable to `y`, such as `(sequences, 1, features)`, for feature masks.
+- During fitting, each feature must be observed in at least one time step.
 
 ## Numerical Instability
 
@@ -29,6 +30,9 @@
 
 ## Training progress shows `Negative ELL n/a`
 
-`n/a` means the observation model did not return an M-step objective, as in a
-frozen-readout model. It is not a NaN posterior diagnostic. A finite objective
-is displayed numerically when the readout update provides one.
+`n/a` indicates a non-finite readout objective. It is expected for Gaussian
+and frozen-readout models that do not report an objective, but can also
+indicate a numerical problem. Inspect fitted parameters and posterior moments
+rather than treating `n/a` as a posterior-finiteness check. The displayed
+Poisson objective is the retained readout surrogate, not an exact expected
+log-likelihood.

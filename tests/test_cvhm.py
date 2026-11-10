@@ -124,15 +124,15 @@ def test_lift_values():
 
 def test_lift_batched():
     """``lift`` handles leading batch dimensions."""
-    trials, T, K, L = 2, 10, 2, 6
+    sequences, T, K, L = 2, 10, 2, 6
     M = jnp.zeros((K, L)).at[0, 0].set(1).at[1, 2].set(1)
-    j_latent = jnp.ones((trials, T, K))
-    J_latent = jnp.eye(K)[None, None, ...].repeat(T, axis=1).repeat(trials, axis=0)
+    j_latent = jnp.ones((sequences, T, K))
+    J_latent = jnp.eye(K)[None, None, ...].repeat(T, axis=1).repeat(sequences, axis=0)
 
     j, J = lift(j_latent, J_latent, M)
 
-    assert j.shape == (trials, T, L)
-    assert J.shape == (trials, T, L, L)
+    assert j.shape == (sequences, T, L)
+    assert J.shape == (sequences, T, L, L)
     np.testing.assert_allclose(j[0, 0], j_latent[0, 0] @ M)
     np.testing.assert_allclose(J[0, 0], M.T @ J_latent[0, 0] @ M)
 
@@ -152,7 +152,7 @@ def test_project_roundtrip():
     m_state = m_true[0] @ M  # (L,)
     z_state = Z_state @ m_state  # (L,)
 
-    # Shape: (trials=1, time=1, ...)
+    # Shape: (sequences=1, time=1, ...)
     z = z_state[None, None, :]
     Z = Z_state[None, None, :, :]
 
@@ -280,13 +280,13 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     monkeypatch.setattr(jdebug, "callback", record_debug_callback)
 
     n_devices = len(jax.devices())
-    trials = max(1, n_devices)
+    sequences = max(1, n_devices)
     T = 4
     obs_dim = 3
     n_components = 1
 
-    y = jnp.zeros((trials, T, obs_dim), dtype=jnp.float64)
-    valid_y = jnp.ones((trials, T), dtype=jnp.uint8)
+    y = jnp.zeros((sequences, T, obs_dim), dtype=jnp.float64)
+    valid_y = jnp.ones((sequences, T, 1), dtype=bool)
 
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
     model = CVHM(

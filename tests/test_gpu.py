@@ -28,7 +28,7 @@ pytestmark = [
 ]
 
 
-def _fit_on_device(y, device):
+def _fit_on_device(y, device, mask):
     """Fit the small integration model with all arrays on ``device``."""
     with jax.default_device(device):
         model = CVHM(
@@ -39,22 +39,27 @@ def _fit_on_device(y, device):
             max_iter=2,
             cvi_iter=1,
         )
-        model.fit(jax.device_put(y, device), random_state=0)
+        model.fit(jax.device_put(y, device), jax.device_put(mask, device), random_state=0)
     return model.posterior
 
 
-def test_cvhm_cpu_gpu_parity():
+@pytest.mark.parametrize("partial", [False, True])
+def test_cvhm_cpu_gpu_parity(partial):
     """A representative CVHM fit agrees between CPU and CUDA backends."""
     gpu = jax.devices("gpu")[0]
     cpu = jax.devices("cpu")[0]
-    n_trials = 1
+    n_sequences = 1
     n_time = 6
     n_features = 2
     rng = np.random.default_rng(0)
-    y = rng.normal(size=(n_trials, n_time, n_features))
+    y = rng.normal(size=(n_sequences, n_time, n_features))
+    mask = np.ones_like(y, dtype=bool)
+    if partial:
+        mask[0, ::2, 0] = False
+        mask[0, 1::2, 1] = False
 
-    cpu_posterior = _fit_on_device(y, cpu)
-    gpu_posterior = _fit_on_device(y, gpu)
+    cpu_posterior = _fit_on_device(y, cpu, mask)
+    gpu_posterior = _fit_on_device(y, gpu, mask)
     cpu_means, cpu_covariances = cpu_posterior
     gpu_means, gpu_covariances = gpu_posterior
 
@@ -62,9 +67,9 @@ def test_cvhm_cpu_gpu_parity():
     assert all(device.platform == "cpu" for device in cpu_covariances.devices())
     assert all(device.platform == "gpu" for device in gpu_means.devices())
     assert all(device.platform == "gpu" for device in gpu_covariances.devices())
-    assert cpu_means.shape == gpu_means.shape == (n_trials, n_time, 1)
+    assert cpu_means.shape == gpu_means.shape == (n_sequences, n_time, 1)
     assert cpu_covariances.shape == gpu_covariances.shape == (
-        n_trials,
+        n_sequences,
         n_time,
         1,
         1,

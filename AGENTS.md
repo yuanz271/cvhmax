@@ -120,7 +120,7 @@ JAX_ENABLE_X64=1 uv run pytest tests/test_benchmark.py --run-slow
 ```
 
 The benchmark runs three order-1 Poisson-VdP scenarios (frozen readout,
-estimated readout, and variable-length trials) and asserts R² ≥ 0.96.
+estimated readout, and variable-length sequences) and asserts R² ≥ 0.96.
 Baseline R² is approximately 0.972 on all three. The standalone VdP demo also
 compares frozen-readout kernel orders 0, 1, and 2; that smoothness comparison
 is illustrative and is not the benchmark regression floor. If a benchmark
@@ -190,4 +190,4 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 - Randomness: use explicit seeds/keys; tests should be reproducible.
 - Masking: use `jnp.where` with broadcastable masks; keep masks as integer/bool arrays.
 - Be careful with dtype: tests assume 64-bit; avoid accidental `float32` constants (`1.0` is ok with x64 enabled).
-- Prefer `vmap` over Python loops for per-trial/per-time computations; use `lax.scan` for recurrences.
+- Prefer `vmap` over Python loops for per-sequence/per-time computations; use `lax.scan` for recurrences.

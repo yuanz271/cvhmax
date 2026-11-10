@@ -2,7 +2,7 @@ from ._version import __version__, __version_tuple__  # noqa: F401
 from .cvhm import CVHM, lift, project
 from .cvi import CVI, Gaussian, Poisson, Params
 from .hm import HidaMatern, Ks, make_Ks
-from .utils import pad_trials, unpad_trials
+from .utils import pad_sequences, unpad_sequences
 
 __all__ = [
     "CVHM",
@@ -15,6 +15,6 @@ __all__ = [
     "make_Ks",
     "lift",
     "project",
-    "pad_trials",
-    "unpad_trials",
+    "pad_sequences",
+    "unpad_sequences",
 ]

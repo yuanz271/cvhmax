@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import chex
 import numpy.testing as npt
 
-from cvhmax import utils
+from cvhmax import pad_sequences, unpad_sequences, utils
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_TINY = 1e-14 if X64_ENABLED else 1e-6
@@ -14,10 +14,8 @@ from cvhmax.utils import (
     real_repr,
     symm,
     conjtrans,
-    bin_info_repr,
-    trial_info_repr,
-    pad_trials,
-    unpad_trials,
+    step_info_repr,
+    sequence_info_repr,
 )
 
 
@@ -90,20 +88,20 @@ def test_conjtrans_involution(rng):
     npt.assert_allclose(np.asarray(conjtrans(conjtrans(X))), np.asarray(X), atol=ATOL_TINY)
 
 
-def test_trial_info_repr_analytic(rng):
-    """trial_info_repr matches hand-computed j = C^T R^{-1}(y-d), J = C^T R^{-1} C."""
+def test_sequence_info_repr_analytic(rng):
+    """sequence_info_repr matches hand-computed j = C^T R^{-1}(y-d), J = C^T R^{-1} C."""
     T, N, L = 50, 8, 3
     C = jnp.array(rng.standard_normal((N, L)))
     d = jnp.array(rng.standard_normal(N))
     R = jnp.eye(N) * 0.5
     y = jnp.array(rng.standard_normal((T, N)))
-    valid_y = jnp.ones(T)
+    valid_y = jnp.ones((T, N), dtype=bool)
 
-    j, J = trial_info_repr(y, valid_y, C, d, R)
+    j, J = sequence_info_repr(y, valid_y, C, d, R)
 
     # Expected
     Rinv = jnp.linalg.inv(R)
-    # Expected: per-bin j_t = C^T R^{-1} (y_t - d), J = C^T R^{-1} C tiled
+    # Expected: per-time-step j_t = C^T R^{-1} (y_t - d), J = C^T R^{-1} C tiled
     j_exp = (C.T @ Rinv @ (y.T - d[:, None])).T  # (T, L)
     J_exp = C.T @ Rinv @ C  # (L, L)
     J_exp_tiled = jnp.tile(J_exp, (T, 1, 1))
@@ -112,8 +110,8 @@ def test_trial_info_repr_analytic(rng):
     npt.assert_allclose(np.asarray(J), np.asarray(J_exp_tiled), atol=ATOL_MED)
 
 
-def test_bin_info_repr_mask(rng):
-    """Masked bins contribute zero information (j=0, J=0)."""
+def test_step_info_repr_mask(rng):
+    """Masked time steps contribute zero information (j=0, J=0)."""
     N, L = 5, 2
     C = jnp.array(rng.standard_normal((N, L)))
     d = jnp.array(rng.standard_normal(N))
@@ -121,35 +119,35 @@ def test_bin_info_repr_mask(rng):
     y = jnp.array(rng.standard_normal(N))
 
     # Unmasked: normal computation
-    j_on, J_on = bin_info_repr(y, jnp.array(1.0), C, d, R)
+    j_on, J_on = step_info_repr(y, jnp.ones(N, dtype=bool), C, d, R)
     assert jnp.any(j_on != 0)
     assert jnp.any(J_on != 0)
 
     # Masked: zero information
-    j_off, J_off = bin_info_repr(y, jnp.array(0.0), C, d, R)
+    j_off, J_off = step_info_repr(y, jnp.zeros(N, dtype=bool), C, d, R)
     npt.assert_array_equal(np.asarray(j_off), 0.0)
     npt.assert_array_equal(np.asarray(J_off), 0.0)
 
 
-def test_trial_info_repr_mask(rng):
-    """trial_info_repr zeros out masked bins, keeps unmasked bins."""
+def test_sequence_info_repr_mask(rng):
+    """sequence_info_repr zeros out masked time steps, keeps unmasked time steps."""
     T, N, L = 10, 5, 2
     C = jnp.array(rng.standard_normal((N, L)))
     d = jnp.array(rng.standard_normal(N))
     R = jnp.eye(N) * 0.5
     y = jnp.array(rng.standard_normal((T, N)))
 
-    # Mask out bins 0, 3, 7
-    valid_y = jnp.ones(T).at[jnp.array([0, 3, 7])].set(0.0)
+    # Mask out time steps 0, 3, 7
+    valid_y = jnp.ones((T, N), dtype=bool).at[jnp.array([0, 3, 7])].set(False)
 
-    j, J = trial_info_repr(y, valid_y, C, d, R)
+    j, J = sequence_info_repr(y, valid_y, C, d, R)
 
-    # Masked bins should be zero
+    # Masked time steps should be zero
     for t in [0, 3, 7]:
         npt.assert_array_equal(np.asarray(j[t]), 0.0)
         npt.assert_array_equal(np.asarray(J[t]), 0.0)
 
-    # Unmasked bins should match direct computation
+    # Unmasked time steps should match direct computation
     Rinv = jnp.linalg.inv(R)
     J_exp = C.T @ Rinv @ C
     for t in [1, 2, 4, 5, 6, 8, 9]:
@@ -159,79 +157,79 @@ def test_trial_info_repr_mask(rng):
 
 
 # ---------------------------------------------------------------------------
-# pad_trials / unpad_trials
+# pad_sequences / unpad_sequences
 # ---------------------------------------------------------------------------
 
 
-class TestPadTrials:
-    """Tests for pad_trials and unpad_trials."""
+class TestPadSequences:
+    """Tests for pad_sequences and unpad_sequences."""
 
-    def _make_trials(self, lengths, N=4, rng=None):
-        """Helper: create random per-trial observation arrays."""
+    def _make_sequences(self, lengths, N=4, rng=None):
+        """Helper: create random per-sequence observation arrays."""
         if rng is None:
             rng = np.random.default_rng(0)
         return [jnp.asarray(rng.standard_normal((T_i, N))) for T_i in lengths]
 
     def test_shapes(self):
-        y_list = self._make_trials([300, 500, 250])
-        y, valid_y, trial_lengths = pad_trials(y_list)
+        y_list = self._make_sequences([300, 500, 250])
+        y, valid_y, sequence_lengths = pad_sequences(y_list)
         assert y.shape == (3, 500, 4)
-        assert valid_y.shape == (3, 500)
-        assert trial_lengths.shape == (3,)
-        npt.assert_array_equal(np.asarray(trial_lengths), [300, 500, 250])
+        assert valid_y.shape == (3, 500, 4)
+        assert sequence_lengths.shape == (3,)
+        npt.assert_array_equal(np.asarray(sequence_lengths), [300, 500, 250])
 
-    def test_padded_bins_masked(self):
-        y_list = self._make_trials([10, 20])
-        y, valid_y, _ = pad_trials(y_list)
-        # First trial is shorter; bins 10..19 should be masked
+    def test_padded_steps_masked(self):
+        y_list = self._make_sequences([10, 20])
+        y, valid_y, _ = pad_sequences(y_list)
+        # First sequence is shorter; time steps 10..19 should be masked
         npt.assert_array_equal(np.asarray(valid_y[0, 10:]), 0)
-        # Second trial fills entirely
+        # Second sequence fills entirely
         npt.assert_array_equal(np.asarray(valid_y[1, :]), 1)
 
     def test_padded_values_zero(self):
-        y_list = self._make_trials([10, 20])
-        y, _, _ = pad_trials(y_list)
+        y_list = self._make_sequences([10, 20])
+        y, _, _ = pad_sequences(y_list)
         npt.assert_array_equal(np.asarray(y[0, 10:]), 0.0)
 
     def test_no_valid_y_default(self):
-        y_list = self._make_trials([5, 8, 3])
-        _, valid_y, _ = pad_trials(y_list)
+        y_list = self._make_sequences([5, 8, 3])
+        _, valid_y, _ = pad_sequences(y_list)
         for i, T_i in enumerate([5, 8, 3]):
             npt.assert_array_equal(np.asarray(valid_y[i, :T_i]), 1)
             npt.assert_array_equal(np.asarray(valid_y[i, T_i:]), 0)
 
     def test_preserves_original_mask(self):
-        y_list = self._make_trials([10, 15])
-        # Mark bins 0 and 3 as missing in trial 0
-        mask0 = jnp.ones(10, dtype=jnp.uint8).at[0].set(0).at[3].set(0)
-        mask1 = jnp.ones(15, dtype=jnp.uint8)
-        _, valid_y, _ = pad_trials(y_list, valid_y_list=[mask0, mask1])
+        y_list = self._make_sequences([10, 15])
+        # Mark time steps 0 and 3 as missing in sequence 0
+        mask0 = jnp.ones((10, 1), dtype=bool).at[0].set(False).at[3].set(False)
+        mask1 = jnp.ones((15, 1), dtype=bool)
+        _, valid_y, _ = pad_sequences(y_list, valid_y_list=[mask0, mask1])
         # Original missing values preserved
-        assert int(valid_y[0, 0]) == 0
-        assert int(valid_y[0, 3]) == 0
-        # Other original bins still observed
-        assert int(valid_y[0, 1]) == 1
-        # Padded bins masked
+        npt.assert_array_equal(np.asarray(valid_y[0, 0]), 0)
+        npt.assert_array_equal(np.asarray(valid_y[0, 3]), 0)
+        # Other original time steps still observed
+        npt.assert_array_equal(np.asarray(valid_y[0, 1]), 1)
+        # Padded time steps masked
         npt.assert_array_equal(np.asarray(valid_y[0, 10:]), 0)
 
     def test_equal_lengths(self):
-        y_list = self._make_trials([20, 20, 20])
-        y, valid_y, trial_lengths = pad_trials(y_list)
+        y_list = self._make_sequences([20, 20, 20])
+        y, valid_y, sequence_lengths = pad_sequences(y_list)
         assert y.shape == (3, 20, 4)
         npt.assert_array_equal(np.asarray(valid_y), 1)
-        npt.assert_array_equal(np.asarray(trial_lengths), [20, 20, 20])
+        npt.assert_array_equal(np.asarray(sequence_lengths), [20, 20, 20])
 
-    def test_single_trial(self):
-        y_list = self._make_trials([30])
-        y, valid_y, trial_lengths = pad_trials(y_list)
+    def test_single_sequence(self):
+        y_list = self._make_sequences([30])
+        y, valid_y, sequence_lengths = pad_sequences(y_list)
         assert y.shape == (1, 30, 4)
         npt.assert_array_equal(np.asarray(valid_y), 1)
 
     def test_unpad_roundtrip(self):
         lengths = [10, 20, 15]
-        y_list = self._make_trials(lengths)
-        y, _, trial_lengths = pad_trials(y_list)
-        recovered = unpad_trials(y, trial_lengths)
+        y_list = self._make_sequences(lengths)
+        y, _, sequence_lengths = pad_sequences(y_list)
+        recovered = unpad_sequences(y, sequence_lengths=sequence_lengths)
         assert len(recovered) == 3
         for orig, rec in zip(y_list, recovered):
             npt.assert_array_equal(np.asarray(rec), np.asarray(orig))
@@ -242,7 +240,7 @@ class TestPadTrials:
         K = 2
         m = jnp.asarray(rng.standard_normal((2, 20, K)))
         V = jnp.asarray(rng.standard_normal((2, 20, K, K)))
-        recovered = unpad_trials((m, V), jnp.asarray(lengths))
+        recovered = unpad_sequences((m, V), jnp.asarray(lengths))
         assert len(recovered) == 2
         # Each element is a tuple of (m_i, V_i)
         m0, V0 = recovered[0]

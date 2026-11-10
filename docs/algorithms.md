@@ -24,7 +24,7 @@ The `CVHM.fit` method alternates between:
 
 ```
 CVHM loop:
-    j, J = CVI.initialize_info(params, y, valid_y)              # latent (per-bin)
+    j, J = CVI.initialize_info(params, y, valid_y)              # latent (per-time-step)
     j_s, J_s = lift(j, J, M)                                    # latent → state
     zp, Zp = forward_filter(j_s, J_s, ...)                      # state (predicted)
     m_w, V_w = project(zp, Zp, M)                               # state → latent
@@ -73,8 +73,8 @@ The diagnostics are available after fitting as `model.converged_` and
 detection.
 
 The forward-filter warm-up provides sequentially coherent initial
-pseudo-observations — each bin's starting point incorporates causal
-information from all prior bins.  This is a state-space operation owned
+pseudo-observations — each time step's starting point incorporates causal
+information from all prior time steps.  This is a state-space operation owned
 by CVHM, keeping CVI free of dynamics knowledge.
 
 Gaussian and Poisson readouts use the fitted latent-space loading `Params.C`.
@@ -82,7 +82,21 @@ The state-space observation matrix is `H = C @ M`: CVHM applies `M` when
 lifting the latent information increments into the SDE state space. The fixed
 GP kernel amplitudes set the prior scale of the latent processes; `C` retains
 observation-specific gains. The convergence metric compares the same loading
-matrix.
+matrix. After the last readout update, `fit()` performs a final inference pass:
+`latent` and `posterior` describe the posterior under the final parameters.
+
+Gaussian observation noise is diagonal. For observed feature mask `w` and
+variance vector `r = diag(R)`, Gaussian information increments are
+`J = C.T @ diag(w / r) @ C` and `j = C.T @ (w * (y - d) / r)`. The readout
+update uses posterior second moments `V + m m.T` and updates each feature's
+loading, bias, and variance from its observed entries. Poisson CVI and the
+existing readout objective likewise sum only observed feature contributions.
+Initialization fills missing entries with per-feature observed means for Factor
+Analysis only; subsequent updates use the actual observation mask. For Poisson,
+FA count-space loadings are scaled to log-rate space, with a half-count per
+feature used only to initialize a finite baseline rate. The retained Poisson
+readout objective uses the variance-adjusted log rate in its count term and is
+not the exact expected Poisson log-likelihood; masking does not change it.
 
 ## Gaussian Parameterizations
 
@@ -128,7 +142,7 @@ Where it appears:
 
 - `sde2gp` output — converts information form to `(m, V)` for downstream use
 - Readout/observation model updates (`update_readout`)
-- Loss computation (`poisson_trial_nell`, `gaussian_trial_nell`)
+- Poisson readout objective (`poisson_readout_objective`)
 
 ### Observation information increments `(j, J)`
 
@@ -139,12 +153,15 @@ J = Hᵀ R⁻¹ H       observation information matrix (positive semi-definite)
 j = Hᵀ R⁻¹ (y − d)  observation information vector
 ```
 
-Computed by `bin_info_repr` in `utils.py` (with `trial_info_repr` and `batch_info_repr` as vmapped wrappers over time and trial axes respectively). In the Poisson CVI path, `(j, J)` are pseudo-observations updated iteratively rather than computed from a closed-form likelihood.
+Computed by `step_info_repr` in `utils.py` (with `sequence_info_repr` and
+`batch_info_repr` as vmapped wrappers over the time and sequence axes,
+respectively). In the Poisson CVI path, `(j, J)` are pseudo-observations updated
+iteratively rather than computed from a closed-form likelihood.
 
-When a bin is masked (`valid_y = 0`), both `j` and `J` are set to zero by
-`bin_info_repr`, so the filter update `Z_post = Z_pred + J`,
-`z_post = z_pred + j` reduces to a no-op at that bin — the posterior
-equals the prediction.
+When an entire time step is masked (`valid_y = 0` for every feature), `j` and `J`
+are zero, so the filtering update is a no-op. Smoothing may still use
+observations from other time steps. A partially masked time step contributes
+information only from its observed features.
 
 ### Variable name glossary
 

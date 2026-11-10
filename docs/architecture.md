@@ -82,15 +82,15 @@ m, V = sde2gp(z, Z, M)
 
 ## Forward-Filter Warm-Up
 
-After `initialize_info` returns per-bin pseudo-observations (computed
-independently at each time bin), CVHM runs a single forward information
+After `initialize_info` returns per-time-step pseudo-observations (computed
+independently at each time step), CVHM runs a single forward information
 filter pass before the CVI loop.  This propagates causal information
-across bins so that each bin's pseudo-observations are seeded from a
+across time steps so that each time step's pseudo-observations are seeded from a
 sequentially coherent prediction rather than a zero-mean prior.
 
 The warm-up is a state-space operation (it uses `Af`, `Pf`) and therefore
 belongs in CVHM, not CVI.  It uses the **predicted** (one-step-ahead)
-states — not the posteriors — to avoid double-counting the current bin's
+states — not the posteriors — to avoid double-counting the current time step's
 observation.  The resulting latent moments are passed to `update_pseudo`
 with `lr=1.0` to fully replace the initial pseudo-observations.
 
@@ -105,17 +105,16 @@ latent space:
 
 | Method | Input | Output |
 |--------|-------|--------|
-| `initialize_params` | observations | opaque params |
+| `initialize_params` | observations | readout params |
 | `initialize_info` | params, observations | `(j, J)` in latent space |
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
 | `update_readout` | params, observations, posterior `(m, V)` | updated params |
 
-### Duck-typed params
+### Readout params
 
-The params structure is opaque to CVHM.  Each CVI subclass may use any
-pytree-compatible container — a tuple, a dataclass, an equinox `Module`,
-or anything else.  The built-in `Gaussian` and `Poisson` readouts use the
-`Params` dataclass (with fields `C`, `d`, `R`), but this is not required.
+Readout algorithms receive their parameter state explicitly. The built-in
+`Gaussian` and `Poisson` readouts use the Equinox `Params` container with
+fields `C`, `d`, and `R`; CVHM's convergence metric compares those fields.
 
 ## Benefits
 

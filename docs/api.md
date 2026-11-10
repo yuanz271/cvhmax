@@ -12,7 +12,7 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `Params`: readout parameter container
 - `HidaMatern`: kernel class for state-space dynamics
 - `Ks`, `make_Ks`: raw functional kernel API and static-order JAX wrapper
-- `pad_trials`, `unpad_trials`: utilities for variable-length trials
+- `pad_sequences`, `unpad_sequences`: utilities for variable-length sequences
 
 ## CVHM
 
@@ -30,12 +30,21 @@ Public exports live in `src/cvhmax/__init__.py`:
 
 Source: `src/cvhmax/cvhm.py`
 
+`valid_y` may be `None`, a time-step mask shaped `(sequences, time)` (or `(time,)`
+for one sequence), or a boolean mask broadcastable to `y`, including
+`(sequences, time, 1)` and `(sequences, 1, features)`. Fitting requires each
+feature to be observed in at least one time step. Sequences have independent
+latent trajectories but share kernels, `dt`, and the readout; feature indices
+must refer to the same variables across sequences. Sequence-specific readouts
+are not represented.
+
 `CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
 saving posterior or latent caches. The serialization uses the
 `get_config()`/`from_config()` protocol on both `CVHM` and `HidaMatern`.
-`CVHM.infer(...)` recomputes posterior state without updating fitted readout
-parameters. See `serialization.md` for the archive format and compatibility
-policy.
+After fitting, `CVHM.posterior` and `CVHM.latent` describe the same posterior
+under the final readout parameters. `CVHM.infer(...)` recomputes the GP
+posterior without updating fitted parameters. See `serialization.md` for the
+archive format and compatibility policy.
 
 ## CVI and Readouts
 
@@ -47,12 +56,13 @@ policy.
 - `Gaussian`, `Poisson`: built-in readouts
 - `Params`: convenience container of `C`, `d`, `R` (no `M` — that lives in CVHM)
 
-The built-in readouts use the loading matrix `Params.C`. Fixed GP kernel
-amplitudes set the latent prior scale, while `C` retains observation-specific
-gains.
+The built-in readouts use the loading matrix `Params.C`. Gaussian `Params.R`
+is a positive diagonal observation-noise covariance; Poisson uses a scalar zero
+sentinel. Fixed GP kernel amplitudes set the latent prior scale, while `C`
+retains observation-specific gains.
 
-CVI methods work entirely in latent space `(K)`. The params structure is
-opaque to CVHM — each subclass may use any pytree-compatible container.
+CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
+explicitly and compares their `C`, `d`, and `R` fields for convergence.
 
 Source: `src/cvhmax/cvi.py`
 
@@ -98,10 +108,11 @@ Source: `src/cvhmax/hm.py`
 
 ## Utilities
 
-- `pad_trials(y_list, valid_y_list=None)` → `(y, valid_y, trial_lengths)`
-  Pad variable-length trials into rectangular arrays.
-- `unpad_trials(arrays, trial_lengths)` → `list[Array]` or `list[tuple[Array, ...]]`
-  Strip padding from rectangular arrays back to per-trial slices.
+- `pad_sequences(y_list, valid_y_list=None)` → `(y, valid_y, sequence_lengths)`
+  Pad variable-length sequences; per-sequence masks may use `(time,)` or broadcast
+  to `(time, features)`.
+- `unpad_sequences(arrays, sequence_lengths)` → `list[Array]` or `list[tuple[Array, ...]]`
+  Strip padding from rectangular arrays back to per-sequence slices.
   Accepts a single array or a tuple of arrays.
 
 Source: `src/cvhmax/utils.py`

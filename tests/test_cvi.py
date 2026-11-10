@@ -7,8 +7,8 @@ from sklearn.linear_model import LinearRegression
 
 from cvhmax.cvi import (
     Params,
-    poisson_cvi_bin_stats,
-    poisson_cvi_bin_stats_latent,
+    poisson_cvi_step_stats,
+    poisson_cvi_step_stats_latent,
     Poisson,
     Gaussian,
 )
@@ -24,16 +24,13 @@ def test_gaussian_initialize_info_values(rng):
     R = jnp.eye(N) * 0.5
     params = Params(C=C, d=d, R=R)
 
-    y = jnp.array(rng.standard_normal((T, N)))  # single trial
-    valid_y = jnp.ones(T)
+    y = jnp.array(rng.standard_normal((T, N)))  # single sequence
+    valid_y = jnp.ones((T, N), dtype=bool)
 
     # Compute expected values directly using the correct formula
     J_exp_single = C.T @ jnp.linalg.solve(R, C)  # (K, K)
     j_exp = (C.T @ jnp.linalg.solve(R, (y - d).T)).T  # (T, K)
     J_exp = jnp.tile(J_exp_single, (T, 1, 1))  # (T, K, K)
-
-    # Apply mask
-    j_exp = jnp.where(jnp.expand_dims(valid_y, -1), j_exp, 0)
 
     j, J = Gaussian.initialize_info(params, y, valid_y)
     chex.assert_shape([j, J], [(T, K), (T, K, K)])
@@ -57,7 +54,7 @@ def test_gaussian_initialize_info_preserves_unequal_loading_gains():
     y = jnp.array([[0.6, 1.4], [-0.2, 0.4]])
     params = Params(C=C, d=d, R=R)
 
-    j, J = Gaussian.initialize_info(params, y, jnp.ones(y.shape[0]))
+    j, J = Gaussian.initialize_info(params, y, jnp.ones_like(y, dtype=bool))
     expected_j = (C.T @ jnp.linalg.solve(R, (y - d).T)).T
     expected_J = C.T @ jnp.linalg.solve(R, C)
     npt.assert_allclose(j, expected_j, rtol=1e-6, atol=1e-6)
@@ -113,7 +110,7 @@ def test_poisson_update_pseudo_preserves_unequal_loading_gains():
     J = jnp.zeros_like(V)
 
     actual_j, actual_J = Poisson.update_pseudo(
-        params, y, jnp.ones((1, 1)), m, V, j, J, lr=1.0
+        params, y, jnp.ones_like(y, dtype=bool), m, V, j, J, lr=1.0
     )
     rates = jnp.exp(C[:, 0] * m[0, 0, 0] + d + 0.5 * C[:, 0] ** 2 * V[0, 0, 0, 0])
     precision = jnp.sum(C[:, 0] ** 2 * rates)
@@ -131,7 +128,7 @@ def test_gaussian_update_pseudo_noop():
     m = jnp.zeros((1, T, K))
     V = jnp.tile(jnp.eye(K), (1, T, 1, 1))
     y = jnp.zeros((1, T, 5))
-    valid_y = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T, 5), dtype=bool)
     params = Params(C=jnp.ones((5, K)), d=jnp.zeros(5), R=jnp.eye(5))
 
     j_out, J_out = Gaussian.update_pseudo(params, y, valid_y, m, V, j, J, 0.1)
@@ -140,7 +137,7 @@ def test_gaussian_update_pseudo_noop():
 
 
 def test_poisson_cvi_masked_zero():
-    """Masked bins contribute zero CVI gradients (k=0, K=0)."""
+    """Masked time steps contribute zero CVI gradients (k=0, K=0)."""
     N, L = 5, 3
     z = jnp.ones(L)
     Z = jnp.eye(L) * 2.0
@@ -149,12 +146,12 @@ def test_poisson_cvi_masked_zero():
     d = jnp.zeros(N)
 
     # Unmasked: normal computation
-    k_on, K_on = poisson_cvi_bin_stats(z, Z, y, jnp.array(1.0), H, d)
+    k_on, K_on = poisson_cvi_step_stats(z, Z, y, jnp.ones(N, dtype=bool), H, d)
     assert jnp.any(k_on != 0)
     assert jnp.any(K_on != 0)
 
     # Masked: zero gradients
-    k_off, K_off = poisson_cvi_bin_stats(z, Z, y, jnp.array(0.0), H, d)
+    k_off, K_off = poisson_cvi_step_stats(z, Z, y, jnp.zeros(N, dtype=bool), H, d)
     npt.assert_array_equal(np.asarray(k_off), 0.0)
     npt.assert_array_equal(np.asarray(K_off), 0.0)
 
@@ -170,7 +167,7 @@ def test_poisson_cvi_gradient_direction(rng):
     x = jnp.array(rng.standard_normal((1, T, K)) * 0.5)
     eta = x @ C_raw.T + d
     y = jnp.array(rng.poisson(np.exp(np.asarray(eta))).astype(float))
-    valid_y = jnp.ones((1, T))
+    valid_y = jnp.ones((1, T, N), dtype=bool)
 
     # Initialize pseudo-obs in latent space
     j = jnp.zeros((1, T, K))
@@ -187,7 +184,7 @@ def test_poisson_cvi_gradient_direction(rng):
     assert not jnp.allclose(j_new, j), "CVI update produced no change"
 
 
-def test_poisson_cvi_bin_stats_latent_equivalence(rng):
+def test_poisson_cvi_step_stats_latent_equivalence(rng):
     """Latent-space Poisson CVI stats match state-space version when M = I.
 
     Temporary equivalence test for the refactor.  Remove after migration.
@@ -205,11 +202,11 @@ def test_poisson_cvi_bin_stats_latent_equivalence(rng):
 
     # State-space version with H = C @ I = C
     H = C  # since M = I
-    k_state, K_state = poisson_cvi_bin_stats(z_state, Z_state, y, jnp.array(1.0), H, d)
+    k_state, K_state = poisson_cvi_step_stats(z_state, Z_state, y, jnp.ones(N, dtype=bool), H, d)
 
     # Latent-space version
-    k_latent, K_latent = poisson_cvi_bin_stats_latent(
-        m_latent, V_latent, y, jnp.array(1.0), C, d
+    k_latent, K_latent = poisson_cvi_step_stats_latent(
+        m_latent, V_latent, y, jnp.ones(N, dtype=bool), C, d
     )
 
     # Tolerance is relaxed because the state-space version applies SVD
@@ -219,8 +216,8 @@ def test_poisson_cvi_bin_stats_latent_equivalence(rng):
     npt.assert_allclose(np.asarray(K_latent), np.asarray(K_state), atol=1e-4)
 
 
-def test_poisson_cvi_bin_stats_latent_masked(rng):
-    """Masked bins contribute zero CVI gradients from latent-space stats."""
+def test_poisson_cvi_step_stats_latent_masked(rng):
+    """Masked time steps contribute zero CVI gradients from latent-space stats."""
     N, K = 5, 3
     C = jnp.array(rng.standard_normal((N, K)) * 0.3)
     d = jnp.zeros(N)
@@ -228,7 +225,7 @@ def test_poisson_cvi_bin_stats_latent_masked(rng):
     V = jnp.eye(K)
     y = jnp.ones(N) * 10.0
 
-    k_off, K_off = poisson_cvi_bin_stats_latent(m, V, y, jnp.array(0.0), C, d)
+    k_off, K_off = poisson_cvi_step_stats_latent(m, V, y, jnp.zeros(N, dtype=bool), C, d)
     npt.assert_array_equal(np.asarray(k_off), 0.0)
     npt.assert_array_equal(np.asarray(K_off), 0.0)
 
