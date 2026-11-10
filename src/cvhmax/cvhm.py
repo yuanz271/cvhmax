@@ -37,11 +37,13 @@ class _InferenceContext(NamedTuple):
 
 
 class _FitState(NamedTuple):
-    iteration: Array
+    """EM state with Python scalars initially and JAX values during the loop."""
+
+    iteration: int | Array
     params: Any
-    patience: Array
-    converged: Array
-    failed: Array
+    patience: int | Array
+    converged: bool | Array
+    failed: bool | Array
 
 
 def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array]:
