@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added `gaussian_ard_estimate` and `gaussian_ard_evidence`: automatic relevance
+  determination for the Gaussian loading matrix, conditional on the latent
+  moments. The expected readout log-likelihood is quadratic in the loadings, so
+  the evidence is closed form and no Laplace approximation is needed. It reports
+  per-latent precisions whose separation indicates an effective latent
+  dimensionality.
+
 ### Changed
 
 - Changed the Poisson readout loading penalty from the L2 norm `‖C‖` to the

@@ -61,6 +61,13 @@ is a positive diagonal observation-noise covariance; Poisson uses a scalar zero
 sentinel. Fixed GP kernel amplitudes set the latent prior scale, while `C`
 retains observation-specific gains.
 
+For a Gaussian readout, `gaussian_ard_estimate(y, valid_y, m, V)` fits the
+loadings under a per-latent ARD prior, holding the latent moments fixed, and
+returns `(Params, alpha, log_evidence)`. The fitted precisions `alpha` separate
+latent columns the readout needs from columns shrunk towards zero.
+`gaussian_ard_evidence(...)` evaluates the marginal log-evidence at supplied
+precisions. See `algorithms.md` for the derivation and its limits.
+
 CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
 explicitly and compares their `C`, `d`, and `R` fields for convergence.
 

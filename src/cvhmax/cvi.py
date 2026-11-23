@@ -4,6 +4,9 @@ from typing import ClassVar, override
 
 from sklearn.decomposition import FactorAnalysis
 
+import jax
+import numpy as np
+import scipy.optimize
 from jax import Array, numpy as jnp, vmap
 from jax.numpy.linalg import multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
@@ -18,6 +21,10 @@ from .utils import (
 
 TAU = 1e-6
 MAX_LOGRATE = 7.0
+
+# Lower bound on the ARD precision, as a log. The marginal evidence is flat
+# (not minimised) as a precision vanishes, so optimising it needs a floor.
+ARD_LOG_ALPHA_FLOOR = -12.0
 
 
 def fa_init(ys, n_components, random_state):
@@ -223,6 +230,197 @@ class CVI:
         params
             Initial readout parameter state.
         """
+
+
+def _gaussian_loading_moments(
+    y: Array, valid_y: Array, m: Array, V: Array
+) -> tuple[Array, Array, Array]:
+    """Sufficient statistics of the expected Gaussian readout in ``(d, C)``.
+
+    Given latent moments ``q(z) = N(m, V)``, the expected readout
+    log-likelihood is quadratic in ``beta = [d, C]`` of the form
+    ``-0.5 beta' Prec beta + beta' c``, up to terms independent of ``beta``.
+    That quadratic form is what makes a Gaussian loading prior conjugate.
+
+    Parameters
+    ----------
+    y : Array
+        Observations shaped ``(time, obs_dim (N))``.
+    valid_y : Array
+        Observation mask aligned with ``y``.
+    m : Array
+        Latent posterior means shaped ``(time, latent_dim (K))``.
+    V : Array
+        Latent posterior covariances shaped ``(time, latent_dim (K), latent_dim (K))``.
+
+    Returns
+    -------
+    tuple[Array, Array, Array]
+        ``Prec`` shaped ``(N, K + 1, K + 1)``, ``c`` shaped ``(N, K + 1)``, and
+        the observed count per feature shaped ``(N,)``. The bias index is 0 and
+        is never regularised by the loading prior.
+    """
+    n_time = m.shape[0]
+    design = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
+    outer = design[:, :, None] * design[:, None, :]
+    outer = outer.at[:, 1:, 1:].add(V)
+    observed = valid_y.astype(m.dtype)
+    precision = jnp.einsum("tn,tij->nij", observed, outer)
+    linear = jnp.einsum("tn,ti->ni", jnp.where(valid_y, y, 0.0), design)
+    return precision, linear, jnp.sum(observed, axis=0)
+
+
+def gaussian_ard_evidence(
+    y: Array, valid_y: Array, m: Array, V: Array, log_alpha: Array, log_R: Array
+) -> Array:
+    """Marginal log-evidence of the Gaussian readout under ARD loading priors.
+
+    Integrates the loadings out of the expected readout log-likelihood under
+    ``C[:, k] ~ N(0, alpha_k^-1 I)``. The prior on the bias is flat, which
+    contributes an additive constant that is identical across models and is
+    therefore omitted.
+
+    Parameters
+    ----------
+    y : Array
+        Observations shaped ``(time, obs_dim (N))``.
+    valid_y : Array
+        Observation mask aligned with ``y``.
+    m : Array
+        Latent posterior means shaped ``(time, latent_dim (K))``.
+    V : Array
+        Latent posterior covariances shaped ``(time, latent_dim (K), latent_dim (K))``.
+    log_alpha : Array
+        Log ARD precisions, shape ``(latent_dim (K),)``.
+    log_R : Array
+        Log diagonal observation variances, shape ``(obs_dim (N),)``.
+
+    Returns
+    -------
+    Array
+        Scalar marginal log-evidence.
+
+    Notes
+    -----
+    The likelihood used here is ``exp(E_q[log p(y | z, C, d)])``, which Jensen
+    bounds below the latent-averaged likelihood ``E_q[p(y | z, C, d)]``. The
+    returned value is therefore a lower bound on the evidence at the supplied
+    latent moments, not the evidence under the latent prior.
+    """
+    precision, linear, counts = _gaussian_loading_moments(y, valid_y, m, V)
+    n_obs = precision.shape[0]
+    variance = jnp.exp(log_R)
+    scaled = linear / variance[:, None]
+    posterior = precision / variance[:, None, None] + jnp.diag(
+        jnp.concatenate((jnp.zeros(1), jnp.exp(log_alpha)))
+    )[None]
+    _, logdet = jnp.linalg.slogdet(posterior)
+    solved = jnp.linalg.solve(posterior, scaled[..., None])[..., 0]
+    squared = jnp.sum(jnp.where(valid_y, y**2, 0.0), axis=0)
+    # Per feature: the Gaussian normalisation of the observation term, plus the
+    # proper-Gaussian normalisation of the precision prior, plus the
+    # normalisation of the Gaussian integral over (d, C).
+    normalisation = 0.5 * n_obs * (
+        jnp.sum(log_alpha - jnp.log(2 * jnp.pi))
+        + (log_alpha.shape[0] + 1) * jnp.log(2 * jnp.pi)
+    )
+    return (
+        jnp.sum(
+            -0.5 * counts * jnp.log(2 * jnp.pi * variance)
+            - 0.5 * squared / variance
+            - 0.5 * logdet
+            + 0.5 * jnp.sum(scaled * solved, axis=-1)
+        )
+        + normalisation
+    )
+
+
+def gaussian_ard_estimate(
+    y: Array,
+    valid_y: Array,
+    m: Array,
+    V: Array,
+    *,
+    R: Array | None = None,
+    alpha_init: Array | None = None,
+) -> tuple[Params, Array, float]:
+    """Fit Gaussian loadings with per-latent ARD precisions.
+
+    Maximises :func:`gaussian_ard_evidence` over the precisions, with the
+    loadings integrated out rather than profiled. Precisions are reported as
+    fitted: a large value marks a latent whose column has been shrunk towards
+    zero, and the separation between latent precisions is what identifies an
+    effective dimensionality. Latent moments are held fixed, so this is a
+    conditional analysis.
+
+    The observation variances are not optimised here. The expected
+    log-likelihood is a surrogate density, so its integral grows without bound
+    as an observation variance vanishes; `R` is therefore taken from the
+    caller or from the masked residual estimate, and only the precisions are
+    fitted.
+
+    Parameters
+    ----------
+    y : Array
+        Observations shaped ``(time, obs_dim (N))``.
+    valid_y : Array
+        Observation mask aligned with ``y``.
+    m : Array
+        Latent posterior means shaped ``(time, latent_dim (K))``.
+    V : Array
+        Latent posterior covariances shaped ``(time, latent_dim (K), latent_dim (K))``.
+    R : Array, optional
+        Diagonal observation covariance shaped ``(N, N)``. Defaults to the
+        masked residual estimate at the ridge solution.
+    alpha_init : Array, optional
+        Initial ARD precisions, shape ``(K,)``. Defaults to ones.
+
+    Returns
+    -------
+    tuple[Params, Array, float]
+        Fitted readout parameters, ARD precisions shaped ``(K,)``, and the
+        marginal log-evidence at the optimum.
+    """
+    n_latent = m.shape[1]
+    if R is None:
+        _, _, R = ridge_estimate(y, valid_y, m, V, jnp.eye(y.shape[1], dtype=m.dtype))
+    variance = jnp.diag(jnp.asarray(R))
+    log_variance = jnp.log(variance)
+    if alpha_init is None:
+        alpha_init = jnp.ones(n_latent)
+    # Optimise an unconstrained variable with the precision floored: the
+    # evidence flattens, rather than diverging, as a precision vanishes.
+    initial = jnp.log(jnp.expm1(jnp.log(alpha_init) - ARD_LOG_ALPHA_FLOOR))
+
+    def negative_evidence(unconstrained: Array) -> Array:
+        log_alpha = ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(unconstrained)
+        return -gaussian_ard_evidence(y, valid_y, m, V, log_alpha, log_variance)
+
+    value_and_grad = jax.jit(jax.value_and_grad(negative_evidence))
+
+    def objective(unconstrained):
+        value, grad = value_and_grad(jnp.asarray(unconstrained))
+        return float(value), np.asarray(grad)
+
+    result = scipy.optimize.minimize(
+        objective,
+        np.asarray(initial),
+        jac=True,
+        method="L-BFGS-B",
+        options={"maxiter": 5000, "ftol": 1e-12, "gtol": 1e-10},
+    )
+    alpha = jnp.exp(
+        ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(jnp.asarray(result.x))
+    )
+    precision, linear, _ = _gaussian_loading_moments(y, valid_y, m, V)
+    posterior = precision / variance[:, None, None] + jnp.diag(
+        jnp.concatenate((jnp.zeros(1), alpha))
+    )[None]
+    beta = jnp.linalg.solve(
+        posterior, (linear / variance[:, None])[..., None]
+    )[..., 0]
+    params = Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance))
+    return params, alpha, -float(result.fun)
 
 
 class Gaussian(CVI):

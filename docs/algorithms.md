@@ -100,6 +100,45 @@ not the exact expected Poisson log-likelihood; masking does not change it. It
 adds a squared L2 penalty on the loading matrix, averaged with the data term,
 and clamps the log rate at `MAX_LOGRATE` to bound the rate.
 
+## Gaussian ARD Loadings
+
+`gaussian_ard_estimate` fits Gaussian loadings under a per-latent automatic
+relevance determination prior. It is a conditional analysis: the latent moments
+are held fixed, and it answers which latent columns the readout needs, not which
+latents the latent prior supports.
+
+The construction uses the fact that the expected readout log-likelihood is
+quadratic in `beta = [d, C]`. With `q(z) = N(m, V)`,
+
+```
+E_q[log p(y | z, C, d)] = -0.5 sum_t [log(2 pi R) + (y - C m - d)^2 / R + C V C / R]
+```
+
+so `exp(E_q[log p])` is a Gaussian kernel in `beta` and the integral against
+`C[:, k] ~ N(0, alpha_k^-1 I)` is available in closed form. The prior on the
+bias is flat. The evidence is therefore
+
+```
+log p(y | alpha) = sum_n [ -0.5 N_n log(2 pi R_n) - 0.5 sum_t y^2 / R_n
+                           - 0.5 log|Prec_n / R_n + diag(0, alpha)|
+                           + 0.5 c_n' (Prec_n / R_n + diag(0, alpha))^-1 c_n ]
+                   + 0.5 N (sum_k log(alpha_k / 2 pi) + (K + 1) log 2 pi)
+```
+
+where `Prec_n` and `c_n` are the sufficient statistics built from `y`, `m`, and
+`V`, and `R_n` is the diagonal observation variance. Because `E_q[log p]` is a
+Jensen *lower* bound on `log E_q[p]`, the value is a lower bound on the evidence
+at the supplied moments.
+
+Precisions are optimised, with a floor, in an unconstrained variable: the
+evidence flattens rather than diverges as a precision vanishes, so a floor is
+required for the optimisation to be well posed. Observation variances are
+*fixed*, not optimised: the surrogate density grows without bound as a variance
+vanishes, so only the precisions are fitted. A large fitted precision marks a
+column shrunk towards zero, and the separation between precisions is what
+identifies an effective dimensionality; the estimator shrinks rather than
+exactly deleting columns.
+
 ## Gaussian Parameterizations
 
 The codebase uses two parameterizations of multivariate Gaussians:

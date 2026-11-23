@@ -7,6 +7,8 @@ from sklearn.linear_model import LinearRegression
 
 from cvhmax.cvi import (
     Params,
+    gaussian_ard_estimate,
+    gaussian_ard_evidence,
     poisson_cvi_step_stats,
     poisson_cvi_step_stats_latent,
     Poisson,
@@ -14,6 +16,61 @@ from cvhmax.cvi import (
 )
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
+
+
+def test_gaussian_ard_evidence_matches_quadrature():
+    """The closed-form evidence equals a brute-force integral over (d, C)."""
+    T, N, K = 8, 2, 1
+    rng = np.random.default_rng(0)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    V = jnp.asarray(0.1 * np.broadcast_to(np.eye(K), (T, K, K)))
+    y = jnp.asarray(rng.standard_normal((T, N)))
+    valid = jnp.ones((T, N), dtype=bool)
+    log_alpha = jnp.log(jnp.array([0.7]))
+    log_R = jnp.log(jnp.array([0.9, 1.3]))
+
+    actual = float(gaussian_ard_evidence(y, valid, m, V, log_alpha, log_R))
+
+    # Brute force: exp(E_q[log p]) times the loading prior, integrated over the
+    # bias and the single loading column of each feature independently.
+    grid = np.linspace(-20.0, 20.0, 4001)
+    bias, col = np.meshgrid(grid, grid, indexing="ij")
+    alpha = float(np.exp(log_alpha[0]))
+    expected = 0.0
+    for n in range(N):
+        variance = float(np.exp(log_R[n]))
+        residual = (
+            np.asarray(y)[:, n][None, None, :]
+            - col[:, :, None] * np.asarray(m)[:, 0][None, None, :]
+            - bias[:, :, None]
+        )
+        quadratic = residual**2 + (col**2)[:, :, None] * np.asarray(V)[:, 0, 0][None, None, :]
+        log_density = -0.5 * np.sum(
+            np.log(2 * np.pi * variance) + quadratic / variance, axis=-1
+        )
+        log_prior = 0.5 * np.log(alpha / (2 * np.pi)) - 0.5 * alpha * col**2
+        integrand = np.exp(log_density + log_prior)
+        expected += np.log(
+            np.trapezoid(np.trapezoid(integrand, grid, axis=0), grid, axis=0)
+        )
+
+    npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-6)
+
+
+def test_gaussian_ard_estimate_prunes_inactive_latent():
+    """A latent column carrying no signal receives a much larger precision."""
+    T, N, K = 60, 8, 2
+    rng = np.random.default_rng(1)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    V = jnp.zeros((T, K, K))
+    loadings = np.zeros((N, K))
+    loadings[:, 0] = rng.normal(scale=0.8, size=N)
+    y = jnp.asarray(np.asarray(m) @ loadings.T + rng.normal(scale=0.3, size=(T, N)))
+    valid = jnp.ones((T, N), dtype=bool)
+
+    _, alpha, _ = gaussian_ard_estimate(y, valid, m, V)
+
+    assert float(alpha[1]) > 100.0 * float(alpha[0]), np.asarray(alpha)
 
 
 def test_gaussian_initialize_info_values(rng):
