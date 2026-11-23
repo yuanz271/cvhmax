@@ -62,7 +62,6 @@ ARD, an optimiser. Accordingly the M-step moves out of `CVI`:
 
 ```python
 class Estimator:
-    name: ClassVar[str]                  # registry key, e.g. "ridge"
     requires_conjugate_terms: bool
     isotropic: bool                      # equal precisions across columns
 
@@ -70,11 +69,18 @@ class Estimator:
     def estimate(self, likelihood, params, y, valid_y, m, V) -> tuple[Params, float]
 ```
 
-Estimators register under an explicit short name rather than `cls.__name__`,
-because the selected values are lowercase: `estimator="ridge"` and
-`estimator="ard"`, against classes `RidgeEstimator` and `ARDEstimator`.
-Registration keyed on `cls.__name__` cannot express that, so subclasses declare
-`name` and `__init_subclass__` registers on it.
+Estimation is selected with the exact class name, exactly as
+`observation="Gaussian"` selects a likelihood:
+
+```python
+CVHM(..., observation="Gaussian", estimator="RidgeEstimator")
+```
+
+Registry and serialization therefore key on `cls.__name__`, the same mechanism
+`CVI.registry` already uses, and no new registration machinery is needed. The
+lowercase short forms (`ridge`, `ard`) are a presentation convenience for a
+future command-line entry point, not a serializable value; they belong in that
+wrapper if and when one exists.
 
 Internally an estimator holds the precision diagonal in log-density units, with
 a zero at the bias index so `d` stays flat, and updates it in `estimate`. Both
@@ -103,10 +109,11 @@ be stated in the docs so nobody expects to keep the prior and change the solver.
 likelihood. `ARDEstimator` has `requires_conjugate_terms = True` because it
 forms the evidence.
 
-The unsupported pair `("Poisson", "ard")` is rejected in `CVHM.__post_init__`,
-which already resolves `CVI.registry[self.observation]`. No placeholder class
-and no registered estimator that always raises: the gap is carried by the
-interface and reported at the boundary, which is where input validation belongs.
+The unsupported pair `("Poisson", "ARDEstimator")` is rejected in
+`CVHM.__post_init__`, which already resolves `CVI.registry[self.observation]`.
+No placeholder class and no registered estimator that always raises: the gap is
+carried by the interface and reported at the boundary, which is where input
+validation belongs.
 
 ## Where `alpha` lives
 
@@ -183,12 +190,11 @@ the metric alongside `C`, `d`, and `R`.
 - Second axis is an estimator, not a prior: classes `RidgeEstimator` and
   `ARDEstimator`.
 - Class names are CamelCase throughout, acronyms included (`ARDEstimator`).
-- Config values follow the axis: `observation` selects a class by its CamelCase
-  name (`"Gaussian"`, `"Poisson"`), while `estimator` selects by a short
-  lowercase alias (`"ridge"`, `"ard"`). The two keys therefore read
-  differently side by side; that is a deliberate alias, not an oversight, and
-  the estimator docstring should say so.
-- The two estimators register under their declared `name`, not `cls.__name__`.
+- Serializable config values are exact class names, so `estimator` reads like
+  `observation` and both key on `cls.__name__`.
+- Lowercase short aliases (`ridge`, `ard`) are reserved for a command-line
+  wrapper. No such entry point exists in this repository, so nothing is built
+  for them now.
 
 ## Open questions
 
