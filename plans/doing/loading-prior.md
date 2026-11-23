@@ -7,7 +7,7 @@ chosen independently:
 
 ```text
 y ~ Likelihood(C, d, R; z)        z ~ GP(kernels)
-C ~ LoadingPrior
+C ~ N(0, alpha^-1)   via an Estimator that fits alpha and the loadings
 ```
 
 Today a `CVI` subclass bundles both. `Gaussian.update_readout` and
@@ -54,40 +54,53 @@ Then:
 
 ## Interface
 
+The second axis is an **estimator**, not a prior. Ridge and ARD share one prior
+(`C[:, k] ~ N(0, alpha_k^-1 I)`) and differ in whether `alpha` is fitted, which
+is an estimation choice rather than a distributional one. Naming them priors
+would imply a distinction that is not there, and both carry a solve and, for
+ARD, an optimiser. Accordingly the M-step moves out of `CVI`:
+
 ```python
-class LoadingPrior:
+class Estimator:
     requires_conjugate_terms: bool
     isotropic: bool                      # equal precisions across columns
 
-    def initialize(self, n_latents, dtype) -> Array      # alpha, shape (K,)
-    def precision(self, alpha) -> Array                  # (K + 1,), index 0 is 0
-    def update(self, alpha, terms, params) -> Array      # hyperparameter update
+    def initialize_params(self, likelihood, y, valid_y, n_factors, *, random_state)
+    def estimate(self, likelihood, params, y, valid_y, m, V) -> tuple[Params, float]
 ```
 
-`precision` returns the diagonal added to the loading precision, in log-density
-units, with a zero at the bias index so `d` stays flat. Both the closed-form
-Gaussian path and the Poisson objective path consume the same vector; the
-likelihood owns its own averaging, as it does now.
+Internally an estimator holds the precision diagonal in log-density units, with
+a zero at the bias index so `d` stays flat, and updates it in `estimate`. Both
+the closed-form Gaussian path and the Poisson objective path consume the same
+diagonal; the likelihood owns its own averaging, as it does now.
 
-Likelihoods stay where they are — `CVI` subclasses registered by name — and
-optionally expose the conjugate representation ARD needs:
+Likelihoods become observation models only — `initialize_info`, `update_pseudo`,
+and an optional conjugate representation:
 
 ```python
     def loading_terms(y, valid_y, m, V) -> tuple[Array, Array, Array] | None
 ```
 
-`Gaussian` implements it (`_gaussian_loading_moments`, already present).
+The estimator drives the solve: it uses the closed form when the likelihood
+offers conjugate terms, and a generic gradient solve otherwise. `Gaussian`
+implements `loading_terms` (`_gaussian_loading_moments`, already present);
 `Poisson` does not, because `exp(eta)` breaks conjugacy in `C`.
+
+Swapping estimators swaps the prior as well as the algorithm. That is intended
+here — the algorithm is determined by whether `alpha` is fitted — but it should
+be stated in the docs so nobody expects to keep the prior and change the solver.
 
 ## Capability, not a stub
 
-`Ridge` needs only `precision`, so it works with every likelihood. `ARD` has
-`requires_conjugate_terms = True` and needs `loading_terms`.
+`RidgeEstimator` needs only a penalty diagonal, so it works with every
+likelihood. `ARDEstimator` has `requires_conjugate_terms = True` because it
+forms the evidence.
 
-The unsupported pair `("Poisson", "ARD")` is rejected in `CVHM.__post_init__`,
-which already resolves `CVI.registry[self.observation]`. No placeholder class
-and no registered prior that always raises: the gap is carried by the interface
-and reported at the boundary, which is where input validation belongs.
+The unsupported pair `("Poisson", "ARDEstimator")` is rejected in
+`CVHM.__post_init__`, which already resolves `CVI.registry[self.observation]`.
+No placeholder class and no registered estimator that always raises: the gap is
+carried by the interface and reported at the boundary, which is where input
+validation belongs.
 
 ## Where `alpha` lives
 
@@ -109,11 +122,11 @@ which is representable directly and reads better in a manifest.
 
 ## Convergence metric
 
-The gauge is set by the prior, not the likelihood. An isotropic prior leaves
-the orthogonal rotation gauge, so `readout_change`'s Procrustes alignment is
-correct. A per-column prior leaves only permutation and sign, so the alignment
-would rotate away differences the prior treats as real and must be dropped.
-Drive this from `LoadingPrior.isotropic` rather than from a call-site flag.
+The gauge is set by the estimator's prior, not the likelihood. An isotropic
+prior leaves the orthogonal rotation gauge, so `readout_change`'s Procrustes
+alignment is correct. A per-column prior leaves only permutation and sign, so
+the alignment would rotate away differences the prior treats as real and must
+be dropped. Drive this from `Estimator.isotropic` rather than a call-site flag.
 
 When `alpha` is fitted it is part of the converged quantity and should enter
 the metric alongside `C`, `d`, and `R`.
@@ -123,13 +136,15 @@ the metric alongside `C`, `d`, and `R`.
 1. **Reconcile the convention.** Gaussian regularizer to `R_nn * diag(0, alpha)`
    with the bias unpenalised; Poisson to per-column `alpha`. Behaviour change,
    so gate on the benchmark.
-2. **Extract `LoadingPrior` and `Ridge`**, with `Ridge` reproducing step 1
-   exactly. No ARD yet — this step must not change any number.
+2. **Extract `Estimator` and `RidgeEstimator`**, reproducing step 1 exactly. No
+   ARD yet — this step must not change any number. This is where the M-step and
+   `initialize_params` move out of `CVI`; likelihoods keep only the E-step and
+   the data term, and `initialize_info`/`update_pseudo` are untouched.
 3. **Expose `Gaussian.loading_terms`** by moving `_gaussian_loading_moments`
-   onto the readout so the prior can request it.
-4. **Add `ARD`** and wire the evidence update into the Gaussian M-step,
+   onto the readout so the estimator can request it.
+4. **Add `ARDEstimator`** and wire the evidence update into its `estimate`,
    replacing the standalone `gaussian_ard_estimate` call path.
-5. **Thread the prior through `CVHM`** — config key, `_FitState`, boundary
+5. **Thread the estimator through `CVHM`** — config key, `_FitState`, boundary
    check, serialization, `readout_change`.
 6. **Docs and changelog.**
 
@@ -159,9 +174,14 @@ the metric alongside `C`, `d`, and `R`.
 
 ## Open questions
 
-- Config key and class names: `loading_prior="Ridge" | "ARD"`, classes `Ridge`
-  and `ARD`.
-- Whether `Ridge` accepts a scalar or a per-column vector. A vector costs
-  nothing and is the natural degenerate case of ARD.
+- Config key: `estimator="RidgeEstimator"` is vague about what is estimated;
+  `loading="RidgeEstimator"` trades precision for brevity. Class names
+  `RidgeEstimator` and `ARDEstimator` are settled.
+- Whether an `Estimator.registry` mirrors `CVI.registry`, or `CVHM` resolves the
+  estimator some other way.
+- Whether `RidgeEstimator` accepts a scalar or a per-column vector. A vector
+  costs nothing and is the natural degenerate case of ARD.
 - Whether `alpha` should enter `readout_change` scaled or in log space; raw
   precisions span many orders of magnitude.
+- Whether `CVI` keeps a `data_term` method, or the estimator calls
+  `loading_terms` for the conjugate case and a generic objective otherwise.
