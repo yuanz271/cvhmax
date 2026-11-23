@@ -325,6 +325,11 @@ def ridge_estimate(y, valid_y, m, V, R, lam=0.1):
     Conditional on the current noise variances, solve the expected ridge
     objective for each feature. Then update its noise variance from expected
     residual squares, including latent posterior uncertainty.
+
+    The penalty is `lam` on each loading and zero on the bias, i.e. a prior
+    `C[:, k] ~ N(0, lam^-1)` with a flat bias. The `R` factor is the unit
+    conversion that comes with solving each feature against its own noise
+    variance, not a change in the penalty's strength.
     """
     n_time, n_latents = m.shape
     augmented = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
@@ -334,7 +339,8 @@ def ridge_estimate(y, valid_y, m, V, R, lam=0.1):
     y = jnp.where(valid_y, y, 0.0)
     A = jnp.einsum("tn,tij->nij", observed, second)
     b = jnp.einsum("tn,ti->ni", y, augmented)
-    regularizer = lam * jnp.diag(R)[:, None, None] * jnp.eye(n_latents + 1)
+    penalised = jnp.concatenate((jnp.zeros(1), jnp.ones(n_latents)))
+    regularizer = lam * jnp.diag(R)[:, None, None] * jnp.diag(penalised)
     beta = jnp.linalg.solve(A + regularizer, b[..., None])[..., 0]
     d, C = beta[:, 0], beta[:, 1:]
     residual = jnp.where(valid_y, y - (m @ C.T + d), 0.0)

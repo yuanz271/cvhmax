@@ -141,7 +141,8 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
         A = X[selected].T @ X[selected]
         A[1:, 1:] += V[selected].sum(axis=0)
         b = X[selected].T @ y[selected, n]
-        beta = np.linalg.solve(A + 0.1 * variances[n] * np.eye(3), b)
+        penalised = np.array([0.0, 1.0, 1.0])  # flat bias, penalised loadings
+        beta = np.linalg.solve(A + 0.1 * variances[n] * np.diag(penalised), b)
         residual = y[selected, n] - X[selected] @ beta
         variance = np.mean(residual**2 + np.einsum("i,tij,j->t", beta[1:], V[selected], beta[1:]))
         expected_beta.append(beta)
@@ -156,7 +157,7 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
         residual = y - (means @ C.T + d)
         uncertainty = np.einsum("ni,tij,nj->tn", C, V, C)
         likelihood = 0.5 * np.sum(np.where(mask, np.log(r) + (residual**2 + uncertainty) / r, 0))
-        return likelihood + 0.05 * (np.sum(C**2) + np.sum(d**2))
+        return likelihood + 0.05 * np.sum(C**2)
 
     assert objective(updated) <= objective(params) + 1e-10
 

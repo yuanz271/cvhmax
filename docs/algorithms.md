@@ -88,9 +88,12 @@ matrix. After the last readout update, `fit()` performs a final inference pass:
 Gaussian observation noise is diagonal. For observed feature mask `w` and
 variance vector `r = diag(R)`, Gaussian information increments are
 `J = C.T @ diag(w / r) @ C` and `j = C.T @ (w * (y - d) / r)`. The readout
-update uses posterior second moments `V + m m.T` and updates each feature's
-loading, bias, and variance from its observed entries. Poisson CVI and the
-existing readout objective likewise sum only observed feature contributions.
+update solves a ridge objective per feature from the masked first and second
+moments, then refreshes that feature's noise variance from its expected
+residual squares. The penalty is `lam` on each loading and **zero on the
+bias**: the prior is `C[:, k] ~ N(0, lam^-1)` with a flat bias, so the fit does
+not shrink the baseline rate. Poisson CVI and the existing readout objective
+likewise sum only observed feature contributions.
 Initialization fills missing entries with per-feature observed means for Factor
 Analysis only; subsequent updates use the actual observation mask. For Poisson,
 FA count-space loadings are scaled to log-rate space, with a half-count per

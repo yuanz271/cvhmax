@@ -26,13 +26,19 @@ The same object — a squared L2 prior on the loadings — is implemented twice:
 | | Gaussian (`utils.ridge_estimate`) | Poisson (`poisson_readout_objective`) |
 |---|---|---|
 | Bias `d` | penalised | not penalised |
-| Scale | `lam * R_nn` (noise-relative) | absolute |
 | Form | separate closed-form solver | inside the LBFGS objective |
 | Hyperparameter | `lam = 0.1` | `gamma = 1.5` |
 
-Three disagreements on one concept. `lam = 0.1` is inert in practice (~0.05% of
-the objective), so the Gaussian bias penalty is small, but it is a modelling
-claim nobody chose.
+One real disagreement, on the bias. An earlier draft of this plan also claimed
+the scales disagreed, noise-relative against absolute; that was wrong. Solving
+each feature against its own noise variance brings an `R_nn` factor into the
+regulariser, so `lam * R_nn` is the unit conversion for an absolute precision
+`lam`, not a different penalty strength. Verified by re-deriving the normal
+equations.
+
+`lam = 0.1` is inert in practice (~0.05% of the objective), so the Gaussian bias
+penalty is small, but it is a modelling claim nobody chose, and it is wrong
+once the loading prior is stated explicitly.
 
 ## The convention
 
@@ -146,9 +152,11 @@ the metric alongside `C`, `d`, and `R`.
 
 ## Steps
 
-1. **Reconcile the convention.** Gaussian regularizer to `R_nn * diag(0, alpha)`
-   with the bias unpenalised; Poisson to per-column `alpha`. Behaviour change,
-   so gate on the benchmark.
+1. **Reconcile the convention.** Drop the bias penalty from the Gaussian ridge;
+   the loading penalty already has the right scale and `lam` already is the
+   precision. Behaviour change, so gate on the benchmark. Done: benchmark and
+   full suite pass, and the reference objective in `test_masking.py` was
+   updated to the flat-bias convention.
 2. **Extract `Estimator` and `RidgeEstimator`**, reproducing step 1 exactly. No
    ARD yet — this step must not change any number. This is where the M-step and
    `initialize_params` move out of `CVI`; likelihoods keep only the E-step and
