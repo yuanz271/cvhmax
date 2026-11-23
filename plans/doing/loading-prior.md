@@ -62,12 +62,19 @@ ARD, an optimiser. Accordingly the M-step moves out of `CVI`:
 
 ```python
 class Estimator:
+    name: ClassVar[str]                  # registry key, e.g. "ridge"
     requires_conjugate_terms: bool
     isotropic: bool                      # equal precisions across columns
 
     def initialize_params(self, likelihood, y, valid_y, n_factors, *, random_state)
     def estimate(self, likelihood, params, y, valid_y, m, V) -> tuple[Params, float]
 ```
+
+Estimators register under an explicit short name rather than `cls.__name__`,
+because the selected values are lowercase: `estimator="ridge"` and
+`estimator="ard"`, against classes `RidgeEstimator` and `ARDEstimator`.
+Registration keyed on `cls.__name__` cannot express that, so subclasses declare
+`name` and `__init_subclass__` registers on it.
 
 Internally an estimator holds the precision diagonal in log-density units, with
 a zero at the bias index so `d` stays flat, and updates it in `estimate`. Both
@@ -96,11 +103,10 @@ be stated in the docs so nobody expects to keep the prior and change the solver.
 likelihood. `ARDEstimator` has `requires_conjugate_terms = True` because it
 forms the evidence.
 
-The unsupported pair `("Poisson", "ARDEstimator")` is rejected in
-`CVHM.__post_init__`, which already resolves `CVI.registry[self.observation]`.
-No placeholder class and no registered estimator that always raises: the gap is
-carried by the interface and reported at the boundary, which is where input
-validation belongs.
+The unsupported pair `("Poisson", "ard")` is rejected in `CVHM.__post_init__`,
+which already resolves `CVI.registry[self.observation]`. No placeholder class
+and no registered estimator that always raises: the gap is carried by the
+interface and reported at the boundary, which is where input validation belongs.
 
 ## Where `alpha` lives
 
@@ -172,13 +178,19 @@ the metric alongside `C`, `d`, and `R`.
 - **Structured or hierarchical loadings.** The `precision` interface is
   deliberately a diagonal; widening it is a later decision.
 
+## Settled
+
+- Second axis is an estimator, not a prior: classes `RidgeEstimator` and
+  `ARDEstimator`, selected by lowercase short names `"ridge"` and `"ard"`.
+- The two estimators register under their declared `name`, not `cls.__name__`.
+
 ## Open questions
 
-- Config key: `estimator="RidgeEstimator"` is vague about what is estimated;
-  `loading="RidgeEstimator"` trades precision for brevity. Class names
-  `RidgeEstimator` and `ARDEstimator` are settled.
-- Whether an `Estimator.registry` mirrors `CVI.registry`, or `CVHM` resolves the
-  estimator some other way.
+- The config key itself is `estimator`, which does not say what is estimated;
+  `loading` would be more precise. Worth one line of docstring either way.
+- `observation` uses capitalised class names (`"Gaussian"`, `"Poisson"`) while
+  `estimator` uses lowercase short names. Intentional for now, but the two keys
+  read inconsistently side by side.
 - Whether `RidgeEstimator` accepts a scalar or a per-column vector. A vector
   costs nothing and is the natural degenerate case of ARD.
 - Whether `alpha` should enter `readout_change` scaled or in log space; raw
