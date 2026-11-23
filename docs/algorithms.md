@@ -133,11 +133,17 @@ at the supplied moments.
 Precisions are optimised, with a floor, in an unconstrained variable: the
 evidence flattens rather than diverges as a precision vanishes, so a floor is
 required for the optimisation to be well posed. Observation variances are
-*fixed*, not optimised: the surrogate density grows without bound as a variance
-vanishes, so only the precisions are fitted. A large fitted precision marks a
-column shrunk towards zero, and the separation between precisions is what
-identifies an effective dimensionality; the estimator shrinks rather than
-exactly deleting columns.
+refreshed from expected residuals after each precision update, so the two are
+jointly consistent at the returned point; they are never optimised against the
+surrogate evidence itself, which grows without bound as a variance vanishes.
+A large fitted precision marks a column shrunk towards zero, and the separation
+between precisions is what identifies an effective dimensionality; the
+estimator shrinks rather than exactly deleting columns.
+
+`gaussian_ard_estimate` replaces `ridge_estimate` as the Gaussian loading
+update rather than supplementing it, since both regularise the same block. It
+owns the whole M-step (`loadings`, then variances, then precisions) and does
+not call the ridge solver.
 
 ## Gaussian Parameterizations
 
