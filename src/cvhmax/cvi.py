@@ -358,7 +358,7 @@ def poisson_readout_objective(
     valid_y: Array,
     m: Array,
     V: Array,
-    gamma: float = 10.0,
+    gamma: float = 1.5,
 ) -> float:
     """Average Poisson readout objective per observed time step.
 
@@ -377,8 +377,10 @@ def poisson_readout_objective(
         Posterior means with shape `(samples, latent_dim)`.
     V : Array
         Posterior covariances with shape `(samples, latent_dim, latent_dim)`.
-    gamma : float, default=10.0
-        Strength of the squared L2 penalty on the loading matrix.
+    gamma : float, default=1.5
+        Strength of the squared L2 penalty on the loading matrix. This default
+        matches the effective strength of the previous norm penalty, whose
+        gradient magnitude was `gamma` rather than `2 * gamma * ||C||`.
 
     Returns
     -------

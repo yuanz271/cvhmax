@@ -7,7 +7,9 @@
 - Changed the Poisson readout loading penalty from the L2 norm `‖C‖` to the
   squared L2 norm `‖C‖²`. The norm penalty has a constant-magnitude gradient, so
   it either left the fit unchanged or drove the loading matrix to exactly zero;
-  the squared penalty shrinks smoothly and monotonically.
+  the squared penalty shrinks smoothly and monotonically. The default `gamma`
+  drops from 10.0 to 1.5 so the effective strength is unchanged: the old
+  gradient magnitude was `gamma`, the new one is `2 * gamma * ‖C‖`.
 
 ## 0.3.0
 
