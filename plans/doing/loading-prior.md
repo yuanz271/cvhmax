@@ -181,16 +181,19 @@ the metric alongside `C`, `d`, and `R`.
 ## Settled
 
 - Second axis is an estimator, not a prior: classes `RidgeEstimator` and
-  `ARDEstimator`, selected by lowercase short names `"ridge"` and `"ard"`.
+  `ARDEstimator`.
+- Class names are CamelCase throughout, acronyms included (`ARDEstimator`).
+- Config values follow the axis: `observation` selects a class by its CamelCase
+  name (`"Gaussian"`, `"Poisson"`), while `estimator` selects by a short
+  lowercase alias (`"ridge"`, `"ard"`). The two keys therefore read
+  differently side by side; that is a deliberate alias, not an oversight, and
+  the estimator docstring should say so.
 - The two estimators register under their declared `name`, not `cls.__name__`.
 
 ## Open questions
 
 - The config key itself is `estimator`, which does not say what is estimated;
   `loading` would be more precise. Worth one line of docstring either way.
-- `observation` uses capitalised class names (`"Gaussian"`, `"Poisson"`) while
-  `estimator` uses lowercase short names. Intentional for now, but the two keys
-  read inconsistently side by side.
 - Whether `RidgeEstimator` accepts a scalar or a per-column vector. A vector
   costs nothing and is the natural degenerate case of ARD.
 - Whether `alpha` should enter `readout_change` scaled or in log space; raw
