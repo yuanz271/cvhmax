@@ -378,7 +378,7 @@ def poisson_readout_objective(
     V : Array
         Posterior covariances with shape `(samples, latent_dim, latent_dim)`.
     gamma : float, default=10.0
-        Strength of loading matrix L2 regularisation.
+        Strength of the squared L2 penalty on the loading matrix.
 
     Returns
     -------
@@ -396,7 +396,7 @@ def poisson_readout_objective(
         return jnp.sum(jnp.where(mask_t, jnp.exp(eta) - eta * observed_y, 0.0))
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
-    return (jnp.sum(step_objectives) + gamma * jnp.linalg.norm(C)) / n_valid_steps
+    return (jnp.sum(step_objectives) + gamma * jnp.sum(C**2)) / n_valid_steps
 
 
 def poisson_cvi_step_stats(

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- Changed the Poisson readout loading penalty from the L2 norm `‖C‖` to the
+  squared L2 norm `‖C‖²`. The norm penalty has a constant-magnitude gradient, so
+  it either left the fit unchanged or drove the loading matrix to exactly zero;
+  the squared penalty shrinks smoothly and monotonically.
+
 ## 0.3.0
 
 ### Breaking changes

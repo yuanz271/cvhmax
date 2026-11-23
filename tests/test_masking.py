@@ -87,7 +87,7 @@ def test_masked_poisson_information_and_objective():
             quad = jnp.einsum("ni,ij,nj->n", Ct, covariances[t], Ct)
             eta = jnp.minimum(linear + 0.5 * quad, MAX_LOGRATE)
             total += jnp.sum(jnp.exp(eta) - yt * eta)
-        return (total + gamma * jnp.linalg.norm(C)) / 2
+        return (total + gamma * jnp.sum(C**2)) / 2
 
     def objective(params):
         return poisson_readout_objective(params, y, mask, means, covariances, gamma)
@@ -117,7 +117,7 @@ def test_all_observed_poisson_objective_preserves_step_scaling():
     m = jnp.array([[0.2], [-0.1]])
     V = jnp.array([[[0.3]], [[0.4]]])
     eta = jnp.minimum(m @ C.T + d + 0.5 * V[:, 0, 0, None] * C[:, 0] ** 2, MAX_LOGRATE)
-    expected = (jnp.sum(jnp.exp(eta) - y * eta) + 0.3 * jnp.linalg.norm(C)) / len(y)
+    expected = (jnp.sum(jnp.exp(eta) - y * eta) + 0.3 * jnp.sum(C**2)) / len(y)
     actual = poisson_readout_objective((C, d), y, jnp.ones_like(y, dtype=bool), m, V, gamma=0.3)
     npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
