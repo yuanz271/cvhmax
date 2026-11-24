@@ -156,6 +156,13 @@ marginal likelihood of an ARD linear regression on that design and the fit
 matches a standard ARD regression. With `V > 0` the estimator maximises a lower
 bound instead, because the latents are uncertain.
 
+The bias is a parameter of this model, integrated under a flat prior, so the
+fitted observation variance carries residual degrees of freedom
+`n - sum(gamma) - 1`. An implementation that centers the design away has no bias
+column in its Gram and uses `n - sum(gamma)`; the two agree as `n` grows. The
+relevance precisions are shared across features here, so the structure is
+hierarchical rather than one ARD regression per feature.
+
 ## Gaussian Parameterizations
 
 The codebase uses two parameterizations of multivariate Gaussians:
