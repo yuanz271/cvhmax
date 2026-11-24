@@ -18,11 +18,10 @@ from typing import ClassVar
 
 import jax
 import numpy as np
-import scipy.optimize
 from jax import Array, numpy as jnp
 
 from .cvi import Params
-from .utils import ARD_LOG_ALPHA_FLOOR, LoadingTerms, lbfgs_solve
+from .utils import LoadingTerms, lbfgs_solve
 
 Penalty = Array
 
@@ -233,6 +232,21 @@ class ARDEstimator(Estimator):
     evidence integral is only closed form when the data term is quadratic in
     the loadings.
 
+    Both stationary points have closed forms, so the fit is a fixed-point
+    iteration rather than an optimisation: for each feature,
+
+    ```
+    gamma_nk = 1 - alpha_k * Sigma_n[k, k]
+    R_n      = RSS_n / (N_n - sum_k gamma_nk)
+    alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
+    ```
+
+    with `Sigma_n` the exact posterior covariance `(Prec_n / R_n + diag(0,
+    alpha))^-1` and `RSS_n` the expected residual sum of squares including
+    latent uncertainty. The Gamma hyperprior parameters `a, b` are the defaults
+    of the reference implementation: weak, but they bound `alpha` by
+    construction, which the plain MacKay rule does not.
+
     Fitted precisions are *not* zeros: an irrelevant column is shrunk towards
     zero and its precision plateaus at a large finite value, so exact selection
     remains the caller's decision.
@@ -244,8 +258,9 @@ class ARDEstimator(Estimator):
         self,
         alpha: float | Array = 1.0,
         *,
-        alpha_shape: float | None = None,
-        alpha_rate: float | None = None,
+        alpha_shape: float = 1.0 + 1e-6,
+        alpha_rate: float = 1e-6,
+        iterations: int = 50,
     ):
         """Construct an ARD estimator.
 
@@ -253,16 +268,17 @@ class ARDEstimator(Estimator):
         ----------
         alpha : float or Array, default=1.0
             Initial loading precision.
-        alpha_shape : float, optional
-            Shape of a Gamma hyperprior on the precisions. Both this and
-            `alpha_rate` are needed to enable it. With a hyperprior the
-            precisions are bounded at both ends by construction.
-        alpha_rate : float, optional
+        alpha_shape : float, default=1.0 + 1e-6
+            Shape of the Gamma hyperprior on the precisions.
+        alpha_rate : float, default=1e-6
             Rate of the Gamma hyperprior on the precisions.
+        iterations : int, default=50
+            Fixed-point iterations.
         """
         super().__init__(alpha)
         self.alpha_shape = alpha_shape
         self.alpha_rate = alpha_rate
+        self.iterations = iterations
         # Fitted per-column precisions leave only permutation and sign.
         self.isotropic = False
 
@@ -273,59 +289,46 @@ class ARDEstimator(Estimator):
         terms = likelihood.loading_terms(y, valid_y, m, V)
         n_latents = m.shape[-1]
 
-        def negative_evidence(unconstrained: Array) -> Array:
-            # An unconstrained variable with the precision floored: the
-            # evidence flattens, rather than diverging, as a precision vanishes.
-            log_alpha = ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(
-                unconstrained[:n_latents]
-            )
-            return -ard_evidence(
-                terms,
-                log_alpha,
-                unconstrained[n_latents:],
-                alpha_shape=self.alpha_shape,
-                alpha_rate=self.alpha_rate,
-            )
+        def solve(alpha_: Array, variance_: Array) -> tuple[Array, Array, Array]:
+            """Posterior covariance and moments at the current hyperparameters."""
+            precision = terms.precision / variance_[:, None, None] + jnp.diag(
+                jnp.concatenate((jnp.zeros(1), alpha_))
+            )[None]
+            covariance = jnp.linalg.inv(precision)
+            beta = covariance @ (terms.linear / variance_[:, None])[..., None]
+            return covariance, beta[..., 0], jnp.diagonal(covariance, axis1=1, axis2=2)
 
-        value_and_grad = jax.jit(jax.value_and_grad(negative_evidence))
-
-        def objective(unconstrained):
-            value, grad = value_and_grad(jnp.asarray(unconstrained))
-            return float(value), np.asarray(grad)
-
-        variance = jnp.diag(params.R)
-        initial = jnp.concatenate(
-            (
-                jnp.log(
-                    jnp.expm1(
-                        jnp.log(jnp.broadcast_to(self.alpha, (n_latents,)))
-                        - ARD_LOG_ALPHA_FLOOR
-                    )
-                ),
-                jnp.log(variance),
+        def step(carry, _):
+            alpha_, variance_ = carry
+            _, beta, diagonal = solve(alpha_, variance_)
+            loadings, bias = beta[:, 1:], beta[:, 0]
+            effective = 1.0 - jnp.concatenate((jnp.zeros(1), alpha_))[None, :] * diagonal
+            alpha_next = (
+                jnp.sum(effective[:, 1:], axis=0) + 2.0 * self.alpha_shape - 2.0
+            ) / (jnp.sum(loadings**2, axis=0) + 2.0 * self.alpha_rate)
+            residual = jnp.where(valid_y, y - (m @ loadings.T + bias), 0.0)
+            uncertainty = jnp.einsum("nk,tkl,nl->tn", loadings, V, loadings)
+            rss = jnp.sum(
+                jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
             )
-        )
-        result = scipy.optimize.minimize(
-            objective,
-            np.asarray(initial),
-            jac=True,
-            method="L-BFGS-B",
-            options={"maxiter": 5000, "ftol": 1e-12, "gtol": 1e-10},
-        )
-        optimum = jnp.asarray(result.x)
-        alpha = jnp.exp(
-            ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(optimum[:n_latents])
-        )
-        params = _conjugate_solve(
+            variance_next = rss / (terms.counts - jnp.sum(effective, axis=-1))
+            return (alpha_next, variance_next), None
+
+        initial = (jnp.broadcast_to(self.alpha, (n_latents,)), jnp.diag(params.R))
+        (alpha, variance), _ = jax.lax.scan(step, initial, None, length=self.iterations)
+
+        _, beta, _ = solve(alpha, variance)
+        evidence = ard_evidence(
             terms,
-            jnp.concatenate((jnp.zeros(1), alpha)),
-            Params(C=params.C, d=params.d, R=jnp.diag(jnp.exp(optimum[n_latents:]))),
-            y,
-            valid_y,
-            m,
-            V,
+            jnp.log(alpha),
+            jnp.log(variance),
+            alpha_shape=self.alpha_shape,
+            alpha_rate=self.alpha_rate,
         )
-        return params, -float(result.fun)
+        return (
+            Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance)),
+            evidence,
+        )
 
 
 def ard_evidence(
