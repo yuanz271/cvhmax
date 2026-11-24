@@ -133,20 +133,28 @@ where `Prec_n` and `c_n` are the sufficient statistics built from `y`, `m`, and
 Jensen *lower* bound on `log E_q[p]`, the value is a lower bound on the evidence
 at the supplied moments.
 
-Precisions are optimised, with a floor, in an unconstrained variable: the
-evidence flattens rather than diverges as a precision vanishes, so a floor is
-required for the optimisation to be well posed. Observation variances are
-refreshed from expected residuals after each precision update, so the two are
-jointly consistent at the returned point; they are never optimised against the
-surrogate evidence itself, which grows without bound as a variance vanishes.
-A large fitted precision marks a column shrunk towards zero, and the separation
-between precisions is what identifies an effective dimensionality; the
-estimator shrinks rather than exactly deleting columns.
+Precisions and observation variances are both maximised against the evidence,
+jointly, mirroring the evidence-based noise update used in the ARD literature.
+Precisions are optimised with a floor in an unconstrained variable, since the
+evidence flattens rather than diverges as a precision vanishes.
+
+Sparsity is *not* exact. A fitted precision plateaus at a large but finite
+value and the column is shrunk towards zero rather than deleted, because the
+evidence tends to the reduced model's evidence as a precision grows, and with
+fitted latent moments a small non-zero loading can beat removal. Exact zeros
+require an explicit selection step; this package reports the precisions and
+leaves that choice to the caller. The reference ARD implementation behaves the
+same way: with pruning disabled its precisions plateau, and its exact zeros
+come from a hard precision threshold rather than from divergence.
 
 `gaussian_ard_estimate` replaces `ridge_estimate` as the Gaussian loading
-update rather than supplementing it, since both regularise the same block. It
-owns the whole M-step (`loadings`, then variances, then precisions) and does
-not call the ridge solver.
+update rather than supplementing it, since both regularise the same block.
+
+With `V = 0` the Jensen bound is tight: `E_q[log p]` becomes the ordinary
+Gaussian log-likelihood at the latent means, so the evidence is the exact
+marginal likelihood of an ARD linear regression on that design and the fit
+matches a standard ARD regression. With `V > 0` the estimator maximises a lower
+bound instead, because the latents are uncertain.
 
 ## Gaussian Parameterizations
 

@@ -271,7 +271,15 @@ def _gaussian_loading_moments(
 
 
 def gaussian_ard_evidence(
-    y: Array, valid_y: Array, m: Array, V: Array, log_alpha: Array, log_R: Array
+    y: Array,
+    valid_y: Array,
+    m: Array,
+    V: Array,
+    log_alpha: Array,
+    log_R: Array,
+    *,
+    alpha_shape: float | None = None,
+    alpha_rate: float | None = None,
 ) -> Array:
     """Marginal log-evidence of the Gaussian readout under ARD loading priors.
 
@@ -294,6 +302,11 @@ def gaussian_ard_evidence(
         Log ARD precisions, shape ``(latent_dim (K),)``.
     log_R : Array
         Log diagonal observation variances, shape ``(obs_dim (N),)``.
+    alpha_shape : float, optional
+        Shape of a Gamma hyperprior on the precisions. Both this and
+        `alpha_rate` must be given to enable it.
+    alpha_rate : float, optional
+        Rate of the Gamma hyperprior on the precisions.
 
     Returns
     -------
@@ -324,7 +337,7 @@ def gaussian_ard_evidence(
         jnp.sum(log_alpha - jnp.log(2 * jnp.pi))
         + (log_alpha.shape[0] + 1) * jnp.log(2 * jnp.pi)
     )
-    return (
+    evidence = (
         jnp.sum(
             -0.5 * counts * jnp.log(2 * jnp.pi * variance)
             - 0.5 * squared / variance
@@ -333,6 +346,13 @@ def gaussian_ard_evidence(
         )
         + normalisation
     )
+    if alpha_shape is not None and alpha_rate is not None:
+        # Gamma(shape, rate) on the precisions, shared across features. It
+        # bounds alpha at both ends, so a precision cannot run away and no
+        # separate floor is needed.
+        evidence = evidence + (alpha_shape - 1.0) * jnp.sum(log_alpha)
+        evidence = evidence - alpha_rate * jnp.sum(jnp.exp(log_alpha))
+    return evidence
 
 
 def gaussian_ard_estimate(
@@ -343,7 +363,8 @@ def gaussian_ard_estimate(
     *,
     R: Array | None = None,
     alpha_init: Array | None = None,
-    rounds: int = 4,
+    alpha_shape: float | None = None,
+    alpha_rate: float | None = None,
 ) -> tuple[Params, Array, float]:
     """Fit Gaussian loadings with per-latent ARD precisions.
 
@@ -354,10 +375,9 @@ def gaussian_ard_estimate(
     effective dimensionality. Latent moments are held fixed, so this is a
     conditional analysis.
 
-    This replaces the ridge loading update rather than supplementing it: it
-    owns the whole readout M-step, alternating the precision fit with the
-    loading solve and the variance refresh. Combined with a separate ridge
-    penalty it would double-regularise the same block.
+    This replaces the ridge loading update rather than supplementing it:
+    combined with a separate ridge penalty it would double-regularise the same
+    block.
 
     Parameters
     ----------
@@ -374,8 +394,12 @@ def gaussian_ard_estimate(
         the marginal variance of each feature about its masked mean.
     alpha_init : Array, optional
         Initial ARD precisions, shape ``(K,)``. Defaults to ones.
-    rounds : int, default=4
-        Number of loadings/variances/precisions refinements.
+    alpha_shape : float, optional
+        Shape of a Gamma hyperprior on the precisions, passed through to
+        :func:`gaussian_ard_evidence`. Bounds the precisions at both ends, so
+        no floor is relied on.
+    alpha_rate : float, optional
+        Rate of the Gamma hyperprior on the precisions.
 
     Returns
     -------
@@ -385,10 +409,13 @@ def gaussian_ard_estimate(
 
     Notes
     -----
-    The observation variances are re-estimated from expected residuals after
-    each precision update, so the two are jointly consistent at the returned
-    point. They are never optimised against the surrogate evidence itself,
-    which grows without bound as a variance vanishes.
+    Precisions and observation variances are maximised jointly, mirroring the
+    evidence-based update used for the noise level in the ARD literature. The
+    loadings themselves are integrated out rather than profiled.
+
+    With ``V = 0`` the Jensen bound below is tight, so the evidence is the exact
+    marginal likelihood of an ARD linear regression on the latent means and the
+    result matches a standard ARD regression on the same design.
     """
     n_latent = m.shape[1]
     counts = jnp.sum(valid_y.astype(m.dtype), axis=0)
@@ -399,56 +426,53 @@ def gaussian_ard_estimate(
         variance = jnp.diag(jnp.asarray(R))
     alpha = jnp.ones(n_latent) if alpha_init is None else jnp.asarray(alpha_init)
 
-    def solve_loadings(alpha_: Array, variance_: Array) -> tuple[Array, Array]:
-        precision, linear, _ = _gaussian_loading_moments(y, valid_y, m, V)
-        posterior = precision / variance_[:, None, None] + jnp.diag(
-            jnp.concatenate((jnp.zeros(1), alpha_))
-        )[None]
-        beta = jnp.linalg.solve(
-            posterior, (linear / variance_[:, None])[..., None]
-        )[..., 0]
-        return beta[:, 1:], beta[:, 0]
-
-    def maximise_evidence(variance_: Array, start: Array) -> Array:
+    def negative_evidence(unconstrained: Array) -> Array:
         # An unconstrained variable with the precision floored: the evidence
         # flattens, rather than diverging, as a precision vanishes.
-        def negative_evidence(unconstrained: Array) -> Array:
-            log_alpha = ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(unconstrained)
-            return -gaussian_ard_evidence(
-                y, valid_y, m, V, log_alpha, jnp.log(variance_)
-            )
-
-        value_and_grad = jax.jit(jax.value_and_grad(negative_evidence))
-
-        def objective(unconstrained):
-            value, grad = value_and_grad(jnp.asarray(unconstrained))
-            return float(value), np.asarray(grad)
-
-        initial = jnp.log(jnp.expm1(jnp.log(start) - ARD_LOG_ALPHA_FLOOR))
-        result = scipy.optimize.minimize(
-            objective,
-            np.asarray(initial),
-            jac=True,
-            method="L-BFGS-B",
-            options={"maxiter": 5000, "ftol": 1e-12, "gtol": 1e-10},
+        log_alpha = ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(unconstrained[:n_latent])
+        return -gaussian_ard_evidence(
+            y,
+            valid_y,
+            m,
+            V,
+            log_alpha,
+            unconstrained[n_latent:],
+            alpha_shape=alpha_shape,
+            alpha_rate=alpha_rate,
         )
-        return jnp.exp(ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(jnp.asarray(result.x)))
 
-    for _ in range(rounds):
-        alpha = maximise_evidence(variance, alpha)
-        loadings, bias = solve_loadings(alpha, variance)
-        residual = jnp.where(valid_y, y - (m @ loadings.T + bias), 0.0)
-        uncertainty = jnp.einsum("nk,tkl,nl->tn", loadings, V, loadings)
-        variance = jnp.sum(
-            jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
-        ) / counts
+    value_and_grad = jax.jit(jax.value_and_grad(negative_evidence))
 
-    loadings, bias = solve_loadings(alpha, variance)
-    params = Params(C=loadings, d=bias, R=jnp.diag(variance))
-    evidence = float(
-        gaussian_ard_evidence(y, valid_y, m, V, jnp.log(alpha), jnp.log(variance))
+    def objective(unconstrained):
+        value, grad = value_and_grad(jnp.asarray(unconstrained))
+        return float(value), np.asarray(grad)
+
+    initial = jnp.concatenate(
+        (
+            jnp.log(jnp.expm1(jnp.log(alpha) - ARD_LOG_ALPHA_FLOOR)),
+            jnp.log(variance),
+        )
     )
-    return params, alpha, evidence
+    result = scipy.optimize.minimize(
+        objective,
+        np.asarray(initial),
+        jac=True,
+        method="L-BFGS-B",
+        options={"maxiter": 5000, "ftol": 1e-12, "gtol": 1e-10},
+    )
+    optimum = jnp.asarray(result.x)
+    alpha = jnp.exp(ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(optimum[:n_latent]))
+    variance = jnp.exp(optimum[n_latent:])
+    precision, linear, _ = _gaussian_loading_moments(y, valid_y, m, V)
+    posterior = precision / variance[:, None, None] + jnp.diag(
+        jnp.concatenate((jnp.zeros(1), alpha))
+    )[None]
+    beta = jnp.linalg.solve(
+        posterior, (linear / variance[:, None])[..., None]
+    )[..., 0]
+    return Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance)), alpha, -float(
+        result.fun
+    )
 
 
 class Gaussian(CVI):

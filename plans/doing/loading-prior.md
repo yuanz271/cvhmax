@@ -195,6 +195,23 @@ the metric alongside `C`, `d`, and `R`.
 
 ## Settled
 
+- **The bias is unpenalised**: a flat prior on `d`, penalty on `C` only.
+- **Hyperprior instead of a floor.** `alpha` takes a Gamma hyperprior
+  (`alpha_shape`, `alpha_rate`), which bounds it at both ends rather than by an
+  ad-hoc floor, and is the standard formulation; the reference implementation
+  uses it on both precisions. Enabled as an option and measured: with a weak
+  prior `Gamma(1 + 1e-6, 1e-6)` an irrelevant column's precision drops from
+  `9.5e10` to `9.9e3` and its norm from `6e-10` to `5e-3`, matching the
+  reference behaviour of plateauing rather than diverging. The strength is a
+  knob; the default is to leave it off.
+- **Observation variances are fitted by the evidence**, jointly with `alpha`,
+  not frozen. An earlier revision of this plan froze them because the evidence
+  appeared to diverge as a variance vanished; that was an error in the
+  evidence's normalisation, since fixed, and the maximum in `R` is interior and
+  clean (`log R* = -2` at `V = 0`, `-1` at `V = 0.3`).
+- **No hard threshold.** Report `alpha` and document that a large value marks a
+  shrunk column; leave any cut to the caller.
+
 - Second axis is an estimator, not a prior: classes `RidgeEstimator` and
   `ARDEstimator`.
 - Class names are CamelCase throughout, acronyms included (`ARDEstimator`).
