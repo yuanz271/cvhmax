@@ -23,6 +23,9 @@
 
 ### Changed
 
+- Bumped the archive format version from 1 to 2: manifests now record `estimator`
+  and `estimator_config`, and the parameter tree has an optional `alpha` leaf.
+  Archives from earlier releases are rejected with an unsupported-version error.
 - Raised the default CVI step size `lr` from 0.1 to 1.0. The damped update has the
   same fixed point at any `lr`, so this only affects how fast the inner loop
   reaches it. At the old default with `cvi_iter=5`, Poisson inference stopped

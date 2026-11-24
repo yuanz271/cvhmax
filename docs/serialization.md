@@ -98,7 +98,7 @@ A representative manifest is:
 ```json
 {
   "format": "cvhmax.CVHM",
-  "version": 1,
+  "version": 2,
   "model": {
     "n_components": 2,
     "dt": 1.0,

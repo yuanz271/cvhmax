@@ -18,7 +18,7 @@ from .cvi import Params
 from .estimator import Estimator
 
 FORMAT = "cvhmax.CVHM"
-VERSION = 1
+VERSION = 2
 _MANIFEST = "manifest.json"
 _PARAMS = "params.eqx"
 _MAX_MANIFEST_BYTES = 1 << 20
