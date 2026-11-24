@@ -295,7 +295,7 @@ def test_joint_sequences_share_latent_coordinates(observation):
         n_components=n_latents, dt=1.0, kernels=[kernel, kernel],
         observation=observation,
         max_iter=100, tol=1e-4, min_iter=2, convergence_patience=2,
-        cvi_iter=5, lr=0.1,
+        cvi_iter=5,
     )
     model.fit(jnp.asarray(y), jnp.asarray(training_mask), random_state=42)
     means, covariances = map(np.asarray, model.posterior)

@@ -102,7 +102,7 @@ A representative manifest is:
   "model": {
     "n_components": 2,
     "dt": 1.0,
-    "lr": 0.1,
+    "lr": 1.0,
     "max_iter": 10,
     "cvi_iter": 5,
     "tol": 0.05,

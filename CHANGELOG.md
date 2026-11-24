@@ -22,6 +22,11 @@
 
 ### Changed
 
+- Raised the default CVI step size `lr` from 0.1 to 1.0. The damped update has the
+  same fixed point at any `lr`, so this only affects how fast the inner loop
+  reaches it. At the old default with `cvi_iter=5`, Poisson inference stopped
+  far from its fixed point (R² 0.50 against the exact MAP on a 256-step problem);
+  at `lr=1.0` it matches the MAP to R² 1.0000 in 10 steps.
 - Stopped penalising the Gaussian readout bias. The ridge penalty now applies to
   the loadings only, matching the Poisson readout and the flat-bias prior the
   loading regularisers are defined against.

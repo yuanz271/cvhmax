@@ -136,7 +136,7 @@ class CVHM:
         Initial CVI parameter state. Defaults to ``None``.
     observation : str, default="Gaussian"
         Name of the CVI observation model registered in `CVI.registry`.
-    lr : float, default=0.1
+    lr : float, default=1.0
         Learning rate for pseudo-observation updates.
     max_iter : int, default=10
         Maximum number of outer EM iterations.
@@ -164,7 +164,7 @@ class CVHM:
     observation: str = "Gaussian"
     estimator: str = "RidgeEstimator"
     estimator_config: dict | None = None
-    lr: float = 0.1
+    lr: float = 1.0
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 10
     cvi_iter: int = 5
