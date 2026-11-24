@@ -45,33 +45,21 @@ configured criteria are met or when it reaches the hard `max_iter` cap. Set
 Stopping uses training-fit state only; held-out likelihood or predictive
 metrics are not used.
 
-After each outer iteration, the implementation compares three readout
-parameter quantities:
+After each outer iteration, the implementation compares the loading Gram
+matrix `C C^T`, the bias `d`, and the noise covariance `R`. Poisson uses a
+scalar zero sentinel for `R`. The Gram comparison is invariant to orthogonal
+rotations and is computed with a reduced QR decomposition of the loading
+matrices, avoiding feature-by-feature products. Its difference is divided by
+`(||C_new|| + ||C_old||) * max(1, ||C_old||)`, so small loadings are not
+suppressed quadratically. Bias and covariance differences are divided by
+`max(1, ||reference||)`.
 
-- change in the loading Gram matrix `C C^T`, which is unchanged by any latent
-  rotation `C -> C Q` and so is blind to the GLM sign/permutation/orthogonal
-  rotation gauge. Predictions depend on `C` only through `C C^T`, so this asks
-  whether the fitted model has stopped changing rather than the basis it is
-  written in;
-- readout bias change (`d`); and
-- observation-noise covariance change (`R`); `R` is always a JAX-compatible
-  array/scalar, with Poisson using a preserved scalar zero sentinel so this
-  metric is exactly zero.
+ARD also checks the normalized change in `C` itself and the largest absolute
+change in log precision. Its column-wise prior breaks rotation symmetry, so a
+stable Gram matrix alone does not imply stable relevance. The detector does
+not compare full latent posterior arrays or map them into observation space.
 
-The latent GP prior, kernels, time step, and data are fixed during `fit`. Thus,
-identical readout parameters deterministically imply the same posterior up to
-numerical error. The detector does not compare full latent posterior arrays or
-map them into observation space.
-
-The Gram comparison applies to every estimator. A per-column prior such as ARD
-breaks the rotation symmetry of the objective and so rotates the loadings slowly
-toward orthogonal columns; that rotation changes `C` and the fitted precisions
-without changing the fitted mean, and the Gram ignores it. A relative change
-`delta` in `C` appears as roughly `2 * delta` in `C C^T`, so `tol` is about twice
-as strict on the loadings as a direct comparison of `C` would be.
-
-Each change is normalized by `max(1, ||reference||)`. Convergence requires the
-maximum of these three changes to be at most `tol` for
+Convergence requires the maximum of these changes to be at most `tol` for
 `convergence_patience` consecutive iterations after at least `min_iter`
 iterations. The first iteration is always unconditional because no previous
 posterior exists for comparison. Non-finite metrics never pass. If the cap is
@@ -111,8 +99,10 @@ feature used only to initialize a finite baseline rate. The Poisson
 readout objective is the exact negative expected log-likelihood,
 `exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
 the rate carries the variance correction. Masking does not change it. It
-adds a squared L2 penalty on the loading matrix, averaged with the data term,
-and clamps the log rate at `MAX_LOGRATE` to bound the rate.
+adds the same Gaussian-prior penalty `0.5 * sum_k alpha_k * ||C[:, k]||²`,
+averaged with the data term, and clamps the log rate at `MAX_LOGRATE` to bound
+the rate. The training progress reports the unpenalized negative expected
+log-likelihood. Ridge reports its configured precision in `Params.alpha`.
 
 ## Gaussian ARD Loadings
 
@@ -174,6 +164,16 @@ column in its Gram and uses `n - sum(gamma)`; the two agree as `n` grows. The
 relevance precisions are shared across features here, so the structure is
 hierarchical rather than one ARD regression per feature.
 
+The residual degrees-of-freedom denominator is `N_n - sum_k gamma_nk - 1`, where
+the `-1` is the bias's effective parameter count. Since each `gamma_nk` is at
+most 1, the denominator is at least `N_n - K - 1`. `CVHM.fit` therefore rejects
+a fit whose features have `K + 1` or fewer observed time steps. That is a
+conservative contract: it guarantees a positive denominator without relying on
+the fitted `gamma_nk` values, and it fails at the API boundary rather than
+producing a non-finite variance inside the fixed-point iteration. The fit also
+stops loudly if an ARD loading precision becomes non-positive or non-finite,
+or if the evidence becomes non-finite.
+
 ## Loading Estimators
 
 The observation model and the loading estimator are separate axes. A `CVI`
@@ -201,20 +201,25 @@ involved:
 ```
 gamma_nk = 1 - alpha_k * Sigma_n[k, k]
 alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
-R_n      = RSS_n / (N_n - sum_k gamma_nk)
+R_n      = RSS_n / (N_n - 1 - sum_k gamma_nk)
 ```
 
 with `Sigma_n = (Prec_n / R_n + diag(0, alpha))^-1` and `RSS_n` the expected
 residual sum of squares including latent uncertainty. The observation variance
 is estimated from expected residuals alone, with the effective parameter count
 removed; it needs no prior, and its denominator is bounded away from zero
-whenever a feature has more observed time steps than parameters.
+whenever a feature has more observed time steps than parameters. The iteration
+warm starts from the previous `Params.alpha` when it is available, falling back
+to the configured initial precision otherwise. This lets a fit continue across
+EM steps from the previous precisions instead of resetting them on every
+update.
 
 The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` vanish
 together as a column is pruned, so the bare rule is a `0 / 0` limit; measured
 over a grid of problems it diverges or reaches precisions of order `1e17` in a
 majority of cases. `(a, b)` is a weak Gamma prior -- the reference ARD
-regression's defaults -- that removes the corner. It is a guard on the updater
+regression's defaults -- that removes the corner. The fixed-point update requires
+`a > 1` and `b > 0` to maintain positive precisions. It is a guard on the updater
 rather than a modelling claim, which is why the shape and rate are not meant to
 be tuned: the fit is insensitive to them across many orders of magnitude, and
 their only visible effect is how large an inactive column's precision

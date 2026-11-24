@@ -143,8 +143,8 @@ The manifest must record:
 - archive format and integer version;
 - all `CVHM`-owned configuration: `n_components`, `dt`, `lr`, `max_iter`,
   `cvi_iter`, `tol`, `min_iter`, `convergence_patience`, `observation`,
-  `estimator` (an exact class name), and `estimator_config` (constructor
-  keywords, or `null`);
+  `estimator` (an exact built-in class name), and `estimator_config`
+  (constructor keywords, or `null`);
 - each HidaMatern configuration: `sigma`, `rho`, `omega`, `order`, and `s`;
 - whether fitted parameters are present;
 - parameter-tree metadata needed to create the runtime Equinox `like` PyTree,
@@ -161,6 +161,12 @@ or `"Poisson"`. The initial implementation supports the built-in names only.
 The kernel entries are assumed to be `HidaMatern`; no kernel type field is
 needed.
 
+`estimator_config` is emitted as finite JSON primitives: numpy and JAX scalars
+become Python scalars, and arrays become (possibly nested) lists that preserve
+the logical shape of a per-column `alpha`. Values that cannot be represented
+this way are rejected at save time. `CVHM.get_config()` applies the same
+conversion, so the configuration protocol stays JSON-compatible.
+
 ## Kernel subclasses
 
 A kernel supplied to `CVHM` may be a subclass of `HidaMatern`, but the format
@@ -175,7 +181,8 @@ kernel families.
 `CVHM.save(path)` must:
 
 1. Validate all `CVHM` configuration, HidaMatern kernels, the built-in
-   observation name, and fitted parameter structure before writing anything.
+   observation name, the built-in estimator name, and fitted parameter
+   structure before writing anything.
 2. Obtain kernel configuration through the HidaMatern serialization protocol.
 3. Serialize fitted `CVHM.params` with Equinox when present.
 4. Write one ZIP archive containing `manifest.json` and, when applicable,
@@ -202,14 +209,17 @@ explicitly covered by the working implementation.
 4. Validate the observation class name against the built-in `CVI` mapping and
    construct the corresponding stateless algorithm. Never silently substitute
    `Gaussian`.
-5. Reconstruct each `HidaMatern` kernel through its configuration protocol.
-6. Construct `CVHM` with its own saved configuration, reconstructed kernels,
-   and readout algorithm.
-7. Reconstruct a runtime Equinox `like` PyTree for CVHM-owned `params` with the
+5. Validate the estimator class name against the built-in `Estimator` classes
+   and reject a name that resolves to a user subclass instead of the built-in.
+   Never silently substitute a same-named estimator.
+6. Reconstruct each `HidaMatern` kernel through its configuration protocol.
+7. Construct `CVHM` with its own saved configuration, reconstructed kernels,
+   readout algorithm, and estimator.
+8. Reconstruct a runtime Equinox `like` PyTree for CVHM-owned `params` with the
    same structure and leaf types as the saved fitted state. The `like` tree is
    not saved as a separate artifact.
-8. Restore parameter leaves from `params.eqx` with Equinox.
-9. Return the reconstructed model without `posterior` or `latent` attributes.
+9. Restore parameter leaves from `params.eqx` with Equinox.
+10. Return the reconstructed model without `posterior` or `latent` attributes.
 
 Restoration must not depend on the save-time device. Arrays may be restored to
 the current default JAX device and copied to another device by normal JAX
@@ -227,12 +237,17 @@ The initial implementation supports:
 - `HidaMatern` kernels of orders 0, 1, and 2; subclasses are accepted only
   when they are semantically equivalent to the base class and are restored as
   base `HidaMatern` instances;
-- the stateless `Gaussian` and `Poisson` `CVI` algorithms; and
+- the stateless `Gaussian` and `Poisson` `CVI` algorithms;
+- the built-in loading estimators `RidgeEstimator`, `ARDEstimator`, and
+  `FrozenEstimator`; and
 - the Equinox `cvhmax.cvi.Params` parameter container.
 
 User-defined readouts are not part of the initial format. User-defined kernel
 subclasses are supported only under the HidaMatern-subclass restriction above.
-Arbitrary Python classes remain rejected.
+Arbitrary Python classes remain rejected. User-defined estimators are likewise
+outside the format: the archive records a built-in class name, and a name that
+resolves to a user subclass in `Estimator.registry` is rejected at both save and
+load rather than silently standing in for the built-in.
 
 ## Safety
 

@@ -61,8 +61,8 @@ class Params(Module):
     """Container of CVI readout parameters.
 
     This container is used by the built-in Gaussian and Poisson readouts.
-    CVHM's convergence metric compares the readout fields ``C``, ``d``, and
-    ``R``; ``alpha`` is reported, not compared.
+    CVHM's convergence metric compares ``C``, ``d``, and ``R``; for ARD it
+    also compares the loading basis and ``alpha``.
 
     Attributes
     ----------
@@ -74,8 +74,8 @@ class Params(Module):
         Diagonal Gaussian observation covariance with shape ``(N, N)``.
         For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
     alpha : Array or None
-        Fitted loading precisions with shape ``(latent_dim (K),)`` when the
-        estimator fits them, otherwise ``None``. A large value marks a latent
+        Loading precisions with shape ``(latent_dim (K),)`` when supplied by
+        the estimator, otherwise ``None``. For ARD, a large value marks a latent
         column whose loadings have been driven to numerical zero; ranking the
         columns by ``alpha`` is how effective dimensionality is read off.
     """
@@ -439,8 +439,8 @@ def poisson_readout_objective(
     V : Array
         Posterior covariances with shape `(samples, latent_dim, latent_dim)`.
     penalty : Array
-        Diagonal loading penalty shaped ``(latent_dim (K) + 1,)``, with index 0
-        the bias. Applied in the same units as the data term.
+        Diagonal loading precision shaped ``(latent_dim (K) + 1,)``, with
+        index 0 the bias. The Gaussian prior contributes ``0.5 * alpha * C²``.
 
     Returns
     -------
@@ -463,7 +463,7 @@ def poisson_readout_objective(
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
     # One precision per latent column, broadcast across features.
-    total = jnp.sum(step_objectives) + jnp.sum(penalty[1:][None, :] * C**2)
+    total = jnp.sum(step_objectives) + 0.5 * jnp.sum(penalty[1:][None, :] * C**2)
     return total / n_valid_steps
 
 

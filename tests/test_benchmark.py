@@ -126,6 +126,7 @@ def test_benchmark_jitter_regression(s):
 # Frozen-readout Poisson subclass (same as demo)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_benchmark_frozen_readout():
     rng = np.random.default_rng(2024)
     y, _, x_std, C_true, d_true = _make_data(rng)

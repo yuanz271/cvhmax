@@ -45,14 +45,21 @@ read off, and any threshold is the caller's.
 `valid_y` may be `None`, a time-step mask shaped `(sequences, time)` (or `(time,)`
 for one sequence), or a boolean mask broadcastable to `y`, including
 `(sequences, time, 1)` and `(sequences, 1, features)`. Fitting requires each
-feature to be observed in at least one time step. Sequences have independent
+feature to be observed in at least one time step. With ARD, each feature must
+be observed at more than `n_components + 1` time steps; ARD's initial
+precisions must be positive and its Gamma prior requires `alpha_shape > 1` and
+`alpha_rate > 0`. Sequences have independent
 latent trajectories but share kernels, `dt`, and the readout; feature indices
 must refer to the same variables across sequences. Sequence-specific readouts
 are not represented.
 
 `CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
 saving posterior or latent caches. The serialization uses the
-`get_config()`/`from_config()` protocol on both `CVHM` and `HidaMatern`.
+`get_config()`/`from_config()` protocol on both `CVHM` and `HidaMatern`. Only
+the built-in readout names and built-in estimators are supported; user-defined
+estimators are rejected. `estimator_config` is written as finite JSON
+primitives, so a numpy or JAX `alpha` becomes a list with its logical shape
+preserved.
 After fitting, `CVHM.posterior` and `CVHM.latent` describe the same posterior
 under the final readout parameters. `CVHM.infer(...)` recomputes the GP
 posterior without updating fitted parameters. See `serialization.md` for the

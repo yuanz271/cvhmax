@@ -13,8 +13,9 @@ exposes a readout objective that takes the penalty diagonal and owns its own
 averaging.
 """
 
+import math
 from abc import abstractmethod
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import jax
 import numpy as np
@@ -24,6 +25,61 @@ from .cvi import Params
 from .utils import LoadingTerms, lbfgs_solve
 
 Penalty = Array
+
+
+def _portable_json(value: Any, name: str) -> Any:
+    """Convert one estimator-configuration value to finite JSON primitives."""
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        scalar = float(value)
+        if not math.isfinite(scalar):
+            raise ValueError(f"{name} must be finite")
+        return scalar
+    if isinstance(value, (np.ndarray, jax.Array)):
+        array = np.asarray(value)
+        if array.dtype.hasobject:
+            raise ValueError(f"{name} must not contain object arrays")
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"{name} must be finite")
+        return array.tolist()
+    if isinstance(value, (list, tuple)):
+        return [_portable_json(item, name) for item in value]
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError(f"{name} keys must be strings")
+        return {key: _portable_json(item, f"{name}.{key}") for key, item in value.items()}
+    raise ValueError(
+        f"{name} has unsupported type {type(value).__name__}; "
+        "use JSON-compatible scalars, lists, or arrays"
+    )
+
+
+def _portable_estimator_config(config: dict | None) -> dict | None:
+    """Return estimator constructor keywords as finite JSON primitives.
+
+    Numpy and JAX scalars become Python scalars and arrays become nested lists,
+    so a per-column ``alpha`` keeps its logical shape while the result can be
+    written to a JSON manifest. Unsupported or non-finite values raise
+    ``ValueError``.
+
+    Parameters
+    ----------
+    config : dict or None
+        Estimator constructor keywords, as passed to ``CVHM``.
+
+    Returns
+    -------
+    dict or None
+        A JSON-compatible copy with the same logical values.
+    """
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError("estimator_config must be a dict or None")
+    return _portable_json(config, "estimator_config")
 
 
 def _flattened(
@@ -51,10 +107,15 @@ class Estimator:
     requires_conjugate_terms : bool
         Whether the estimator needs the likelihood's conjugate loading
         representation. Checked at the API boundary.
+    fits_ard_precisions : bool
+        Whether the estimator fits ARD loading precisions. Checked at the fit
+        boundary for the residual degrees-of-freedom contract and for
+        non-finite or non-positive precisions or evidence.
     """
 
     registry: ClassVar[dict[str, type["Estimator"]]] = {}
     requires_conjugate_terms: ClassVar[bool] = False
+    fits_ard_precisions: ClassVar[bool] = False
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -68,9 +129,13 @@ class Estimator:
         alpha : float or Array, default=0.1
             Loading precision: a scalar applied to every latent column, or one
             value per column. For `RidgeEstimator` it is held fixed; for
-            `ARDEstimator` it is the starting point.
+            `ARDEstimator` it is the starting point. It must be finite and
+            non-negative; ARD requires strictly positive values.
         """
-        self.alpha = jnp.asarray(np.atleast_1d(np.asarray(alpha, dtype=float)))
+        alpha = jnp.asarray(np.atleast_1d(np.asarray(alpha, dtype=float)))
+        if not bool(jnp.all(jnp.isfinite(alpha) & (alpha >= 0))):
+            raise ValueError("alpha must be finite and non-negative")
+        self.alpha = alpha
 
     def penalty(self, n_latents: int) -> Penalty:
         """Return the penalty diagonal, zero at the bias index.
@@ -111,7 +176,8 @@ class Estimator:
             Seed for the likelihood's initialization.
         params : Params, optional
             If given, returned unchanged. This is how a fit is frozen at preset
-            values.
+            values. For `ARDEstimator`, ``params.alpha`` is the starting
+            precision of the fixed-point iteration.
 
         Returns
         -------
@@ -172,7 +238,18 @@ class RidgeEstimator(Estimator):
 
     Works with any likelihood. It uses the closed form when the likelihood
     exposes conjugate loading terms and a generic gradient solve otherwise.
+    Updated parameters report the configured precision; the generic objective
+    reports its unregularized data term for training diagnostics.
     """
+
+    def initialize_params(
+        self, likelihood, y: Array, valid_y: Array, n_factors: int, *, random_state, params=None
+    ) -> Params:
+        """Initialize the readout with the configured fixed precision."""
+        params = super().initialize_params(
+            likelihood, y, valid_y, n_factors, random_state=random_state, params=params
+        )
+        return Params(C=params.C, d=params.d, R=params.R, alpha=self.penalty(n_factors)[1:])
 
     def estimate(
         self, likelihood, params: Params, y: Array, valid_y: Array, m: Array, V: Array
@@ -188,7 +265,10 @@ class RidgeEstimator(Estimator):
                 readout, y, valid_y, m, V, penalty=penalty
             ),
         )
-        return Params(C=C, d=d, R=params.R, alpha=params.alpha), jnp.nan
+        objective = likelihood.readout_objective(
+            (C, d), y, valid_y, m, V, penalty=jnp.zeros_like(penalty)
+        )
+        return Params(C=C, d=d, R=params.R, alpha=penalty[1:]), objective
 
 
 class FrozenEstimator(Estimator):
@@ -226,7 +306,7 @@ def _conjugate_solve(
     variance = jnp.sum(
         jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
     ) / terms.counts
-    return Params(C=C, d=d, R=jnp.diag(variance), alpha=params.alpha)
+    return Params(C=C, d=d, R=jnp.diag(variance), alpha=penalty[1:])
 
 
 class ARDEstimator(Estimator):
@@ -244,7 +324,7 @@ class ARDEstimator(Estimator):
     ```
     gamma_nk = 1 - alpha_k * Sigma_n[k, k]
     alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
-    R_n      = RSS_n / (N_n - sum_k gamma_nk)
+    R_n      = RSS_n / (N_n - 1 - sum_k gamma_nk)
     ```
 
     with `Sigma_n` the exact posterior covariance `(Prec_n / R_n + diag(0,
@@ -266,9 +346,19 @@ class ARDEstimator(Estimator):
     is not removed from ``C`` and its precision plateaus at a large finite value
     set by the guard prior rather than by the data. Only the ranking of the
     precisions is meaningful, and any threshold is the caller's decision.
+
+    The observation-variance denominator is ``N_n - sum_k gamma_nk - 1``, where
+    the ``-1`` is the bias's effective parameter count. The fit therefore
+    requires every feature to have more than ``K + 1`` observed time steps;
+    `CVHM.fit` rejects a configuration that violates this conservative
+    contract. The fixed-point iteration starts from ``params.alpha`` when it is
+    present, so a fit continues across EM steps from the previous precisions,
+    and falls back to the configured initial precision when ``params.alpha`` is
+    absent.
     """
 
     requires_conjugate_terms = True
+    fits_ard_precisions = True
 
     def __init__(
         self,
@@ -283,17 +373,34 @@ class ARDEstimator(Estimator):
         Parameters
         ----------
         alpha : float or Array, default=1.0
-            Initial loading precision.
+            Initial loading precision. Must be finite and strictly positive.
         alpha_shape : float, default=1.0 + 1e-6
             Shape of the Gamma prior on the loading precisions. In the
             reference ARD regression this is its `lambda_1 + 1`, and
-            `alpha_rate` is `lambda_2`.
+            `alpha_rate` is `lambda_2`. Must be finite and greater than one
+            so the fixed-point precision update stays positive.
         alpha_rate : float, default=1e-6
-            Rate of the Gamma prior on the loading precisions.
+            Rate of the Gamma prior on the loading precisions. Must be finite
+            and strictly positive.
         iterations : int, default=50
-            Fixed-point iterations.
+            Fixed-point iterations. Must be at least 1.
         """
         super().__init__(alpha)
+        if not bool(jnp.all(self.alpha > 0)):
+            raise ValueError("ARD alpha must be strictly positive")
+        alpha_shape = float(alpha_shape)
+        if not math.isfinite(alpha_shape) or alpha_shape <= 1:
+            raise ValueError(
+                f"alpha_shape must be finite and greater than one, got {alpha_shape!r}"
+            )
+        alpha_rate = float(alpha_rate)
+        if not math.isfinite(alpha_rate) or alpha_rate <= 0:
+            raise ValueError(
+                f"alpha_rate must be finite and strictly positive, got {alpha_rate!r}"
+            )
+        iterations = int(iterations)
+        if iterations < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations!r}")
         self.alpha_shape = alpha_shape
         self.alpha_rate = alpha_rate
         self.iterations = iterations
@@ -330,7 +437,11 @@ class ARDEstimator(Estimator):
             variance_next = rss / (terms.counts - jnp.sum(effective, axis=-1))
             return (alpha_next, variance_next), None
 
-        initial = (jnp.broadcast_to(self.alpha, (n_latents,)), jnp.diag(params.R))
+        initial_alpha = params.alpha if params.alpha is not None else self.alpha
+        initial = (
+            jnp.broadcast_to(initial_alpha, (n_latents,)),
+            jnp.diag(params.R),
+        )
         (alpha, variance), _ = jax.lax.scan(step, initial, None, length=self.iterations)
 
         _, beta, _ = solve(alpha, variance)

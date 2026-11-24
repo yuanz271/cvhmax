@@ -1,8 +1,10 @@
 import numpy as np
 import numpy.testing as npt
+import pytest
 
 import chex
 from jax import numpy as jnp
+from scipy.integrate import trapezoid
 from sklearn.linear_model import ARDRegression, LinearRegression
 
 from cvhmax.cvi import (
@@ -46,8 +48,14 @@ def test_gaussian_ard_evidence_matches_quadrature():
     actual = float(ard_evidence(terms, log_alpha, log_R))
 
     # Brute force: exp(E_q[log p]) times the loading prior, integrated over the
-    # bias and the single loading column of each feature independently.
-    grid = np.linspace(-20.0, 20.0, 4001)
+    # bias and the single loading column of each feature independently.  The
+    # integrand is a smooth 2-D Gaussian, so the trapezoidal rule converges
+    # exponentially in the grid spacing: 401 points over this range already
+    # matches a 4001-point grid to machine precision while keeping the
+    # quadrature arrays ~100x smaller.  scipy's trapezoid is used instead of
+    # numpy's because numpy renamed np.trapz to np.trapezoid in 2.0, so neither
+    # name covers the supported numpy range (>=1.24).
+    grid = np.linspace(-20.0, 20.0, 401)
     bias, col = np.meshgrid(grid, grid, indexing="ij")
     alpha = float(np.exp(log_alpha[0]))
     expected = 0.0
@@ -65,7 +73,7 @@ def test_gaussian_ard_evidence_matches_quadrature():
         log_prior = 0.5 * np.log(alpha / (2 * np.pi)) - 0.5 * alpha * col**2
         integrand = np.exp(log_density + log_prior)
         expected += np.log(
-            np.trapezoid(np.trapezoid(integrand, grid, axis=0), grid, axis=0)
+            trapezoid(trapezoid(integrand, grid, axis=0), grid, axis=0)
         )
 
     npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-6)
@@ -143,6 +151,99 @@ def test_gaussian_ard_precision_prior_rate_shrinks_inactive():
 
     assert strong[1] < 0.5 * weak[1], (weak, strong)
     npt.assert_allclose(strong[0], weak[0], rtol=0.1)
+
+
+def test_ard_estimate_warm_starts_from_params_alpha():
+    """The fixed-point iteration starts from ``params.alpha`` when present."""
+    T, N, K = 20, 2, 2
+    rng = np.random.default_rng(0)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    V = jnp.zeros((T, K, K))
+    y = jnp.asarray(rng.standard_normal((T, N)))
+    valid = jnp.ones((T, N), dtype=bool)
+    base = Params(C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N))
+
+    def fit(alpha):
+        params = Params(C=base.C, d=base.d, R=base.R, alpha=alpha)
+        return ARDEstimator(iterations=1).estimate(
+            Gaussian, params, y, valid, m, V
+        )[0]
+
+    low = fit(jnp.full(K, 0.5))
+    high = fit(jnp.full(K, 50.0))
+    assert not np.allclose(np.asarray(low.alpha), np.asarray(high.alpha))
+
+
+def test_ard_estimate_falls_back_to_configured_alpha():
+    """A missing ``params.alpha`` uses the configured initial precision."""
+    T, N, K = 20, 2, 2
+    rng = np.random.default_rng(1)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    V = jnp.zeros((T, K, K))
+    y = jnp.asarray(rng.standard_normal((T, N)))
+    valid = jnp.ones((T, N), dtype=bool)
+    base = Params(C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N))
+    estimator = ARDEstimator(alpha=0.5, iterations=1)
+
+    absent = estimator.estimate(
+        Gaussian, Params(C=base.C, d=base.d, R=base.R, alpha=None), y, valid, m, V
+    )[0]
+    present = estimator.estimate(
+        Gaussian,
+        Params(C=base.C, d=base.d, R=base.R, alpha=jnp.full(K, 0.5)),
+        y,
+        valid,
+        m,
+        V,
+    )[0]
+    npt.assert_allclose(np.asarray(absent.alpha), np.asarray(present.alpha))
+
+
+def test_ard_warm_start_continues_across_em_steps():
+    """A second ARD update starts from the previous precision, not the configured one."""
+    T, N, K = 20, 2, 2
+    rng = np.random.default_rng(2)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    V = jnp.zeros((T, K, K))
+    y = jnp.asarray(rng.standard_normal((T, N)))
+    valid = jnp.ones((T, N), dtype=bool)
+    start = Params(
+        C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N), alpha=jnp.ones(K)
+    )
+    estimator = ARDEstimator(iterations=1)
+
+    first, _ = estimator.estimate(Gaussian, start, y, valid, m, V)
+    second, _ = estimator.estimate(Gaussian, first, y, valid, m, V)
+    cold, _ = estimator.estimate(Gaussian, start, y, valid, m, V)
+    assert not np.allclose(np.asarray(second.alpha), np.asarray(cold.alpha))
+
+
+@pytest.mark.parametrize("alpha", [0.0, -1.0, jnp.inf, jnp.nan])
+def test_ard_estimator_rejects_invalid_alpha(alpha):
+    """The loading precision must be finite and strictly positive."""
+    with pytest.raises(ValueError, match="alpha"):
+        ARDEstimator(alpha=alpha)
+
+
+@pytest.mark.parametrize("alpha_shape", [0.0, 0.5, 1.0, -1.0, jnp.inf, jnp.nan])
+def test_ard_estimator_rejects_invalid_alpha_shape(alpha_shape):
+    """The Gamma shape must be finite and strictly positive."""
+    with pytest.raises(ValueError, match="alpha_shape"):
+        ARDEstimator(alpha_shape=alpha_shape)
+
+
+@pytest.mark.parametrize("alpha_rate", [0.0, -1.0, jnp.inf, jnp.nan])
+def test_ard_estimator_rejects_invalid_alpha_rate(alpha_rate):
+    """The Gamma rate must be finite and strictly positive."""
+    with pytest.raises(ValueError, match="alpha_rate"):
+        ARDEstimator(alpha_rate=alpha_rate)
+
+
+@pytest.mark.parametrize("iterations", [0, -1])
+def test_ard_estimator_rejects_invalid_iterations(iterations):
+    """The fixed-point iteration count must be at least one."""
+    with pytest.raises(ValueError, match="iterations"):
+        ARDEstimator(iterations=iterations)
 
 
 def test_gaussian_initialize_info_values(rng):

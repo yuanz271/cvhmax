@@ -229,11 +229,38 @@ def test_readout_change_is_invariant_to_glm_rotation():
 
 
 def test_readout_change_detects_loading_gain():
-    """A gain g on C scales C C^T by g^2, so the relative change is g^2 - 1."""
     C = jnp.asarray([[0.2], [2.0]])
     old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2))
     new = Params(C=2 * C, d=old.d, R=old.R)
-    np.testing.assert_allclose(readout_change(new, old), 3.0, atol=1e-6)
+    np.testing.assert_allclose(readout_change(new, old), 1.0, atol=1e-6)
+
+
+def test_readout_change_detects_small_loading_change():
+    old = Params(C=jnp.array([[0.1]]), d=jnp.zeros(1), R=jnp.eye(1))
+    new = Params(C=jnp.array([[0.2]]), d=old.d, R=old.R)
+    np.testing.assert_allclose(readout_change(new, old), 0.1, atol=1e-10)
+
+
+def test_readout_change_reduced_gram_matches_explicit():
+    rng = np.random.default_rng(84)
+    for n, k in ((5, 2), (2, 5), (50, 3)):
+        old_C, new_C = rng.normal(size=(2, n, k))
+        old = Params(C=jnp.asarray(old_C), d=jnp.zeros(n), R=jnp.eye(n))
+        new = Params(C=jnp.asarray(new_C), d=old.d, R=old.R)
+        expected = np.linalg.norm(new_C @ new_C.T - old_C @ old_C.T) / (
+            (np.linalg.norm(new_C) + np.linalg.norm(old_C)) * max(1, np.linalg.norm(old_C))
+        )
+        np.testing.assert_allclose(readout_change(new, old), expected, rtol=1e-10)
+
+
+def test_ard_change_detects_rotation_and_precision():
+    C = jnp.array([[1., 0.], [0., 2.]])
+    old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2), alpha=jnp.array([1., 2.]))
+    rotated = Params(C=C @ jnp.array([[0., -1.], [1., 0.]]), d=old.d, R=old.R, alpha=old.alpha)
+    assert float(readout_change(rotated, old)) < 1e-10
+    assert float(readout_change(rotated, old, ard=True)) > 0.05
+    changed_alpha = Params(C=C, d=old.d, R=old.R, alpha=old.alpha * 2)
+    np.testing.assert_allclose(readout_change(changed_alpha, old, ard=True), np.log(2))
 
 
 def test_readout_change_detects_a_change_across_features():
@@ -241,7 +268,25 @@ def test_readout_change_detects_a_change_across_features():
     C = jnp.asarray([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
     old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
     new = Params(C=C[jnp.asarray([2, 1, 0])], d=old.d, R=old.R)
-    assert float(readout_change(new, old)) > 0.5
+    assert float(readout_change(new, old)) > 0.3
+
+
+def test_ard_fit_does_not_converge_while_precisions_change(monkeypatch):
+    from cvhmax.estimator import ARDEstimator
+
+    def changing_precision(self, likelihood, params, y, valid_y, m, V):
+        return Params(C=params.C, d=params.d, R=params.R, alpha=2 * params.alpha), jnp.array(0.0)
+
+    monkeypatch.setattr(ARDEstimator, "estimate", changing_precision)
+    params = Params(C=jnp.array([[0.2], [0.4]]), d=jnp.zeros(2),
+                    R=jnp.eye(2), alpha=jnp.ones(1))
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    model = CVHM(1, 1.0, [kernel], params=params, estimator="ARDEstimator",
+                 max_iter=4, min_iter=1, convergence_patience=1, cvi_iter=0)
+    model.fit(jnp.asarray(np.random.default_rng(8).normal(size=(8, 2))), random_state=0)
+    assert model.n_iter_ == 4
+    assert not model.converged_
+    np.testing.assert_allclose(model.params.alpha, [16.0])
 
 
 def test_convergence_stops_a_fit_and_reports_diagnostics():
@@ -329,6 +374,16 @@ def test_ard_estimator_rejects_a_non_conjugate_readout():
             observation="Poisson",
             estimator="ARDEstimator",
         )
+
+
+def test_estimators_are_exported_at_top_level():
+    """The documented estimator classes are importable from the package root."""
+    import cvhmax
+    from cvhmax import estimator as estimator_module
+
+    for name in ("Estimator", "RidgeEstimator", "ARDEstimator", "FrozenEstimator"):
+        assert name in cvhmax.__all__
+        assert getattr(cvhmax, name) is getattr(estimator_module, name)
 
 
 def test_progress_callback_is_ordered_and_idempotent(monkeypatch):

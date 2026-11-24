@@ -15,7 +15,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from .cvi import Params
-from .estimator import Estimator
+from .estimator import (
+    ARDEstimator,
+    FrozenEstimator,
+    RidgeEstimator,
+)
 
 FORMAT = "cvhmax.CVHM"
 VERSION = 2
@@ -24,6 +28,15 @@ _PARAMS = "params.eqx"
 _MAX_MANIFEST_BYTES = 1 << 20
 _MAX_PARAMS_BYTES = 1 << 30
 _SUPPORTED_OBSERVATIONS = {"Gaussian", "Poisson"}
+# The format supports only the built-in estimators. Resolving a name through the
+# mutable `Estimator.registry` would accept a user subclass registered under a
+# built-in name and silently substitute it on load, so the supported names map
+# to the exact built-in classes and are checked by identity.
+_SUPPORTED_ESTIMATORS = {
+    "RidgeEstimator": RidgeEstimator,
+    "ARDEstimator": ARDEstimator,
+    "FrozenEstimator": FrozenEstimator,
+}
 
 
 def _array_metadata(array: Any) -> dict[str, Any]:
@@ -56,10 +69,19 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
 
 
 def _estimator_name(value: Any) -> str:
-    """Validate a serialized loading estimator name."""
-    if not isinstance(value, str) or value not in Estimator.registry:
+    """Validate a serialized loading estimator name against the built-ins."""
+    if not isinstance(value, str) or value not in _SUPPORTED_ESTIMATORS:
         raise ValueError(f"Unsupported loading estimator: {value!r}")
     return value
+
+
+def _validate_estimator_class(estimator_impl: Any, name: str) -> None:
+    """Reject a same-named user subclass standing in for a built-in."""
+    if type(estimator_impl) is not _SUPPORTED_ESTIMATORS[name]:
+        raise ValueError(
+            f"Loading estimator {name!r} is not the built-in "
+            f"{_SUPPORTED_ESTIMATORS[name].__name__} class"
+        )
 
 
 def _integer(value: Any, name: str, *, minimum: int = 0) -> int:
@@ -90,6 +112,8 @@ def build_manifest(model: Any) -> dict[str, Any]:
     config = model.get_config()
     if len(config["kernels"]) != config["n_components"]:
         raise ValueError("CVHM requires one kernel per component")
+    estimator = _estimator_name(config["estimator"])
+    _validate_estimator_class(model.estimator_impl, estimator)
     return {
         "format": FORMAT,
         "version": VERSION,
@@ -97,7 +121,7 @@ def build_manifest(model: Any) -> dict[str, Any]:
             "n_components": _integer(config["n_components"], "model.n_components", minimum=1),
             "dt": _finite_float(config["dt"], "model.dt"),
             "observation": config["observation"],
-            "estimator": _estimator_name(config["estimator"]),
+            "estimator": estimator,
             "estimator_config": config["estimator_config"],
             "lr": _finite_float(config["lr"], "model.lr"),
             "max_iter": _integer(config["max_iter"], "model.max_iter"),
@@ -374,6 +398,7 @@ def load(path: str | os.PathLike[str]) -> Any:
         model_config = manifest["model"]
         model_config["kernels"] = manifest["kernels"]
         model = CVHM.from_config(model_config)
+        _validate_estimator_class(model.estimator_impl, model_config["estimator"])
         if has_params:
             model.params = _deserialize_params(archive.read(_PARAMS), params_metadata)
             _validate_params_shapes(
