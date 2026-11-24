@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added a loading-estimator axis, selected by `CVHM(estimator=...)`, separating
+  how the readout loadings are fitted from the observation model. `RidgeEstimator`
+  is the default, `FrozenEstimator` holds supplied parameters fixed, and
+  `ARDEstimator` fits one loading precision per latent against the evidence by a
+  closed-form fixed point. Fitted precisions are reported as `Params.alpha`.
 - Added `gaussian_ard_estimate` and `gaussian_ard_evidence`: automatic relevance
   determination for the Gaussian loading matrix, conditional on the latent
   moments. The expected readout log-likelihood is quadratic in the loadings, so

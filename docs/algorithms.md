@@ -163,6 +163,57 @@ column in its Gram and uses `n - sum(gamma)`; the two agree as `n` grows. The
 relevance precisions are shared across features here, so the structure is
 hierarchical rather than one ARD regression per feature.
 
+## Loading Estimators
+
+The observation model and the loading estimator are separate axes. A `CVI`
+subclass is an observation model: it supplies the E-step, a conjugate loading
+representation when one exists, and a readout objective. An `Estimator` owns the
+readout M-step and the loading prior. Ridge and ARD share one prior,
+`C[:, k] ~ N(0, alpha_k^-1 I)` with a flat bias, and differ in whether `alpha` is
+fitted -- so choosing an estimator chooses a prior as well as an algorithm.
+
+An estimator uses the closed form when the likelihood exposes conjugate loading
+terms and a generic gradient solve otherwise. `Gaussian` exposes them; `Poisson`
+does not, because `exp(eta)` breaks conjugacy in the loadings, so
+`ARDEstimator` is rejected with Poisson at construction.
+
+`RidgeEstimator` solves the penalised conjugate objective directly. Note that
+solving each feature against its own noise variance brings an `R_nn` factor into
+the regulariser; that is the unit conversion for an absolute precision, not a
+different penalty strength.
+
+`ARDEstimator` maximises the evidence over the precisions and the observation
+variances jointly, with the loadings integrated out. Both stationary points have
+closed forms and are reached by a fixed-point iteration, so no optimiser is
+involved:
+
+```
+gamma_nk = 1 - alpha_k * Sigma_n[k, k]
+alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
+R_n      = (RSS_n + 2b_R) / (N_n - sum_k gamma_nk + 2a_R - 2)
+```
+
+with `Sigma_n = (Prec_n / R_n + diag(0, alpha))^-1` and `RSS_n` the expected
+residual sum of squares including latent uncertainty. `(a, b)` is a Gamma
+hyperprior on the loading precisions and `(a_R, b_R)` one on the noise precision;
+the defaults are the reference ARD regression's settings. Precisions are shared
+across features, because a latent is one shared object here, so this is a
+hierarchical ARD rather than one ARD regression per feature.
+
+Sparsity is *not* exact: an irrelevant column's precision plateaus at a large
+finite value and the column is shrunk rather than deleted, because the evidence
+tends to the reduced model's evidence as a precision grows. The precisions are
+reported on `Params.alpha` and any threshold is left to the caller. What makes a
+threshold workable is the size of the gap, typically one to two orders of
+magnitude; the absolute value is gauge dependent, so a fixed threshold does not
+transfer between fits.
+
+At `V = 0` the Jensen bound is tight, so the evidence is the exact marginal
+likelihood of an ARD linear regression on the latent means and the fit matches a
+standard ARD regression up to one residual degree of freedom: the bias is a
+parameter of this model and costs one, whereas an implementation that centers
+the design away uses one fewer.
+
 ## Gaussian Parameterizations
 
 The codebase uses two parameterizations of multivariate Gaussians:

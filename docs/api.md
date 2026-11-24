@@ -7,6 +7,8 @@ This page summarizes the public API. For full details, consult the docstrings.
 Public exports live in `src/cvhmax/__init__.py`:
 
 - `CVHM`: high-level model wrapper
+- `Estimator`, `RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`: loading
+  estimators, selected by `CVHM(estimator=...)`
 - `CVI`: base class for conjugate variational inference readouts
 - `Gaussian`, `Poisson`: built-in readouts
 - `Params`: readout parameter container
@@ -29,6 +31,16 @@ Public exports live in `src/cvhmax/__init__.py`:
 - `CVHM.load(path)` — classmethod restoring a saved model
 
 Source: `src/cvhmax/cvhm.py`
+
+`estimator` selects how the loadings are fitted, by exact class name, the same
+way `observation` selects a readout. `"RidgeEstimator"` (default) holds the
+loading precision fixed at `alpha` (default 0.1); `"ARDEstimator"` fits one
+precision per latent column against the evidence; `"FrozenEstimator"` leaves the
+supplied `params` untouched, which is how a fit is held at preset values.
+`ARDEstimator` needs a conjugate loading representation, so it is not available
+with the Poisson readout. Precisions are reported on the fitted parameters as
+`Params.alpha`: ranking the columns by it is how effective dimensionality is
+read off, and any threshold is the caller's.
 
 `valid_y` may be `None`, a time-step mask shaped `(sequences, time)` (or `(time,)`
 for one sequence), or a boolean mask broadcastable to `y`, including
