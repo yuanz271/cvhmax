@@ -248,16 +248,23 @@ class ARDEstimator(Estimator):
     ```
     gamma_nk = 1 - alpha_k * Sigma_n[k, k]
     alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
-    R_n      = (RSS_n + 2b_R) / (N_n - sum_k gamma_nk + 2a_R - 2)
+    R_n      = RSS_n / (N_n - sum_k gamma_nk)
     ```
 
     with `Sigma_n` the exact posterior covariance `(Prec_n / R_n + diag(0,
     alpha))^-1` and `RSS_n` the expected residual sum of squares including
-    latent uncertainty. `(a, b)` is a Gamma prior on the loading precisions and
-    `(a_R, b_R)` one on the noise precision `1 / R`; both default to the
-    reference implementation's settings. They are weak, but they make both
-    precisions proper and keep both denominators away from zero, which the bare
-    MacKay rules do not.
+    latent uncertainty. The observation variance needs no prior: its rule is
+    the residual variance with the effective parameter count removed, and that
+    denominator is bounded away from zero whenever a feature has more observed
+    bins than parameters.
+
+    The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` both
+    vanish together for a column that is being pruned, so the bare rule is a
+    `0 / 0` limit; measured over a grid of problems it diverges or runs to
+    precisions of order `1e17` in a majority of cases. `(a, b)` is a weak Gamma
+    prior on the loading precisions, defaulting to the reference
+    implementation's settings, which removes the corner. It is not a modelling
+    claim so much as a guard on the updater.
 
     Fitted precisions are *not* zeros: an irrelevant column is shrunk towards
     zero and its precision plateaus at a large finite value, so exact selection
@@ -272,8 +279,6 @@ class ARDEstimator(Estimator):
         *,
         alpha_shape: float = 1.0 + 1e-6,
         alpha_rate: float = 1e-6,
-        noise_shape: float = 1.0 + 1e-6,
-        noise_rate: float = 1e-6,
         iterations: int = 50,
     ):
         """Construct an ARD estimator.
@@ -288,21 +293,12 @@ class ARDEstimator(Estimator):
             `alpha_rate` is `lambda_2`.
         alpha_rate : float, default=1e-6
             Rate of the Gamma prior on the loading precisions.
-        noise_shape : float, default=1.0 + 1e-6
-            Shape of the Gamma prior on the observation-noise precision
-            `1 / R`. In the reference implementation this is `alpha_1 + 1` and
-            `noise_rate` is `alpha_2`. Note the names invert: their `alpha_*`
-            is the noise prior, ours is the loading prior.
-        noise_rate : float, default=1e-6
-            Rate of the Gamma prior on the observation-noise precision.
         iterations : int, default=50
             Fixed-point iterations.
         """
         super().__init__(alpha)
         self.alpha_shape = alpha_shape
         self.alpha_rate = alpha_rate
-        self.noise_shape = noise_shape
-        self.noise_rate = noise_rate
         self.iterations = iterations
         # Fitted per-column precisions leave only permutation and sign.
         self.isotropic = False
@@ -336,12 +332,7 @@ class ARDEstimator(Estimator):
             rss = jnp.sum(
                 jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
             )
-            variance_next = (rss + 2.0 * self.noise_rate) / (
-                terms.counts
-                - jnp.sum(effective, axis=-1)
-                + 2.0 * self.noise_shape
-                - 2.0
-            )
+            variance_next = rss / (terms.counts - jnp.sum(effective, axis=-1))
             return (alpha_next, variance_next), None
 
         initial = (jnp.broadcast_to(self.alpha, (n_latents,)), jnp.diag(params.R))
@@ -354,8 +345,6 @@ class ARDEstimator(Estimator):
             jnp.log(variance),
             alpha_shape=self.alpha_shape,
             alpha_rate=self.alpha_rate,
-            noise_shape=self.noise_shape,
-            noise_rate=self.noise_rate,
         )
         return (
             Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance), alpha=alpha),
@@ -370,8 +359,6 @@ def ard_evidence(
     *,
     alpha_shape: float | None = None,
     alpha_rate: float | None = None,
-    noise_shape: float | None = None,
-    noise_rate: float | None = None,
 ) -> Array:
     """Marginal log-evidence under per-column loading precisions.
 
@@ -429,9 +416,4 @@ def ard_evidence(
         # Gamma(shape, rate) on the loading precisions, shared across features.
         evidence = evidence + (alpha_shape - 1.0) * jnp.sum(log_alpha)
         evidence = evidence - alpha_rate * jnp.sum(jnp.exp(log_alpha))
-    if noise_shape is not None and noise_rate is not None:
-        # Gamma(shape, rate) on the noise precision `1 / R`, per feature.
-        precision = jnp.exp(-log_variance)
-        evidence = evidence + (noise_shape - 1.0) * jnp.sum(jnp.log(precision))
-        evidence = evidence - noise_rate * jnp.sum(precision)
     return evidence

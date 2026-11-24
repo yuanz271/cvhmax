@@ -195,16 +195,18 @@ Findings that changed the plan while implementing:
   scipy driver cannot run inside `lax.while_loop`. Verified that the fixed point
   is the stationary point of this evidence (gradient norm 6e-14) and that
   L-BFGS cannot improve on it.
-- Neither precision prior is load-bearing at the reference defaults. A four-way
-  test (each prior on and off) leaves `R` bit-identical, moves the pruned
-  precision by 0.07%, and leaves the evidence identical to six decimals. They
-  are kept for parity with the reference implementation's parameterisation and
-  to make the statement symmetric, not because anything needs them. An earlier
-  note here credited the noise prior with fixing pruned precisions that had been
-  out by seven orders of magnitude; that was wrong. The cause was replacing the
-  scipy driver with the fixed point -- the optimiser had under-converged along a
-  very flat direction, returning `log p = -283.3` where the fixed point finds
-  `-280.3`.
+- The noise prior was removed. Over a 32-configuration grid, a loading prior
+  alone matches having both on every count (32/32 finite, 32/32 correct rank,
+  same worst-case precision), while dropping the loading prior collapses to
+  13/32 finite and 7/32 correct, with precisions reaching `1e54`. So the loading
+  prior is load-bearing and the noise prior is redundant; the observation
+  variance is now estimated from expected residuals with no prior.
+- Two earlier claims here were wrong and were corrected. The noise prior was
+  first credited with fixing pruned precisions that had been out by seven orders
+  of magnitude -- the real cause was replacing the scipy driver with the fixed
+  point, the optimiser having under-converged along a very flat direction
+  (`log p = -283.3` against `-280.3`). It was then described as inert, which was
+  true on the single problem tested and false in general.
 - `Params.alpha` turned out to be necessary rather than merely tidy: ranking
   the precisions is the deliverable, so they have to be reachable after a fit.
 - The Poisson latent recovery converges to a negative R-squared on the

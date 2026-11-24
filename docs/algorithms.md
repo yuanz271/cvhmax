@@ -190,15 +190,23 @@ involved:
 ```
 gamma_nk = 1 - alpha_k * Sigma_n[k, k]
 alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
-R_n      = (RSS_n + 2b_R) / (N_n - sum_k gamma_nk + 2a_R - 2)
+R_n      = RSS_n / (N_n - sum_k gamma_nk)
 ```
 
 with `Sigma_n = (Prec_n / R_n + diag(0, alpha))^-1` and `RSS_n` the expected
-residual sum of squares including latent uncertainty. `(a, b)` is a Gamma prior
-on the loading precisions and `(a_R, b_R)` one on the noise precision; the
-defaults are the reference ARD regression's settings. Both are weak, so the
-shape and rate are knobs on how far an inactive column is shrunk rather than on
-which columns are active. Precisions are shared
+residual sum of squares including latent uncertainty. The observation variance
+is estimated from expected residuals alone, with the effective parameter count
+removed; it needs no prior, and its denominator is bounded away from zero
+whenever a feature has more observed bins than parameters.
+
+The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` vanish
+together as a column is pruned, so the bare rule is a `0 / 0` limit; measured
+over a grid of problems it diverges or reaches precisions of order `1e17` in a
+majority of cases. `(a, b)` is a weak Gamma prior -- the reference ARD
+regression's defaults -- that removes the corner. It is a guard on the updater
+rather than a modelling claim, which is why the shape and rate are not meant to
+be tuned: the fit is insensitive to them across many orders of magnitude, and
+their only visible effect is how far an inactive column is ultimately shrunk. Precisions are shared
 across features, because a latent is one shared object here, so this is a
 hierarchical ARD rather than one ARD regression per feature.
 
