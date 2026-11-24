@@ -191,7 +191,12 @@ the metric alongside `C`, `d`, and `R`.
   signal precisions to ~1e-3 and coefficients to ~1e-2 at `N = 1`, with `R`
   differing only by the single degree of freedom the bias costs. This is the
   strongest guard against convention drift and belongs in the suite, not as a
-  one-off.
+  one-off. Already written against the standalone function
+  (`test_gaussian_ard_matches_reference_ard_regression`); sklearn is a runtime
+  dependency, so no optional-import guard is needed.
+- **Threshold robustness.** Assert that the retained rank is unchanged across
+  thresholds spanning decades rather than fixing a threshold, which would be
+  circular. Already written (`test_gaussian_ard_rank_is_threshold_robust`).
 - **Estimator identity check.** `RidgeEstimator` with equal precisions must
   reproduce `ridge_estimate`'s closed form, including the `R_nn` unit
   conversion, so the refactor is verifiably behaviour-preserving.

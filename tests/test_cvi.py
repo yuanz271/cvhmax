@@ -3,7 +3,7 @@ import numpy.testing as npt
 
 import chex
 from jax import numpy as jnp
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import ARDRegression, LinearRegression
 
 from cvhmax.cvi import (
     Params,
@@ -71,6 +71,56 @@ def test_gaussian_ard_estimate_prunes_inactive_latent():
     _, alpha, _ = gaussian_ard_estimate(y, valid, m, V)
 
     assert float(alpha[1]) > 100.0 * float(alpha[0]), np.asarray(alpha)
+
+
+def test_gaussian_ard_matches_reference_ard_regression():
+    """With V = 0 the evidence is exact, so the fit matches a standard ARD fit.
+
+    The precisions are shared across features here but there is a single
+    feature, so the two structures coincide. The reference centers the design,
+    so it carries no bias column and its residual has one more degree of
+    freedom than ours; that is the only expected difference.
+    """
+    T, K = 80, 3
+    rng = np.random.default_rng(4)
+    m = rng.standard_normal((T, K))
+    y = m @ np.array([[0.7, 0.5, 0.0]]).T + rng.normal(scale=0.4, size=(T, 1))
+
+    params, alpha, _ = gaussian_ard_estimate(
+        jnp.asarray(y),
+        jnp.ones((T, 1), dtype=bool),
+        jnp.asarray(m),
+        jnp.zeros((T, K, K)),
+    )
+    reference = ARDRegression(
+        fit_intercept=True, threshold_lambda=1e18, max_iter=3000, tol=1e-12
+    ).fit(m, y[:, 0])
+
+    npt.assert_allclose(np.asarray(params.C)[0, :2], reference.coef_[:2], atol=1e-2)
+    npt.assert_allclose(np.asarray(alpha)[:2], reference.lambda_[:2], rtol=1e-2)
+    npt.assert_allclose(np.asarray(params.d)[0], reference.intercept_, atol=1e-2)
+
+    residual = float(np.sum((y[:, 0] - m @ reference.coef_ - reference.intercept_) ** 2))
+    degrees = residual * reference.alpha_
+    ratio = float(np.diag(np.asarray(params.R))[0]) / (1.0 / reference.alpha_)
+    npt.assert_allclose(ratio, degrees / (degrees - 1.0), rtol=1e-2)
+
+
+def test_gaussian_ard_rank_is_threshold_robust():
+    """The retained rank is insensitive to the precision threshold for decades."""
+    T, N, K = 120, 6, 4
+    rng = np.random.default_rng(2)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    loadings = np.zeros((N, K))
+    loadings[:, :2] = rng.normal(scale=0.8, size=(N, 2))
+    y = jnp.asarray(np.asarray(m) @ loadings.T + rng.normal(scale=0.3, size=(T, N)))
+
+    _, alpha, _ = gaussian_ard_estimate(
+        y, jnp.ones((T, N), dtype=bool), m, jnp.zeros((T, K, K))
+    )
+
+    retained = [int(np.sum(np.asarray(alpha) < cutoff)) for cutoff in (20, 1e2, 1e4, 1e6)]
+    assert retained == [2, 2, 2, 2], (retained, np.asarray(alpha))
 
 
 def test_gaussian_ard_hyperprior_bounds_precision():
