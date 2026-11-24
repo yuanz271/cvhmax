@@ -194,9 +194,11 @@ R_n      = (RSS_n + 2b_R) / (N_n - sum_k gamma_nk + 2a_R - 2)
 ```
 
 with `Sigma_n = (Prec_n / R_n + diag(0, alpha))^-1` and `RSS_n` the expected
-residual sum of squares including latent uncertainty. `(a, b)` is a Gamma
-hyperprior on the loading precisions and `(a_R, b_R)` one on the noise precision;
-the defaults are the reference ARD regression's settings. Precisions are shared
+residual sum of squares including latent uncertainty. `(a, b)` is a Gamma prior
+on the loading precisions and `(a_R, b_R)` one on the noise precision; the
+defaults are the reference ARD regression's settings. Both are weak, so the
+shape and rate are knobs on how far an inactive column is shrunk rather than on
+which columns are active. Precisions are shared
 across features, because a latent is one shared object here, so this is a
 hierarchical ARD rather than one ARD regression per feature.
 

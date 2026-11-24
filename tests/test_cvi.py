@@ -138,11 +138,11 @@ def test_gaussian_ard_leaves_a_wide_ranking_margin():
     assert ordered[2] > 10.0 * ordered[0], alpha
 
 
-def test_gaussian_ard_hyperprior_rate_shrinks_precision():
+def test_gaussian_ard_precision_prior_rate_shrinks_inactive():
     """A stronger Gamma rate pulls an irrelevant precision down.
 
     The gap dominates the within-group spread and the signal columns are
-    essentially untouched, so the hyperprior is a knob on how far inactive
+    essentially untouched, so the prior's rate is a knob on how far inactive
     columns are shrunk rather than on which columns are active.
     """
     T, N, K = 60, 8, 2

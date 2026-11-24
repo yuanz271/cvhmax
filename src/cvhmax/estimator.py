@@ -253,11 +253,11 @@ class ARDEstimator(Estimator):
 
     with `Sigma_n` the exact posterior covariance `(Prec_n / R_n + diag(0,
     alpha))^-1` and `RSS_n` the expected residual sum of squares including
-    latent uncertainty. `(a, b)` is a Gamma hyperprior on the loading
-    precisions and `(a_R, b_R)` one on the noise precision `1 / R`; both
-    default to the reference implementation's settings. They are weak, but they
-    make both precisions proper and keep both denominators away from zero,
-    which the bare MacKay rules do not.
+    latent uncertainty. `(a, b)` is a Gamma prior on the loading precisions and
+    `(a_R, b_R)` one on the noise precision `1 / R`; both default to the
+    reference implementation's settings. They are weak, but they make both
+    precisions proper and keep both denominators away from zero, which the bare
+    MacKay rules do not.
 
     Fitted precisions are *not* zeros: an irrelevant column is shrunk towards
     zero and its precision plateaus at a large finite value, so exact selection
@@ -283,18 +283,18 @@ class ARDEstimator(Estimator):
         alpha : float or Array, default=1.0
             Initial loading precision.
         alpha_shape : float, default=1.0 + 1e-6
-            Shape of the Gamma hyperprior on the loading precisions. In the
+            Shape of the Gamma prior on the loading precisions. In the
             reference ARD regression this is its `lambda_1 + 1`, and
             `alpha_rate` is `lambda_2`.
         alpha_rate : float, default=1e-6
-            Rate of the Gamma hyperprior on the loading precisions.
+            Rate of the Gamma prior on the loading precisions.
         noise_shape : float, default=1.0 + 1e-6
-            Shape of the Gamma hyperprior on the observation-noise precision
+            Shape of the Gamma prior on the observation-noise precision
             `1 / R`. In the reference implementation this is `alpha_1 + 1` and
             `noise_rate` is `alpha_2`. Note the names invert: their `alpha_*`
             is the noise prior, ours is the loading prior.
         noise_rate : float, default=1e-6
-            Rate of the Gamma hyperprior on the observation-noise precision.
+            Rate of the Gamma prior on the observation-noise precision.
         iterations : int, default=50
             Fixed-point iterations.
         """
@@ -384,10 +384,10 @@ def ard_evidence(
     log_variance : Array
         Log diagonal observation variances, shape ``(features (N),)``.
     alpha_shape : float, optional
-        Shape of a Gamma hyperprior on the precisions. Both this and
+        Shape of a Gamma prior on the precisions. Both this and
         `alpha_rate` are needed to enable it.
     alpha_rate : float, optional
-        Rate of the Gamma hyperprior on the precisions.
+        Rate of the Gamma prior on the precisions.
 
     Returns
     -------

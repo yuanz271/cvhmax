@@ -132,7 +132,7 @@ class CVI:
     @classmethod
     def readout_objective(
         cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
-    ) -> Array:
+    ):
         """Scalar readout objective including the loading penalty.
 
         The readout owns its own averaging, so the penalty it receives is in
@@ -410,7 +410,7 @@ def poisson_readout_objective(
     m: Array,
     V: Array,
     penalty: Array,
-) -> float:
+) -> float | Array:
     """Average Poisson readout objective per observed time step.
 
     The count term uses the variance-adjusted log rate. This retained
@@ -565,7 +565,7 @@ class Poisson(CVI):
     @override
     def readout_objective(
         cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
-    ) -> Array:
+    ) -> float | Array:
         """Average Poisson readout objective per observed time step."""
         return poisson_readout_objective(params, y, valid_y, m, V, penalty)
 

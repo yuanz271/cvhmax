@@ -14,7 +14,7 @@
   moments. The expected readout log-likelihood is quadratic in the loadings, so
   the evidence is closed form and no Laplace approximation is needed. Precisions
   and observation variances are fitted jointly against the evidence, with an
-  optional Gamma hyperprior on the precisions. It reports per-latent precisions
+  optional Gamma prior on the precisions. It reports per-latent precisions
   whose separation indicates an effective latent dimensionality; columns are
   shrunk rather than deleted, and any threshold is left to the caller.
 
