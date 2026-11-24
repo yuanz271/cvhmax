@@ -227,6 +227,20 @@ Findings that changed the plan while implementing:
   three-latent problem had not converged by 300 iterations but still ranked
   correctly.
 
+- ARD's slow outer-loop drift is a rotation, not a defect. The inner fixed point
+  is converged inside one M-step (5 and 5000 iterations give the same retained
+  precisions), so restarting it from a constant `alpha` is not the cause. Two
+  slow modes remain. An amplitude mode, which ridge shares, contracts by about
+  0.987 per iteration. An ARD-specific rotation mode follows it: the per-column
+  precisions break the rotation symmetry that ridge has, and the evidence
+  contains `-(N/2) sum_k log ||C_k||^2`, which by Hadamard's inequality is
+  maximised when the loading columns are orthogonal. Over iterations 300 to 1200
+  of the demo problem `cos(C_0, C_1)` falls from 0.160 to 0.132 and the evidence
+  rises monotonically with `log det C'C` fixed, while the fitted mean changes by
+  `3e-4` and the loading subspace by `0.001` degrees. The unaligned `C` changes
+  by about `1e-4` per iteration, so a tolerance at or below that tracks the
+  rotation rather than the fit; `tol=1e-3` is used in `demo_ard.py`.
+
 ## Steps
 
 1. **Reconcile the convention.** Drop the bias penalty from the Gaussian ridge;
