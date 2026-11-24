@@ -26,6 +26,12 @@
 
 ### Changed
 
+- Changed the convergence check to compare the loading Gram `C C^T`, which is
+  invariant to latent rotation, in place of a Procrustes-aligned `C`. It applies
+  to every estimator, so ARD, whose per-column precisions slowly rotate the
+  loadings without changing predictions, no longer tracks that rotation. A
+  relative change in `C` appears as about twice that in `C C^T`, so a given `tol`
+  is roughly twice as strict as before.
 - Bumped the archive format version from 1 to 2: manifests now record `estimator`
   and `estimator_config`, and the parameter tree has an optional `alpha` leaf.
   Archives from earlier releases are rejected with an unsupported-version error.

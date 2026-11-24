@@ -72,7 +72,6 @@ ARD, an optimiser. Accordingly the M-step moves out of `CVI`:
 ```python
 class Estimator:
     requires_conjugate_terms: bool
-    isotropic: bool                      # equal precisions across columns
 
     def initialize_params(self, likelihood, y, valid_y, n_factors, *, random_state,
                           params=None)
@@ -173,14 +172,20 @@ that has to persist and serialise.
 
 ## Convergence metric
 
-The gauge is set by the estimator's prior, not the likelihood. An isotropic
-prior leaves the orthogonal rotation gauge, so `readout_change`'s Procrustes
-alignment is correct. A per-column prior leaves only permutation and sign, so
-the alignment would rotate away differences the prior treats as real and must
-be dropped. Drive this from `Estimator.isotropic` rather than a call-site flag.
+Settled: `readout_change` compares the loading Gram `C C^T`, `d`, and `R` for
+every estimator. The first design drove a Procrustes alignment from
+`Estimator.isotropic`, dropping it for per-column priors on the grounds that the
+prior treats rotations as real. In practice the per-column prior only rotates
+`C` slowly toward orthogonal columns, which changes neither the fitted mean nor
+the loading subspace, and an unaligned comparison tracked that rotation instead
+of the fit. The Gram is invariant to it, matches ridge, and removes both the
+flag and the per-iteration SVD. `alpha` is reported and not compared: it moves
+with the rotation, since `alpha_k` follows `N / ||C_k||^2`.
 
-When `alpha` is fitted it is part of the converged quantity and should enter
-the metric alongside `C`, `d`, and `R`.
+Cost: a relative change `delta` in `C` is about `2 * delta` in `C C^T`, so the
+same `tol` is about twice as strict. Ridge on the demo problem takes 139
+iterations at `tol=1e-3` where the aligned metric took 89, and 316 against 279
+at `1e-4`.
 
 ## Status
 
@@ -238,8 +243,10 @@ Findings that changed the plan while implementing:
   of the demo problem `cos(C_0, C_1)` falls from 0.160 to 0.132 and the evidence
   rises monotonically with `log det C'C` fixed, while the fitted mean changes by
   `3e-4` and the loading subspace by `0.001` degrees. The unaligned `C` changes
-  by about `1e-4` per iteration, so a tolerance at or below that tracks the
-  rotation rather than the fit; `tol=1e-3` is used in `demo_ard.py`.
+  by about `1e-4` per iteration, so the first convergence metric tracked the
+  rotation rather than the fit; comparing the loading Gram `C C^T` instead fixed
+  that (see Convergence metric). ARD now converges at `tol=1e-5` in 1096
+  iterations.
 
 ## Steps
 
@@ -299,7 +306,7 @@ Findings that changed the plan while implementing:
   pure refactor check.
 - New tests: ARD rank recovery on the existing sweep; `("Poisson", "ARD")`
   rejected at construction; `Params` round-trip carrying `alpha`;
-  `readout_change` skipping the alignment when `isotropic` is false.
+  `readout_change` invariant to rotation and sensitive to a feature change.
 - Re-run the rank and kernel-amplitude sweeps through the composed API and
   confirm the earlier separation survives.
 - **Reference-implementation check.** With `V = 0` the Jensen bound is tight, so

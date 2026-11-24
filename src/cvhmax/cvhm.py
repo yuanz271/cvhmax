@@ -84,25 +84,29 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
     return jnp.linalg.norm(value_new - value_old) / denom
 
 
-def readout_change(params_new: Params, params_old: Params, *, aligned: bool = True) -> Array:
-    """Return the GLM parameter change modulo latent rotation.
+def readout_change(params_new: Params, params_old: Params) -> Array:
+    """Return the readout change modulo the latent rotation gauge.
+
+    The loadings enter the fit only through ``C C^T``, which is unchanged by
+    ``C -> C Q`` for any orthogonal ``Q``. Comparing it measures whether the
+    fitted model has stopped changing rather than the basis it is written in.
+    That holds for every loading prior: a per-column prior such as ARD breaks
+    the rotation symmetry of the objective and so rotates ``C`` slowly toward
+    orthogonal columns, but the fitted mean and loading subspace are unaffected.
 
     Parameters
     ----------
     params_new, params_old : Params
         Successive readout parameters.
-    aligned : bool, default=True
-        Whether to compare the loadings up to the orthogonal rotation gauge.
-        That gauge exists when the loading prior treats every latent column
-        alike; a per-column prior leaves only permutation and sign, and aligning
-        would then hide real differences.
+
+    Returns
+    -------
+    Array
+        Largest of the relative changes in ``C C^T``, ``d``, and ``R``.
     """
-    C_new, C_old = params_new.C, params_old.C
-    if aligned:
-        left, _, right = jnp.linalg.svd(C_new.T @ C_old, full_matrices=False)
-        delta_C = _relative_change(C_new @ (left @ right), C_old)
-    else:
-        delta_C = _relative_change(C_new, C_old)
+    delta_C = _relative_change(
+        params_new.C @ params_new.C.T, params_old.C @ params_old.C.T
+    )
     delta_d = _relative_change(params_new.d, params_old.d)
     delta_R = _relative_change(params_new.R, params_old.R)
     return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
@@ -421,9 +425,7 @@ class CVHM:
                 )
                 metric = jnp.where(
                     state.iteration > 0,
-                    readout_change(
-                        updated, state.params, aligned=self.estimator_impl.isotropic
-                    ),
+                    readout_change(updated, state.params),
                     jnp.inf,
                 )
                 iteration = state.iteration + 1

@@ -48,10 +48,11 @@ metrics are not used.
 After each outer iteration, the implementation compares three readout
 parameter quantities:
 
-- Procrustes-aligned loading matrix change (`C`), accounting for the GLM
-  latent sign/permutation/orthogonal rotation gauge. That rotation gauge exists
-  only while the loading prior treats every latent alike, so under `ARDEstimator`
-  the alignment is dropped and `C` is compared directly;
+- change in the loading Gram matrix `C C^T`, which is unchanged by any latent
+  rotation `C -> C Q` and so is blind to the GLM sign/permutation/orthogonal
+  rotation gauge. Predictions depend on `C` only through `C C^T`, so this asks
+  whether the fitted model has stopped changing rather than the basis it is
+  written in;
 - readout bias change (`d`); and
 - observation-noise covariance change (`R`); `R` is always a JAX-compatible
   array/scalar, with Poisson using a preserved scalar zero sentinel so this
@@ -59,9 +60,15 @@ parameter quantities:
 
 The latent GP prior, kernels, time step, and data are fixed during `fit`. Thus,
 identical readout parameters deterministically imply the same posterior up to
-numerical error. The loading comparison aligns successive `C` matrices with
-orthogonal Procrustes; the detector does not compare full latent posterior
-arrays or map them into observation space.
+numerical error. The detector does not compare full latent posterior arrays or
+map them into observation space.
+
+The Gram comparison applies to every estimator. A per-column prior such as ARD
+breaks the rotation symmetry of the objective and so rotates the loadings slowly
+toward orthogonal columns; that rotation changes `C` and the fitted precisions
+without changing the fitted mean, and the Gram ignores it. A relative change
+`delta` in `C` appears as roughly `2 * delta` in `C C^T`, so `tol` is about twice
+as strict on the loadings as a direct comparison of `C` would be.
 
 Each change is normalized by `max(1, ||reference||)`. Convergence requires the
 maximum of these three changes to be at most `tol` for

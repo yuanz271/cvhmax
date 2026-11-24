@@ -228,24 +228,20 @@ def test_readout_change_is_invariant_to_glm_rotation():
     assert float(readout_change(new, old)) < 1e-6
 
 
-def test_readout_change_without_alignment_sees_a_rotation():
-    """Per-column (ARD) precisions break the rotation gauge, so it must not be absorbed."""
-    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
-    theta = 0.37
-    rotation = jnp.asarray(
-        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
-    )
-    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
-    new = Params(C=C @ rotation, d=old.d, R=old.R)
-    assert float(readout_change(new, old, aligned=False)) > 0.1
-    assert float(readout_change(new, old, aligned=True)) < 1e-6
-
-
 def test_readout_change_detects_loading_gain():
+    """A gain g on C scales C C^T by g^2, so the relative change is g^2 - 1."""
     C = jnp.asarray([[0.2], [2.0]])
     old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2))
     new = Params(C=2 * C, d=old.d, R=old.R)
-    np.testing.assert_allclose(readout_change(new, old), 1.0, atol=1e-6)
+    np.testing.assert_allclose(readout_change(new, old), 3.0, atol=1e-6)
+
+
+def test_readout_change_detects_a_change_across_features():
+    """Only latent rotations are gauge; re-weighting features is a real change."""
+    C = jnp.asarray([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C[jnp.asarray([2, 1, 0])], d=old.d, R=old.R)
+    assert float(readout_change(new, old)) > 0.5
 
 
 def test_convergence_stops_a_fit_and_reports_diagnostics():

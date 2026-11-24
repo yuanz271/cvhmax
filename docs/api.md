@@ -93,9 +93,9 @@ pruned to numerical zero. `ard_evidence(terms, log_alpha, log_variance)` in
 See `algorithms.md` for the derivation and its limits.
 
 CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
-explicitly and compares their `C`, `d`, and `R` fields for convergence; the
-comparison drops the rotational alignment when the loading prior is anisotropic,
-since ARD ties each precision to a specific column.
+explicitly and compares the loading Gram `C C^T`, `d`, and `R` for convergence;
+the Gram is invariant to latent rotation, so the same criterion serves every
+estimator. `Params.alpha` is reported, not compared.
 
 Source: `src/cvhmax/cvi.py`
 

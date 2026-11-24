@@ -70,12 +70,7 @@ class Estimator:
             value per column. For `RidgeEstimator` it is held fixed; for
             `ARDEstimator` it is the starting point.
         """
-        values = np.atleast_1d(np.asarray(alpha, dtype=float))
-        self.alpha = jnp.asarray(values)
-        # Resolved here rather than on demand: this is read from inside a traced
-        # EM loop, where boolean conversion of a JAX array is not allowed even
-        # when the array is concrete.
-        self.isotropic = bool(np.all(values == values[0]))
+        self.alpha = jnp.asarray(np.atleast_1d(np.asarray(alpha, dtype=float)))
 
     def penalty(self, n_latents: int) -> Penalty:
         """Return the penalty diagonal, zero at the bias index.
@@ -302,8 +297,6 @@ class ARDEstimator(Estimator):
         self.alpha_shape = alpha_shape
         self.alpha_rate = alpha_rate
         self.iterations = iterations
-        # Fitted per-column precisions leave only permutation and sign.
-        self.isotropic = False
 
     def estimate(
         self, likelihood, params: Params, y: Array, valid_y: Array, m: Array, V: Array
