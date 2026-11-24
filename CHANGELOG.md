@@ -22,6 +22,12 @@
 
 ### Changed
 
+- Corrected the Poisson readout objective to the exact negative expected
+  log-likelihood. It had applied the posterior-variance correction to the count
+  term as well as the rate, which rewarded inflating `C`: on a two-sequence
+  problem `||C||` grew from 2.8 to 21.8 over 400 iterations along the latent-scale
+  gauge without converging. The exact objective converges in under 100
+  iterations with stable scale.
 - Raised the default CVI step size `lr` from 0.1 to 1.0. The damped update has the
   same fixed point at any `lr`, so this only affects how fast the inner loop
   reaches it. At the old default with `cvi_iter=5`, Poisson inference stopped

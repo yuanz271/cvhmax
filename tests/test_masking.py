@@ -87,8 +87,8 @@ def test_masked_poisson_information_and_objective():
             Ct, dt, yt = C[jnp.array(indices)], d[jnp.array(indices)], y[t, jnp.array(indices)]
             linear = Ct @ means[t] + dt
             quad = jnp.einsum("ni,ij,nj->n", Ct, covariances[t], Ct)
-            eta = jnp.minimum(linear + 0.5 * quad, MAX_LOGRATE)
-            total += jnp.sum(jnp.exp(eta) - yt * eta)
+            log_rate = jnp.minimum(linear + 0.5 * quad, MAX_LOGRATE)
+            total += jnp.sum(jnp.exp(log_rate) - yt * linear)
         return (total + gamma * jnp.sum(C**2)) / 2
 
     def objective(params):
@@ -118,8 +118,9 @@ def test_all_observed_poisson_objective_preserves_step_scaling():
     y = jnp.array([[1.0, 3.0], [2.0, 1.0]])
     m = jnp.array([[0.2], [-0.1]])
     V = jnp.array([[[0.3]], [[0.4]]])
-    eta = jnp.minimum(m @ C.T + d + 0.5 * V[:, 0, 0, None] * C[:, 0] ** 2, MAX_LOGRATE)
-    expected = (jnp.sum(jnp.exp(eta) - y * eta) + 0.3 * jnp.sum(C**2)) / len(y)
+    linear = m @ C.T + d
+    log_rate = jnp.minimum(linear + 0.5 * V[:, 0, 0, None] * C[:, 0] ** 2, MAX_LOGRATE)
+    expected = (jnp.sum(jnp.exp(log_rate) - y * linear) + 0.3 * jnp.sum(C**2)) / len(y)
     actual = poisson_readout_objective(
         (C, d), y, jnp.ones_like(y, dtype=bool), m, V,
         jnp.concatenate((jnp.zeros(1), jnp.full(1, 0.3))),
@@ -326,11 +327,7 @@ def test_joint_sequences_share_latent_coordinates(observation):
     for sequence in range(2):
         score = 1 - np.sum((aligned[sequence] - latent) ** 2) / np.sum(latent**2)
         latent_r2.append(score)
-        if observation == "Gaussian":
-            assert score > 0, (observation, sequence, score)
-        # The Poisson branch converges to a poor latent solution here, so its
-        # latent score is not a regression floor; only its count predictions
-        # are asserted above. Tracked as a separate Poisson CVI issue.
+        assert score > 0.5, (observation, sequence, score)
     assert np.isfinite(covariances).all()
     print(
         f"{observation}: iterations={model.n_iter_}, converged={model.converged_}, "
