@@ -73,11 +73,17 @@ class Params(Module):
     R : Array
         Diagonal Gaussian observation covariance with shape ``(N, N)``.
         For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
+    alpha : Array or None
+        Fitted loading precisions with shape ``(latent_dim (K),)`` when the
+        estimator fits them, otherwise ``None``. A large value marks a latent
+        column shrunk towards zero; ranking the columns by ``alpha`` is how
+        effective dimensionality is read off.
     """
 
     C: Array
     d: Array
     R: Array
+    alpha: Array | None = None
 
 
 class CVI:

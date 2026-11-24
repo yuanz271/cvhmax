@@ -123,15 +123,25 @@ class Estimator:
         Params
             Initial readout parameters.
         """
-        if params is not None:
-            return params
-        return likelihood.initialize_params(
-            y,
-            valid_y,
-            n_factors,
-            random_state=random_state,
-            penalty=self.penalty(n_factors),
-        )
+        if params is None:
+            params = likelihood.initialize_params(
+                y,
+                valid_y,
+                n_factors,
+                random_state=random_state,
+                penalty=self.penalty(n_factors),
+            )
+        if params.alpha is None:
+            # Carried through the EM loop, so it must be an array from the
+            # start: a ``None`` placeholder would change the pytree structure
+            # between the initial state and the first update.
+            params = Params(
+                C=params.C,
+                d=params.d,
+                R=params.R,
+                alpha=jnp.broadcast_to(self.alpha, (n_factors,)),
+            )
+        return params
 
     @abstractmethod
     def estimate(
@@ -182,7 +192,7 @@ class RidgeEstimator(Estimator):
                 readout, y, valid_y, m, V, penalty=penalty
             ),
         )
-        return Params(C=C, d=d, R=params.R), jnp.nan
+        return Params(C=C, d=d, R=params.R, alpha=params.alpha), jnp.nan
 
 
 class FrozenEstimator(Estimator):
@@ -220,7 +230,7 @@ def _conjugate_solve(
     variance = jnp.sum(
         jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
     ) / terms.counts
-    return Params(C=C, d=d, R=jnp.diag(variance))
+    return Params(C=C, d=d, R=jnp.diag(variance), alpha=params.alpha)
 
 
 class ARDEstimator(Estimator):
@@ -348,7 +358,7 @@ class ARDEstimator(Estimator):
             noise_rate=self.noise_rate,
         )
         return (
-            Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance)),
+            Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance), alpha=alpha),
             evidence,
         )
 

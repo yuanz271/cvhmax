@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from .cvi import Params
+from .estimator import Estimator
 
 FORMAT = "cvhmax.CVHM"
 VERSION = 1
@@ -49,8 +50,16 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
             "C": _array_metadata(params.C),
             "d": _array_metadata(params.d),
             "R": _array_metadata(params.R),
+            "alpha": None if params.alpha is None else _array_metadata(params.alpha),
         },
     }
+
+
+def _estimator_name(value: Any) -> str:
+    """Validate a serialized loading estimator name."""
+    if not isinstance(value, str) or value not in Estimator.registry:
+        raise ValueError(f"Unsupported loading estimator: {value!r}")
+    return value
 
 
 def _integer(value: Any, name: str, *, minimum: int = 0) -> int:
@@ -88,6 +97,8 @@ def build_manifest(model: Any) -> dict[str, Any]:
             "n_components": _integer(config["n_components"], "model.n_components", minimum=1),
             "dt": _finite_float(config["dt"], "model.dt"),
             "observation": config["observation"],
+            "estimator": _estimator_name(config["estimator"]),
+            "estimator_config": config["estimator_config"],
             "lr": _finite_float(config["lr"], "model.lr"),
             "max_iter": _integer(config["max_iter"], "model.max_iter"),
             "cvi_iter": _integer(config["cvi_iter"], "model.cvi_iter"),
@@ -149,7 +160,8 @@ def _deserialize_params(payload: bytes, metadata: dict[str, Any]) -> Params:
             raise ValueError(f"Invalid parameter shape for {name}")
         return jnp.zeros(shape, dtype=dtype)
 
-    params = Params(C=skeleton("C"), d=skeleton("d"), R=skeleton("R"))
+    alpha = None if arrays.get("alpha") is None else skeleton("alpha")
+    params = Params(C=skeleton("C"), d=skeleton("d"), R=skeleton("R"), alpha=alpha)
     try:
         return eqx.tree_deserialise_leaves(io.BytesIO(payload), params)
     except Exception as error:
@@ -200,6 +212,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         "n_components",
         "dt",
         "observation",
+        "estimator",
+        "estimator_config",
         "lr",
         "max_iter",
         "cvi_iter",
@@ -221,6 +235,10 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("model.min_iter must not exceed model.max_iter")
     if model["observation"] not in _SUPPORTED_OBSERVATIONS:
         raise ValueError(f"Unsupported observation model: {model['observation']!r}")
+    _estimator_name(model["estimator"])
+    config = model["estimator_config"]
+    if config is not None and not isinstance(config, dict):
+        raise ValueError("model.estimator_config must be an object or null")
     if len(kernels) != model["n_components"]:
         raise ValueError("Manifest kernel count does not match n_components")
     for index, kernel in enumerate(kernels):
@@ -246,9 +264,12 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     if params.get("type") != "cvhmax.cvi.Params":
         raise ValueError(f"Unsupported parameter type: {params.get('type')!r}")
     arrays = params.get("arrays")
-    if not isinstance(arrays, dict) or set(arrays) != {"C", "d", "R"}:
-        raise ValueError("params.arrays must contain exactly C, d, and R")
+    required = {"C", "d", "R"}
+    if not isinstance(arrays, dict) or not required <= set(arrays) <= required | {"alpha"}:
+        raise ValueError("params.arrays must contain C, d, and R, and optionally alpha")
     for name, metadata in arrays.items():
+        if name == "alpha" and metadata is None:
+            continue
         if not isinstance(metadata, dict) or not isinstance(metadata.get("shape"), list):
             raise ValueError(f"Invalid parameter metadata for {name}")
         _dtype = metadata.get("dtype")
@@ -263,6 +284,9 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         for axis in metadata["shape"]:
             _integer(axis, f"params.{name}.shape", minimum=0)
     C_shape = arrays["C"]["shape"]
+    alpha = arrays.get("alpha")
+    if alpha is not None and alpha.get("shape") != [C_shape[1]]:
+        raise ValueError("params.alpha shape is incompatible with n_latents")
     R_shape = arrays["R"]["shape"]
     if model["observation"] == "Gaussian":
         if len(C_shape) != 2 or R_shape != [C_shape[0], C_shape[0]]:

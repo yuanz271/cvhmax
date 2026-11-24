@@ -20,7 +20,7 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import Params, Poisson
+from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences, unpad_sequences
 
@@ -110,7 +110,8 @@ def test_benchmark_jitter_regression(s):
         n_components=N_LATENTS,
         dt=DT,
         kernels=_kernels(s),
-        observation="FrozenPoisson",
+        observation="Poisson",
+        estimator="FrozenEstimator",
         max_iter=50,
         cvi_iter=5,
     )
@@ -125,18 +126,6 @@ def test_benchmark_jitter_regression(s):
 # Frozen-readout Poisson subclass (same as demo)
 # ---------------------------------------------------------------------------
 
-class FrozenPoisson(Poisson):
-    @classmethod
-    def update_readout(cls, params, y, valid_y, m, V):
-        return params, jnp.nan
-
-
-# ---------------------------------------------------------------------------
-# Benchmark tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.slow
 def test_benchmark_frozen_readout():
     rng = np.random.default_rng(2024)
     y, _, x_std, C_true, d_true = _make_data(rng)
@@ -148,7 +137,8 @@ def test_benchmark_frozen_readout():
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
-        observation="FrozenPoisson", max_iter=50, cvi_iter=5,
+        observation="Poisson",
+        estimator="FrozenEstimator", max_iter=50, cvi_iter=5,
     )
     model.params = true_params
     model.fit(y, random_state=42)

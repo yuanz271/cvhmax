@@ -26,30 +26,11 @@ from jax import config
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import MAX_LOGRATE, Params, Poisson
+from cvhmax.cvi import MAX_LOGRATE, Params
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences, unpad_sequences
 
 config.update("jax_enable_x64", True)
-
-# ---------------------------------------------------------------------------
-# Frozen Poisson readout: keeps C and d at their true values
-# ---------------------------------------------------------------------------
-
-
-class FrozenPoisson(Poisson):
-    """Poisson CVI that keeps readout parameters fixed.
-
-    Pass pre-set ``Params`` via ``CVHM(params=...)`` and this subclass
-    will preserve them throughout fitting — ``initialize_params`` returns
-    them as-is (via the base class ``params`` argument) and
-    ``update_readout`` is a no-op.
-    """
-
-    @classmethod
-    def update_readout(cls, params, y, valid_y, m, V):
-        return params, jnp.nan
-
 
 # ---------------------------------------------------------------------------
 # Van der Pol oscillator
@@ -170,7 +151,7 @@ def run_case(
     dt : float
         Sampling interval.
     observation : str
-        CVI subclass name (e.g. ``"FrozenPoisson"``, ``"Poisson"``).
+        Observation model name, e.g. ``"Poisson"``.
     title : str
         Figure super-title.
     out_path : str
@@ -335,7 +316,8 @@ def main():
             x_std,
             make_kernels(n_latents, order, **kernel_hyperparams),
             dt,
-            observation="FrozenPoisson",
+            observation="Poisson",
+            estimator="FrozenEstimator",
             title=(
                 "CVHM on Van der Pol latents "
                 f"(frozen readout, Matérn order={order})"

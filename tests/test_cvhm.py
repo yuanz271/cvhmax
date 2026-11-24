@@ -240,26 +240,26 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     fake_pbar = FakeProgress()
 
     import cvhmax.cvhm as cvhm_mod
-    from cvhmax.cvi import Params, Poisson
+    from cvhmax.cvi import Params
+    from cvhmax.estimator import Estimator
 
     monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
 
-    def fake_initialize_params(
-        cls, y, valid_y, n_factors, *, random_state, params=None
-    ) -> Params:
-        obs_dim = y.shape[-1]
-        C = jnp.zeros((obs_dim, n_factors), dtype=y.dtype)
-        d = jnp.zeros(obs_dim, dtype=y.dtype)
-        R = jnp.zeros((obs_dim, obs_dim), dtype=y.dtype)
-        return Params(C=C, d=d, R=R)
+    class StaticEstimator(Estimator):
+        """Fixed readout parameters and no objective, to exercise progress."""
 
-    def fake_update_readout(cls, params, y, valid_y, m, V) -> tuple[Params, float]:
-        return params, jnp.nan
+        def initialize_params(
+            self, likelihood, y, valid_y, n_factors, *, random_state, params=None
+        ) -> Params:
+            obs_dim = y.shape[-1]
+            return Params(
+                C=jnp.zeros((obs_dim, n_factors), dtype=y.dtype),
+                d=jnp.zeros(obs_dim, dtype=y.dtype),
+                R=jnp.zeros((obs_dim, obs_dim), dtype=y.dtype),
+            )
 
-    monkeypatch.setattr(
-        Poisson, "initialize_params", classmethod(fake_initialize_params)
-    )
-    monkeypatch.setattr(Poisson, "update_readout", classmethod(fake_update_readout))
+        def estimate(self, likelihood, params, y, valid_y, m, V):
+            return params, jnp.nan
 
     recorded = []
     import jax.debug as jdebug
@@ -294,6 +294,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
         dt=1.0,
         kernels=kernels,
         observation="Poisson",
+        estimator="StaticEstimator",
         max_iter=3,
     )
 
