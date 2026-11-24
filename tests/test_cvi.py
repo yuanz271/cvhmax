@@ -73,6 +73,29 @@ def test_gaussian_ard_estimate_prunes_inactive_latent():
     assert float(alpha[1]) > 100.0 * float(alpha[0]), np.asarray(alpha)
 
 
+def test_gaussian_ard_hyperprior_bounds_precision():
+    """A Gamma hyperprior caps how far an irrelevant precision is driven."""
+    T, N, K = 60, 8, 2
+    rng = np.random.default_rng(1)
+    m = jnp.asarray(rng.standard_normal((T, K)))
+    V = jnp.zeros((T, K, K))
+    loadings = np.zeros((N, K))
+    loadings[:, 0] = rng.normal(scale=0.8, size=N)
+    y = jnp.asarray(np.asarray(m) @ loadings.T + rng.normal(scale=0.3, size=(T, N)))
+    valid = jnp.ones((T, N), dtype=bool)
+
+    _, free, _ = gaussian_ard_estimate(y, valid, m, V)
+    _, capped, _ = gaussian_ard_estimate(
+        y, valid, m, V, alpha_shape=1.0 + 1e-6, alpha_rate=1e-6
+    )
+
+    # The second latent carries no signal, so its precision is driven up; the
+    # hyperprior bounds it well below the unpenalised value.
+    assert float(free[1]) > 1e5, np.asarray(free)
+    assert float(capped[1]) < float(free[1]) / 1e3, (np.asarray(free), np.asarray(capped))
+    npt.assert_allclose(free[0], capped[0], rtol=0.5)
+
+
 def test_gaussian_initialize_info_values(rng):
     """Gaussian information increments use C in latent space."""
     T, N, K = 30, 8, 2
