@@ -195,9 +195,16 @@ Findings that changed the plan while implementing:
   scipy driver cannot run inside `lax.while_loop`. Verified that the fixed point
   is the stationary point of this evidence (gradient norm 6e-14) and that
   L-BFGS cannot improve on it.
-- The noise precision needed a hyperprior after all. I had called it inert; for
-  `R` itself it is, but it is what makes the *pruned* precisions agree with the
-  reference implementation, which had been out by seven orders of magnitude.
+- Neither precision prior is load-bearing at the reference defaults. A four-way
+  test (each prior on and off) leaves `R` bit-identical, moves the pruned
+  precision by 0.07%, and leaves the evidence identical to six decimals. They
+  are kept for parity with the reference implementation's parameterisation and
+  to make the statement symmetric, not because anything needs them. An earlier
+  note here credited the noise prior with fixing pruned precisions that had been
+  out by seven orders of magnitude; that was wrong. The cause was replacing the
+  scipy driver with the fixed point -- the optimiser had under-converged along a
+  very flat direction, returning `log p = -283.3` where the fixed point finds
+  `-280.3`.
 - `Params.alpha` turned out to be necessary rather than merely tidy: ranking
   the precisions is the deliverable, so they have to be reachable after a fit.
 - The Poisson latent recovery converges to a negative R-squared on the
