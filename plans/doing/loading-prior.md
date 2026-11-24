@@ -12,7 +12,7 @@ C ~ N(0, alpha^-1)   via an Estimator that fits alpha and the loadings
 
 Today a `CVI` subclass bundles both. `Gaussian.update_readout` and
 `Poisson.update_readout` each carry their own hand-rolled ridge, and the two
-disagree. Making the prior a first-class object gives one convention, makes
+disagree. Making the estimator a first-class object gives one convention, makes
 ridge the fixed equal-precision special case of ARD, and puts the ARD/ridge
 choice in the user's hands instead of in the readout's implementation.
 
@@ -21,9 +21,10 @@ The ARD estimator body already exists on this branch
 and checked against a reference ARD regression. What remains is structural:
 moving it, and the ridge solve, behind a common estimator interface.
 
-## Why: the current disagreement
+## Why: the disagreement this started from
 
-The same object — a squared L2 prior on the loadings — is implemented twice:
+Before step 1, the same object — a squared L2 prior on the loadings — was
+implemented twice:
 
 | | Gaussian (`utils.ridge_estimate`) | Poisson (`poisson_readout_objective`) |
 |---|---|---|
@@ -39,8 +40,8 @@ regulariser, so `lam * R_nn` is the unit conversion for an absolute precision
 equations.
 
 `lam = 0.1` is inert in practice (~0.05% of the objective), so the Gaussian bias
-penalty is small, but it is a modelling claim nobody chose, and it is wrong
-once the loading prior is stated explicitly.
+penalty was small, but it was a modelling claim nobody chose. Step 1 removed
+it; what remains is that `alpha` is still a scalar rather than per-column.
 
 ## The convention
 
@@ -73,9 +74,14 @@ class Estimator:
     requires_conjugate_terms: bool
     isotropic: bool                      # equal precisions across columns
 
-    def initialize_params(self, likelihood, y, valid_y, n_factors, *, random_state)
+    def initialize_params(self, likelihood, y, valid_y, n_factors, *, random_state,
+                          params=None)
     def estimate(self, likelihood, params, y, valid_y, m, V) -> tuple[Params, float]
 ```
+
+`initialize_params` keeps its `params=None` escape hatch: supplying parameters
+short-circuits initialisation, which is how a fit is currently frozen at preset
+values. See Migration.
 
 Estimation is selected with the exact class name, exactly as
 `observation="Gaussian"` selects a likelihood:
@@ -110,6 +116,25 @@ implements `loading_terms` (`_gaussian_loading_moments`, already present);
 Swapping estimators swaps the prior as well as the algorithm. That is intended
 here — the algorithm is determined by whether `alpha` is fitted — but it should
 be stated in the docs so nobody expects to keep the prior and change the solver.
+
+## Migration
+
+Moving `update_readout` and `initialize_params` out of `CVI` breaks four call
+sites, all of which must move in the same change:
+
+| Site | Today | Becomes |
+|---|---|---|
+| `examples/demo_vdp.py` `FrozenPoisson` | overrides `update_readout` to a no-op | `estimator="FrozenEstimator"` |
+| `tests/test_benchmark.py` `FrozenPoisson` | same | same |
+| `tests/test_cvhm.py` | monkeypatches both methods on `Poisson` | patch the estimator instead |
+| `tests/test_masking.py` | calls `Gaussian.update_readout` directly | calls an estimator |
+
+The frozen-readout pattern is the interesting one. It is not a likelihood
+variant at all — it holds `C` and `d` fixed while the latents are still
+inferred — so under the split it becomes an estimator whose `estimate` is the
+identity, usable with either likelihood, and the two `FrozenPoisson` subclasses
+disappear. That is a small instance of the general point: freezing the readout
+and choosing its prior are both properties of the estimation step.
 
 ## Capability, not a stub
 
@@ -173,7 +198,10 @@ the metric alongside `C`, `d`, and `R`.
    are already written and verified.
 5. **Thread the estimator through `CVHM`** — config key, `_FitState`, boundary
    check, serialization, `readout_change`.
-6. **Docs and changelog.**
+6. **Migrate the call sites** listed above, including `FrozenEstimator`, in the
+   same change as step 2. Nothing that overrides `update_readout` may be left
+   behind.
+7. **Docs and changelog.**
 
 ## Validation
 
@@ -255,6 +283,9 @@ the metric alongside `C`, `d`, and `R`.
 - Lowercase short aliases (`ridge`, `ard`) are reserved for a command-line
   wrapper. No such entry point exists in this repository, so nothing is built
   for them now.
+- **Freezing the readout is an estimator**, not a likelihood subclass, so the
+  two `FrozenPoisson` subclasses in the example and benchmark are retired by
+  the split.
 
 ## Open questions
 
