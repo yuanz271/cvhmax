@@ -216,6 +216,43 @@ def test_CVHM(capsys):
     assert V.shape == (T, n_factors, n_factors)
 
 
+def test_ard_recovers_latent_dimensionality_in_the_full_fit():
+    """Inside the EM loop, ARD zeroes surplus latents that fixed ridge only shrinks."""
+    rng = np.random.default_rng(0)
+    n_time, n_features, n_true, n_fit = 160, 16, 2, 4
+    kernel = HidaMatern(sigma=1.0, rho=8.0, omega=0.0, order=1)
+    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
+    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
+    chol = np.linalg.cholesky(prior)
+    C = rng.normal(scale=0.8, size=(n_features, n_true))
+    latents = np.stack([chol @ rng.standard_normal((n_time, n_true)) for _ in range(2)])
+    y = latents @ C.T + rng.normal(scale=0.3, size=(2, n_time, n_features))
+
+    def loading_norms(estimator):
+        model = CVHM(
+            n_components=n_fit,
+            dt=1.0,
+            kernels=[kernel] * n_fit,
+            observation="Gaussian",
+            estimator=estimator,
+            max_iter=200,
+            tol=1e-4,
+            min_iter=5,
+            convergence_patience=3,
+        ).fit(jnp.asarray(y), random_state=0)
+        norms = np.sort(np.linalg.norm(np.asarray(model.params.C), axis=0))[::-1]
+        return norms, np.sort(np.asarray(model.params.alpha))
+
+    ard_norms, ard_alpha = loading_norms("ARDEstimator")
+    ridge_norms, _ = loading_norms("RidgeEstimator")
+
+    # ARD: surplus columns are pruned to numerical zero and carry far larger precision.
+    assert ard_norms[n_true:].max() < 1e-6 * ard_norms[n_true - 1]
+    assert ard_alpha[n_true] > 100 * ard_alpha[n_true - 1]
+    # Ridge only shrinks them, leaving nonzero loadings.
+    assert ridge_norms[n_true:].min() > 1e-3 * ridge_norms[n_true - 1]
+
+
 def test_ard_estimator_rejects_a_non_conjugate_readout():
     """ARD needs a conjugate loading block, which Poisson does not provide."""
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]

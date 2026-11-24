@@ -184,7 +184,7 @@ the metric alongside `C`, `d`, and `R`.
 Implemented and green on `feature/loading-prior`: `Estimator`, `RidgeEstimator`,
 `ARDEstimator`, `FrozenEstimator`; `CVI.loading_terms` / `readout_objective`
 replacing `update_readout`; the config key, boundary check, serialization, and
-gauge-aware `readout_change`; all call sites migrated. 133 tests pass, the
+gauge-aware `readout_change`; all call sites migrated. 135 tests pass, the
 benchmark R-squared is unchanged, and the estimated-readout demo figure is
 identical to before the refactor, which is the ridge identity check in
 end-to-end form.
@@ -209,9 +209,20 @@ Findings that changed the plan while implementing:
   true on the single problem tested and false in general.
 - `Params.alpha` turned out to be necessary rather than merely tidy: ranking
   the precisions is the deliverable, so they have to be reachable after a fit.
-- The Poisson latent recovery converges to a negative R-squared on the
-  joint-sequence problem, which is why that test no longer asserts latent
-  recovery for the Poisson branch. Separate issue, pre-existing.
+- The Poisson latent recovery that had been reported as a separate pre-existing
+  issue was a bug in the Poisson readout objective (the variance correction had
+  leaked into the count term, rewarding growth of `C` along the latent-scale
+  gauge), together with an under-converged inner CVI loop at the old `lr`. Both
+  are fixed -- the objective in 0.4.0, `lr` on this branch -- and the Poisson
+  joint-sequence test asserts latent recovery again.
+- ARD was only exercised on fixed latents until it was run inside the full EM
+  loop. There it recovers the true dimensionality: with five fitted latents it
+  leaves exactly `K_true` finite precisions and drives the surplus loadings to
+  numerical zero (`1e-130`), where ridge only shrinks them to about `0.1`. The
+  pruned precision plateaus near `1e5`, which is set by the guard prior's
+  constants rather than by the data, so only the ranking is meaningful. A
+  three-latent problem had not converged by 300 iterations but still ranked
+  correctly.
 
 ## Steps
 
