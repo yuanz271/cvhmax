@@ -103,7 +103,7 @@ A representative manifest is:
     "n_components": 2,
     "dt": 1.0,
     "lr": 1.0,
-    "max_iter": 10,
+    "max_iter": 200,
     "cvi_iter": 5,
     "tol": 0.05,
     "min_iter": 2,

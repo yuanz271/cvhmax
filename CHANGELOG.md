@@ -22,6 +22,9 @@
 
 ### Changed
 
+- Raised the default `max_iter` from 10 to 200. Fits stop on the convergence
+  criterion, so this only lifts the cap; a converged Poisson fit on the
+  two-sequence test problem needs about 100 outer iterations.
 - Corrected the Poisson readout objective to the exact negative expected
   log-likelihood. It had applied the posterior-variance correction to the count
   term as well as the rate, which rewarded inflating `C`: on a two-sequence

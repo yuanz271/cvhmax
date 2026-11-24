@@ -138,7 +138,7 @@ class CVHM:
         Name of the CVI observation model registered in `CVI.registry`.
     lr : float, default=1.0
         Learning rate for pseudo-observation updates.
-    max_iter : int, default=10
+    max_iter : int, default=200
         Maximum number of outer EM iterations.
     cvi_iter : int, default=5
         Number of inner CVI smoothing iterations per EM step.
@@ -166,7 +166,7 @@ class CVHM:
     estimator_config: dict | None = None
     lr: float = 1.0
     cvi: type[CVI] = field(init=False, default=Gaussian)
-    max_iter: int = 10
+    max_iter: int = 200
     cvi_iter: int = 5
     tol: float = 0.05
     min_iter: int = 2
