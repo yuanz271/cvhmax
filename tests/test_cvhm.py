@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from cvhmax.cvhm import CVHM, lift, project, sde2gp
+from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
+from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern, sample_matern
 from cvhmax.utils import real_repr
 
@@ -216,6 +217,51 @@ def test_CVHM(capsys):
     assert V.shape == (T, n_factors, n_factors)
 
 
+def test_readout_change_is_invariant_to_glm_rotation():
+    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
+    theta = 0.37
+    rotation = jnp.asarray(
+        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+    )
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C @ rotation, d=old.d, R=old.R)
+    assert float(readout_change(new, old)) < 1e-6
+
+
+def test_readout_change_without_alignment_sees_a_rotation():
+    """Per-column (ARD) precisions break the rotation gauge, so it must not be absorbed."""
+    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
+    theta = 0.37
+    rotation = jnp.asarray(
+        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+    )
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C @ rotation, d=old.d, R=old.R)
+    assert float(readout_change(new, old, aligned=False)) > 0.1
+    assert float(readout_change(new, old, aligned=True)) < 1e-6
+
+
+def test_readout_change_detects_loading_gain():
+    C = jnp.asarray([[0.2], [2.0]])
+    old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2))
+    new = Params(C=2 * C, d=old.d, R=old.R)
+    np.testing.assert_allclose(readout_change(new, old), 1.0, atol=1e-6)
+
+
+def test_convergence_stops_a_fit_and_reports_diagnostics():
+    model = CVHM(
+        n_components=1,
+        dt=0.5,
+        kernels=[HidaMatern(sigma=1.2, rho=2.0, omega=0.3, order=1, s=1e-5)],
+        lr=0.2,
+        max_iter=10,
+        cvi_iter=1,
+        tol=1.0,
+    ).fit(jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 2))), random_state=0)
+    assert model.converged_ is True
+    assert model.min_iter <= model.n_iter_ < model.max_iter
+
+
 def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     """Inside the EM loop, ARD zeroes surplus latents that fixed ridge only shrinks."""
     rng = np.random.default_rng(0)
@@ -255,8 +301,6 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
 
 def test_frozen_estimator_leaves_the_supplied_readout_untouched():
     """A frozen fit infers latents under the given readout and never refits it."""
-    from cvhmax.cvi import Params
-
     rng = np.random.default_rng(0)
     kernels = [HidaMatern(1.0, 8.0, 0.0, 1)]
     start = Params(

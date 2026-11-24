@@ -1,4 +1,4 @@
-"""Positive model serialization and convergence tests."""
+"""Model serialization round-trip tests."""
 
 import json
 import subprocess
@@ -8,8 +8,7 @@ import zipfile
 import numpy as np
 from jax import numpy as jnp
 
-from cvhmax.cvhm import CVHM, readout_change
-from cvhmax.cvi import Params
+from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
 
 
@@ -166,43 +165,6 @@ print(model.observation, model.n_components)
         text=True,
     )
     assert result.stdout.strip() == "Gaussian 1"
-
-
-def test_readout_change_is_invariant_to_glm_rotation():
-    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
-    theta = 0.37
-    rotation = jnp.asarray(
-        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
-    )
-    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
-    new = Params(C=C @ rotation, d=old.d, R=old.R)
-    assert float(readout_change(new, old)) < 1e-6
-
-
-def test_readout_change_without_alignment_sees_a_rotation():
-    """Per-column (ARD) precisions break the rotation gauge, so it must not be absorbed."""
-    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
-    theta = 0.37
-    rotation = jnp.asarray(
-        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
-    )
-    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
-    new = Params(C=C @ rotation, d=old.d, R=old.R)
-    assert float(readout_change(new, old, aligned=False)) > 0.1
-    assert float(readout_change(new, old, aligned=True)) < 1e-6
-
-
-def test_readout_change_detects_loading_gain():
-    C = jnp.asarray([[0.2], [2.0]])
-    old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2))
-    new = Params(C=2 * C, d=old.d, R=old.R)
-    np.testing.assert_allclose(readout_change(new, old), 1.0, atol=1e-6)
-
-
-def test_convergence_stops_a_fit_and_reports_diagnostics():
-    model = _model(tol=1.0).fit(_data(), random_state=0)
-    assert model.converged_ is True
-    assert model.min_iter <= model.n_iter_ < model.max_iter
 
 
 def test_convergence_configuration_round_trip(tmp_path):
