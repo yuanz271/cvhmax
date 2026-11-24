@@ -95,8 +95,9 @@ Initialization fills missing entries with per-feature observed means for Factor
 Analysis only; subsequent updates use the actual observation mask. For Poisson,
 FA count-space loadings are scaled to log-rate space, with a half-count per
 feature used only to initialize a finite baseline rate. The retained Poisson
-readout objective uses the variance-adjusted log rate in its count term and is
-not the exact expected Poisson log-likelihood; masking does not change it. It
+readout objective is the exact negative expected log-likelihood,
+`exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
+the rate carries the variance correction. Masking does not change it. It
 adds a squared L2 penalty on the loading matrix, averaged with the data term,
 and clamps the log rate at `MAX_LOGRATE` to bound the rate.
 

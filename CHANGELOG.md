@@ -4,6 +4,12 @@
 
 ### Changed
 
+- Corrected the Poisson readout objective to the exact negative expected
+  log-likelihood. It had applied the posterior-variance correction to the count
+  term as well as the rate, which rewarded inflating `C`: on a two-sequence
+  problem `||C||` grew from 2.8 to 21.8 over 400 iterations along the latent-scale
+  gauge without converging. The exact objective converges in under 100
+  iterations with stable scale.
 - Changed the Poisson readout loading penalty from the L2 norm `‖C‖` to the
   squared L2 norm `‖C‖²`. The norm penalty has a constant-magnitude gradient, so
   it either left the fit unchanged or drove the loading matrix to exactly zero;

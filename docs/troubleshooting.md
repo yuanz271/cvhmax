@@ -34,5 +34,5 @@
 and frozen-readout models that do not report an objective, but can also
 indicate a numerical problem. Inspect fitted parameters and posterior moments
 rather than treating `n/a` as a posterior-finiteness check. The displayed
-Poisson objective is the retained readout surrogate, not an exact expected
-log-likelihood.
+Poisson objective is the negative expected log-likelihood plus the loading penalty,
+per observed time step.

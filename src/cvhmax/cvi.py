@@ -360,10 +360,13 @@ def poisson_readout_objective(
     V: Array,
     gamma: float = 1.5,
 ) -> float:
-    """Average Poisson readout objective per observed time step.
+    """Average negative expected Poisson log-likelihood per observed time step.
 
-    The count term uses the variance-adjusted log rate. This retained
-    objective is not the exact expected Poisson log-likelihood.
+    With ``eta = C m + d`` and ``q = diag(C V C^T)``, the Gaussian expectation
+    of ``y * log(rate) - rate`` is ``y * eta - exp(eta + q / 2)``; only the rate
+    carries the variance correction. Moving it into the ``y`` term as well
+    adds ``y q / 2``, which rewards inflating ``C`` and makes ``C`` drift along
+    the latent-scale gauge without converging.
 
     Parameters
     ----------
@@ -393,9 +396,9 @@ def poisson_readout_objective(
     def step_objective(y_t, mask_t, m_t, V_t):
         lin = C @ m_t + d
         quad = jnp.einsum("ni,in->n", C, V_t @ C.T)
-        eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
+        log_rate = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
         observed_y = jnp.where(mask_t, y_t, 0.0)
-        return jnp.sum(jnp.where(mask_t, jnp.exp(eta) - eta * observed_y, 0.0))
+        return jnp.sum(jnp.where(mask_t, jnp.exp(log_rate) - lin * observed_y, 0.0))
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
     return (jnp.sum(step_objectives) + gamma * jnp.sum(C**2)) / n_valid_steps
