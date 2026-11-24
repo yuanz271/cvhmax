@@ -54,6 +54,7 @@ def test_fitted_gaussian_round_trip_and_infer(tmp_path):
     np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
     np.testing.assert_array_equal(np.asarray(restored.params.d), np.asarray(model.params.d))
     np.testing.assert_array_equal(np.asarray(restored.params.R), np.asarray(model.params.R))
+    np.testing.assert_array_equal(np.asarray(restored.params.alpha), np.asarray(model.params.alpha))
 
     means, covariances = restored.infer(data)
     assert means.shape == (1, data.shape[1], 1)

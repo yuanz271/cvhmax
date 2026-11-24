@@ -216,6 +216,19 @@ def test_CVHM(capsys):
     assert V.shape == (T, n_factors, n_factors)
 
 
+def test_ard_estimator_rejects_a_non_conjugate_readout():
+    """ARD needs a conjugate loading block, which Poisson does not provide."""
+    kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
+    with pytest.raises(ValueError, match="conjugate loading"):
+        CVHM(
+            n_components=1,
+            dt=1.0,
+            kernels=kernels,
+            observation="Poisson",
+            estimator="ARDEstimator",
+        )
+
+
 def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     class FakeProgress:
         def __init__(self):

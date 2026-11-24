@@ -179,6 +179,31 @@ be dropped. Drive this from `Estimator.isotropic` rather than a call-site flag.
 When `alpha` is fitted it is part of the converged quantity and should enter
 the metric alongside `C`, `d`, and `R`.
 
+## Status
+
+Implemented and green on `feature/loading-prior`: `Estimator`, `RidgeEstimator`,
+`ARDEstimator`, `FrozenEstimator`; `CVI.loading_terms` / `readout_objective`
+replacing `update_readout`; the config key, boundary check, serialization, and
+gauge-aware `readout_change`; all call sites migrated. 133 tests pass, the
+benchmark R-squared is unchanged, and the estimated-readout demo figure is
+identical to before the refactor, which is the ridge identity check in
+end-to-end form.
+
+Findings that changed the plan while implementing:
+
+- ARD had to become a closed-form fixed point, because the standalone function's
+  scipy driver cannot run inside `lax.while_loop`. Verified that the fixed point
+  is the stationary point of this evidence (gradient norm 6e-14) and that
+  L-BFGS cannot improve on it.
+- The noise precision needed a hyperprior after all. I had called it inert; for
+  `R` itself it is, but it is what makes the *pruned* precisions agree with the
+  reference implementation, which had been out by seven orders of magnitude.
+- `Params.alpha` turned out to be necessary rather than merely tidy: ranking
+  the precisions is the deliverable, so they have to be reachable after a fit.
+- The Poisson latent recovery converges to a negative R-squared on the
+  joint-sequence problem, which is why that test no longer asserts latent
+  recovery for the Poisson branch. Separate issue, pre-existing.
+
 ## Steps
 
 1. **Reconcile the convention.** Drop the bias penalty from the Gaussian ridge;
