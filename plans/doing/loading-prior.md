@@ -196,6 +196,31 @@ the metric alongside `C`, `d`, and `R`.
    Nothing calls that function today, so this is a move rather than a
    replacement: the evidence, the hyperprior, and the jointly fitted variances
    are already written and verified.
+
+   **Blocker found while implementing.** The standalone function fits the
+   precisions with `scipy.optimize.minimize` on host values. That cannot run
+   inside the EM loop, because `CVHM.fit` traces the loop with
+   `jax.lax.while_loop` and the starting point depends on `params.R`, which is a
+   tracer there. So step 4 is not a move: the precision fit has to be expressed
+   in JAX. The natural choice is the MacKay fixed point already used by the
+   reference implementation,
+
+   ```
+   gamma_k = N - alpha_k * sum_n R_nn * Sigma_n[k, k]
+   alpha_k = gamma_k / ||C[:, k]||^2
+   ```
+
+   with `Sigma = (Prec / R + diag(0, alpha))^-1` taken from the conjugate terms,
+   run for a fixed number of iterations in a `lax.fori_loop`. Here that inverse
+   is exact, unlike the Laplace route that diverged earlier, so `gamma` is
+   well conditioned. Two further consequences: timescales would then need to
+   persist in `Params` (see "Where `alpha` lives") or be re-fitted from the
+   estimator default each M-step, and `scipy` drops out of the estimator
+   entirely.
+
+   Work in progress is parked on `wip/estimator-refactor`, which has the
+   estimator axis, `LoadingTerms`, and the likelihood split working for ridge
+   and frozen estimators with the boundary check in place.
 5. **Thread the estimator through `CVHM`** — config key, `_FitState`, boundary
    check, serialization, `readout_change`.
 6. **Migrate the call sites** listed above, including `FrozenEstimator`, in the
@@ -297,3 +322,9 @@ the metric alongside `C`, `d`, and `R`.
   precisions span many orders of magnitude.
 - Whether `CVI` keeps a `data_term` method, or the estimator calls
   `loading_terms` for the conjugate case and a generic objective otherwise.
+  Resolved in the parked work: the likelihood keeps `readout_objective`, which
+  takes the penalty diagonal so that it can own its own averaging.
+- Whether fitted precisions persist in `Params` or are re-fitted from the
+  estimator default each M-step. Re-fitting is stateless and reproduces the
+  validated standalone behaviour; persisting is a warm start whose benefit is
+  unmeasured.
