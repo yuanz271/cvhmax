@@ -4,27 +4,20 @@ from typing import ClassVar, override
 
 from sklearn.decomposition import FactorAnalysis
 
-import jax
-import numpy as np
-import scipy.optimize
 from jax import Array, numpy as jnp, vmap
 from jax.numpy.linalg import multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from equinox import Module
 
 from .utils import (
+    LoadingTerms,
     sequence_info_repr,
     lbfgs_solve,
-    ridge_estimate,
 )
 
 
 TAU = 1e-6
 MAX_LOGRATE = 7.0
-
-# Lower bound on the ARD precision, as a log. The marginal evidence is flat
-# (not minimised) as a precision vanishes, so optimising it needs a floor.
-ARD_LOG_ALPHA_FLOOR = -12.0
 
 
 def fa_init(ys, n_components, random_state):
@@ -101,14 +94,19 @@ class CVI:
         CVI.registry[cls.__name__] = cls
 
     @classmethod
-    @abstractmethod
-    def update_readout(cls, *args, **kwargs) -> tuple[Params, float]:
-        """Update readout parameters given latent statistics.
+    def loading_terms(
+        cls, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> LoadingTerms | None:
+        """Conjugate loading representation, if the readout has one.
+
+        A readout that exposes this makes its dependence on the loadings
+        quadratic, which is what lets an estimator integrate them out instead
+        of profiling them. Returning ``None`` means the readout offers only
+        :meth:`readout_objective`, so an estimator that needs conjugacy cannot
+        be used with it.
 
         Parameters
         ----------
-        params : Params
-            Current readout parameter state.
         y : Array
             Observations shaped `(sequences, time, obs_dim (N))`.
         valid_y : Array
@@ -120,9 +118,44 @@ class CVI:
 
         Returns
         -------
-        tuple[Params, float]
-            Updated parameter state and an objective value.
+        LoadingTerms or None
+            Conjugate representation, or ``None``.
         """
+        return None
+
+    @classmethod
+    def readout_objective(
+        cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
+    ) -> Array:
+        """Scalar readout objective including the loading penalty.
+
+        The readout owns its own averaging, so the penalty it receives is in
+        the same units as its data term. The penalty has one entry per
+        coefficient of ``[d, C]``, with index 0 the bias.
+
+        Parameters
+        ----------
+        params : tuple[Array, Array]
+            Loading matrix and bias vector `(C, d)`.
+        y : Array
+            Observations shaped `(sequences, time, obs_dim (N))`.
+        valid_y : Array
+            Observation mask aligned with `y`.
+        m : Array
+            Posterior means shaped `(sequences, time, latent_dim (K))`.
+        V : Array
+            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
+        penalty : Array
+            Diagonal loading penalty shaped `(latent_dim (K) + 1,)`.
+
+        Returns
+        -------
+        Array
+            Scalar objective.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} exposes neither loading_terms nor a readout objective"
+        )
 
     @classmethod
     @abstractmethod
@@ -234,244 +267,21 @@ class CVI:
 
 def _gaussian_loading_moments(
     y: Array, valid_y: Array, m: Array, V: Array
-) -> tuple[Array, Array, Array]:
-    """Sufficient statistics of the expected Gaussian readout in ``(d, C)``.
+) -> LoadingTerms:
+    """Conjugate loading representation of the Gaussian readout.
 
-    Given latent moments ``q(z) = N(m, V)``, the expected readout
-    log-likelihood is quadratic in ``beta = [d, C]`` of the form
-    ``-0.5 beta' Prec beta + beta' c``, up to terms independent of ``beta``.
-    That quadratic form is what makes a Gaussian loading prior conjugate.
-
-    Parameters
-    ----------
-    y : Array
-        Observations shaped ``(time, obs_dim (N))``.
-    valid_y : Array
-        Observation mask aligned with ``y``.
-    m : Array
-        Latent posterior means shaped ``(time, latent_dim (K))``.
-    V : Array
-        Latent posterior covariances shaped ``(time, latent_dim (K), latent_dim (K))``.
-
-    Returns
-    -------
-    tuple[Array, Array, Array]
-        ``Prec`` shaped ``(N, K + 1, K + 1)``, ``c`` shaped ``(N, K + 1)``, and
-        the observed count per feature shaped ``(N,)``. The bias index is 0 and
-        is never regularised by the loading prior.
+    See :class:`~cvhmax.utils.LoadingTerms`. The bias is index 0.
     """
     n_time = m.shape[0]
     design = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
     outer = design[:, :, None] * design[:, None, :]
     outer = outer.at[:, 1:, 1:].add(V)
     observed = valid_y.astype(m.dtype)
-    precision = jnp.einsum("tn,tij->nij", observed, outer)
-    linear = jnp.einsum("tn,ti->ni", jnp.where(valid_y, y, 0.0), design)
-    return precision, linear, jnp.sum(observed, axis=0)
-
-
-def gaussian_ard_evidence(
-    y: Array,
-    valid_y: Array,
-    m: Array,
-    V: Array,
-    log_alpha: Array,
-    log_R: Array,
-    *,
-    alpha_shape: float | None = None,
-    alpha_rate: float | None = None,
-) -> Array:
-    """Marginal log-evidence of the Gaussian readout under ARD loading priors.
-
-    Integrates the loadings out of the expected readout log-likelihood under
-    ``C[:, k] ~ N(0, alpha_k^-1 I)``. The prior on the bias is flat, which
-    contributes an additive constant that is identical across models and is
-    therefore omitted.
-
-    Parameters
-    ----------
-    y : Array
-        Observations shaped ``(time, obs_dim (N))``.
-    valid_y : Array
-        Observation mask aligned with ``y``.
-    m : Array
-        Latent posterior means shaped ``(time, latent_dim (K))``.
-    V : Array
-        Latent posterior covariances shaped ``(time, latent_dim (K), latent_dim (K))``.
-    log_alpha : Array
-        Log ARD precisions, shape ``(latent_dim (K),)``.
-    log_R : Array
-        Log diagonal observation variances, shape ``(obs_dim (N),)``.
-    alpha_shape : float, optional
-        Shape of a Gamma hyperprior on the precisions. Both this and
-        `alpha_rate` must be given to enable it.
-    alpha_rate : float, optional
-        Rate of the Gamma hyperprior on the precisions.
-
-    Returns
-    -------
-    Array
-        Scalar marginal log-evidence.
-
-    Notes
-    -----
-    The likelihood used here is ``exp(E_q[log p(y | z, C, d)])``, which Jensen
-    bounds below the latent-averaged likelihood ``E_q[p(y | z, C, d)]``. The
-    returned value is therefore a lower bound on the evidence at the supplied
-    latent moments, not the evidence under the latent prior.
-    """
-    precision, linear, counts = _gaussian_loading_moments(y, valid_y, m, V)
-    n_obs = precision.shape[0]
-    variance = jnp.exp(log_R)
-    scaled = linear / variance[:, None]
-    posterior = precision / variance[:, None, None] + jnp.diag(
-        jnp.concatenate((jnp.zeros(1), jnp.exp(log_alpha)))
-    )[None]
-    _, logdet = jnp.linalg.slogdet(posterior)
-    solved = jnp.linalg.solve(posterior, scaled[..., None])[..., 0]
-    squared = jnp.sum(jnp.where(valid_y, y**2, 0.0), axis=0)
-    # Per feature: the Gaussian normalisation of the observation term, plus the
-    # proper-Gaussian normalisation of the precision prior, plus the
-    # normalisation of the Gaussian integral over (d, C).
-    normalisation = 0.5 * n_obs * (
-        jnp.sum(log_alpha - jnp.log(2 * jnp.pi))
-        + (log_alpha.shape[0] + 1) * jnp.log(2 * jnp.pi)
-    )
-    evidence = (
-        jnp.sum(
-            -0.5 * counts * jnp.log(2 * jnp.pi * variance)
-            - 0.5 * squared / variance
-            - 0.5 * logdet
-            + 0.5 * jnp.sum(scaled * solved, axis=-1)
-        )
-        + normalisation
-    )
-    if alpha_shape is not None and alpha_rate is not None:
-        # Gamma(shape, rate) on the precisions, shared across features. It
-        # bounds alpha at both ends, so a precision cannot run away and no
-        # separate floor is needed.
-        evidence = evidence + (alpha_shape - 1.0) * jnp.sum(log_alpha)
-        evidence = evidence - alpha_rate * jnp.sum(jnp.exp(log_alpha))
-    return evidence
-
-
-def gaussian_ard_estimate(
-    y: Array,
-    valid_y: Array,
-    m: Array,
-    V: Array,
-    *,
-    R: Array | None = None,
-    alpha_init: Array | None = None,
-    alpha_shape: float | None = None,
-    alpha_rate: float | None = None,
-) -> tuple[Params, Array, float]:
-    """Fit Gaussian loadings with per-latent ARD precisions.
-
-    Maximises :func:`gaussian_ard_evidence` over the precisions, with the
-    loadings integrated out rather than profiled. Precisions are reported as
-    fitted: a large value marks a latent whose column has been shrunk towards
-    zero, and the separation between latent precisions is what identifies an
-    effective dimensionality. Latent moments are held fixed, so this is a
-    conditional analysis.
-
-    This replaces the ridge loading update rather than supplementing it:
-    combined with a separate ridge penalty it would double-regularise the same
-    block.
-
-    Parameters
-    ----------
-    y : Array
-        Observations shaped ``(time, obs_dim (N))``.
-    valid_y : Array
-        Observation mask aligned with ``y``.
-    m : Array
-        Latent posterior means shaped ``(time, latent_dim (K))``.
-    V : Array
-        Latent posterior covariances shaped ``(time, latent_dim (K), latent_dim (K))``.
-    R : Array, optional
-        Initial diagonal observation covariance shaped ``(N, N)``. Defaults to
-        the marginal variance of each feature about its masked mean.
-    alpha_init : Array, optional
-        Initial ARD precisions, shape ``(K,)``. Defaults to ones.
-    alpha_shape : float, optional
-        Shape of a Gamma hyperprior on the precisions, passed through to
-        :func:`gaussian_ard_evidence`. Bounds the precisions at both ends, so
-        no floor is relied on.
-    alpha_rate : float, optional
-        Rate of the Gamma hyperprior on the precisions.
-
-    Returns
-    -------
-    tuple[Params, Array, float]
-        Fitted readout parameters, ARD precisions shaped ``(K,)``, and the
-        marginal log-evidence at the optimum.
-
-    Notes
-    -----
-    Precisions and observation variances are maximised jointly, mirroring the
-    evidence-based update used for the noise level in the ARD literature. The
-    loadings themselves are integrated out rather than profiled.
-
-    With ``V = 0`` the Jensen bound below is tight, so the evidence is the exact
-    marginal likelihood of an ARD linear regression on the latent means and the
-    result matches a standard ARD regression on the same design.
-    """
-    n_latent = m.shape[1]
-    counts = jnp.sum(valid_y.astype(m.dtype), axis=0)
-    if R is None:
-        mean = jnp.sum(jnp.where(valid_y, y, 0.0), axis=0) / counts
-        variance = jnp.sum(jnp.where(valid_y, (y - mean) ** 2, 0.0), axis=0) / counts
-    else:
-        variance = jnp.diag(jnp.asarray(R))
-    alpha = jnp.ones(n_latent) if alpha_init is None else jnp.asarray(alpha_init)
-
-    def negative_evidence(unconstrained: Array) -> Array:
-        # An unconstrained variable with the precision floored: the evidence
-        # flattens, rather than diverging, as a precision vanishes.
-        log_alpha = ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(unconstrained[:n_latent])
-        return -gaussian_ard_evidence(
-            y,
-            valid_y,
-            m,
-            V,
-            log_alpha,
-            unconstrained[n_latent:],
-            alpha_shape=alpha_shape,
-            alpha_rate=alpha_rate,
-        )
-
-    value_and_grad = jax.jit(jax.value_and_grad(negative_evidence))
-
-    def objective(unconstrained):
-        value, grad = value_and_grad(jnp.asarray(unconstrained))
-        return float(value), np.asarray(grad)
-
-    initial = jnp.concatenate(
-        (
-            jnp.log(jnp.expm1(jnp.log(alpha) - ARD_LOG_ALPHA_FLOOR)),
-            jnp.log(variance),
-        )
-    )
-    result = scipy.optimize.minimize(
-        objective,
-        np.asarray(initial),
-        jac=True,
-        method="L-BFGS-B",
-        options={"maxiter": 5000, "ftol": 1e-12, "gtol": 1e-10},
-    )
-    optimum = jnp.asarray(result.x)
-    alpha = jnp.exp(ARD_LOG_ALPHA_FLOOR + jax.nn.softplus(optimum[:n_latent]))
-    variance = jnp.exp(optimum[n_latent:])
-    precision, linear, _ = _gaussian_loading_moments(y, valid_y, m, V)
-    posterior = precision / variance[:, None, None] + jnp.diag(
-        jnp.concatenate((jnp.zeros(1), alpha))
-    )[None]
-    beta = jnp.linalg.solve(
-        posterior, (linear / variance[:, None])[..., None]
-    )[..., 0]
-    return Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance)), alpha, -float(
-        result.fun
+    return LoadingTerms(
+        precision=jnp.einsum("tn,tij->nij", observed, outer),
+        linear=jnp.einsum("tn,ti->ni", jnp.where(valid_y, y, 0.0), design),
+        counts=jnp.sum(observed, axis=0),
+        squared=jnp.sum(jnp.where(valid_y, y**2, 0.0), axis=0),
     )
 
 
@@ -533,35 +343,15 @@ class Gaussian(CVI):
 
     @classmethod
     @override
-    def update_readout(
-        cls, params: Params, y: Array, valid_y: Array, m: Array, P: Array
-    ) -> tuple[Params, float]:
-        """Perform a ridge regression update of the Gaussian readout.
-
-        Parameters
-        ----------
-        params : Params
-            Current readout parameter state.
-        y : Array
-            Observation tensor shaped `(sequences, time, obs_dim (N))`.
-        valid_y : Array
-            Observation mask aligned with `y`.
-        m : Array
-            Posterior means shaped `(sequences, time, latent_dim (K))`.
-        P : Array
-            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
-
-        Returns
-        -------
-        tuple[Params, float]
-            Updated parameters and the (unused) negative log-likelihood proxy.
-        """
+    def loading_terms(
+        cls, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> LoadingTerms:
+        """Conjugate Gaussian loading representation."""
         y = y.reshape(-1, y.shape[-1])
         valid_y = valid_y.reshape(y.shape)
         m = m.reshape(-1, m.shape[-1])
-        P = P.reshape(-1, *P.shape[-2:])
-        C, d, R = ridge_estimate(y, valid_y, m, P, params.R)
-        return Params(C=C, d=d, R=R), jnp.nan
+        V = V.reshape(-1, *V.shape[-2:])
+        return _gaussian_loading_moments(y, valid_y, m, V)
 
     @classmethod
     @override
@@ -572,6 +362,7 @@ class Gaussian(CVI):
         n_factors: int,
         *,
         random_state: int,
+        penalty: Array | None = None,
         params: Params | None = None,
     ) -> Params:
         """Initialise Gaussian readout via FA.
@@ -586,6 +377,10 @@ class Gaussian(CVI):
             Number of latent factors.
         random_state : int
             Seed used for factor analysis.
+        penalty : Array, optional
+            Loading penalty supplied by the estimator. Unused here: the
+            Gaussian start is data-driven and is refined by the calling
+            estimator.
         params : Params or None, optional
             If provided, returned as-is (skipping initialisation).
 
@@ -608,7 +403,7 @@ def poisson_readout_objective(
     valid_y: Array,
     m: Array,
     V: Array,
-    gamma: float = 1.5,
+    penalty: Array,
 ) -> float:
     """Average Poisson readout objective per observed time step.
 
@@ -627,10 +422,9 @@ def poisson_readout_objective(
         Posterior means with shape `(samples, latent_dim)`.
     V : Array
         Posterior covariances with shape `(samples, latent_dim, latent_dim)`.
-    gamma : float, default=1.5
-        Strength of the squared L2 penalty on the loading matrix. This default
-        matches the effective strength of the previous norm penalty, whose
-        gradient magnitude was `gamma` rather than `2 * gamma * ||C||`.
+    penalty : Array
+        Diagonal loading penalty shaped ``(latent_dim (K) + 1,)``, with index 0
+        the bias. Applied in the same units as the data term.
 
     Returns
     -------
@@ -638,6 +432,10 @@ def poisson_readout_objective(
         Readout objective averaged over observed time steps.
     """
     C, d = params
+    y = y.reshape(-1, y.shape[-1])
+    valid_y = valid_y.reshape(y.shape)
+    m = m.reshape(-1, m.shape[-1])
+    V = V.reshape(-1, *V.shape[-2:])
     n_valid_steps = jnp.sum(jnp.any(valid_y, axis=-1))
 
     def step_objective(y_t, mask_t, m_t, V_t):
@@ -648,7 +446,8 @@ def poisson_readout_objective(
         return jnp.sum(jnp.where(mask_t, jnp.exp(eta) - eta * observed_y, 0.0))
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
-    return (jnp.sum(step_objectives) + gamma * jnp.sum(C**2)) / n_valid_steps
+    total = jnp.sum(step_objectives) + jnp.sum(penalty[1:, None] * C**2)
+    return total / n_valid_steps
 
 
 def poisson_cvi_step_stats(
@@ -756,6 +555,14 @@ class Poisson(CVI):
     """CVI readout for Poisson observations with exponential link."""
 
     @classmethod
+    @override
+    def readout_objective(
+        cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
+    ) -> Array:
+        """Average Poisson readout objective per observed time step."""
+        return poisson_readout_objective(params, y, valid_y, m, V, penalty)
+
+    @classmethod
     def initialize_info(
         cls,
         params: Params,
@@ -799,50 +606,6 @@ class Poisson(CVI):
             valid_y,
         )
         return j, J
-
-    @classmethod
-    def update_readout(
-        cls,
-        params: Params,
-        y: Array,
-        valid_y: Array,
-        m: Array,
-        V: Array,
-    ) -> tuple[Params, float]:
-        """Optimise Poisson readout parameters via LBFGS.
-
-        Parameters
-        ----------
-        params : Params
-            Current readout parameter state.
-        y : Array
-            Observation tensor shaped `(sequences, time, obs_dim (N))`.
-        valid_y : Array
-            Observation mask aligned with `y`.
-        m : Array
-            Posterior means shaped `(sequences, time, latent_dim (K))`.
-        V : Array
-            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
-
-        Returns
-        -------
-        tuple[Params, float]
-            Updated parameters and the unregularized readout objective.
-        """
-        C = params.C
-        d = params.d
-
-        y = y.reshape(-1, y.shape[-1])
-        valid_y = valid_y.reshape(y.shape)
-        m = m.reshape(-1, m.shape[-1])
-        V = V.reshape(-1, *V.shape[-2:])
-
-        C, d = lbfgs_solve(
-            (C, d), partial(poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V)
-        )
-
-        nell = poisson_readout_objective((C, d), y=y, valid_y=valid_y, m=m, V=V, gamma=0.0)
-        return Params(C=C, d=d, R=jnp.asarray(0.0)), nell
 
     @classmethod
     def update_pseudo(
@@ -904,6 +667,7 @@ class Poisson(CVI):
         n_factors: int,
         *,
         random_state: int,
+        penalty: Array | None = None,
         params: Params | None = None,
     ) -> Params:
         """Initialise Poisson readout via FA followed by LBFGS optimisation.
@@ -937,8 +701,14 @@ class Poisson(CVI):
         C = C / mean_rate[:, None]
         d = jnp.log(mean_rate)
         V = jnp.zeros((y.shape[0], n_factors, n_factors))
+        if penalty is None:
+            penalty = jnp.zeros(n_factors + 1)
         C, d = lbfgs_solve(
-            (C, d), partial(poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V)
+            (C, d),
+            partial(
+                poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V,
+                penalty=penalty,
+            ),
         )
 
         return Params(C=C, d=d, R=jnp.asarray(0.0))

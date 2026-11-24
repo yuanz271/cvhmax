@@ -11,6 +11,7 @@ from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
 from .cvi import CVI, Gaussian, Params
+from .estimator import Estimator
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
 from .utils import cho_inv, real_repr, symm, training_progress
@@ -83,11 +84,25 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
     return jnp.linalg.norm(value_new - value_old) / denom
 
 
-def readout_change(params_new: Params, params_old: Params) -> Array:
-    """Return the GLM parameter change modulo latent rotation."""
+def readout_change(params_new: Params, params_old: Params, *, aligned: bool = True) -> Array:
+    """Return the GLM parameter change modulo latent rotation.
+
+    Parameters
+    ----------
+    params_new, params_old : Params
+        Successive readout parameters.
+    aligned : bool, default=True
+        Whether to compare the loadings up to the orthogonal rotation gauge.
+        That gauge exists when the loading prior treats every latent column
+        alike; a per-column prior leaves only permutation and sign, and aligning
+        would then hide real differences.
+    """
     C_new, C_old = params_new.C, params_old.C
-    left, _, right = jnp.linalg.svd(C_new.T @ C_old, full_matrices=False)
-    delta_C = _relative_change(C_new @ (left @ right), C_old)
+    if aligned:
+        left, _, right = jnp.linalg.svd(C_new.T @ C_old, full_matrices=False)
+        delta_C = _relative_change(C_new @ (left @ right), C_old)
+    else:
+        delta_C = _relative_change(C_new, C_old)
     delta_d = _relative_change(params_new.d, params_old.d)
     delta_R = _relative_change(params_new.R, params_old.R)
     return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
@@ -147,6 +162,8 @@ class CVHM:
     kernels: Sequence[Any]
     params: Any = None
     observation: str = "Gaussian"
+    estimator: str = "RidgeEstimator"
+    estimator_config: dict | None = None
     lr: float = 0.1
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 10
@@ -159,6 +176,16 @@ class CVHM:
     def __post_init__(self):
         """Resolve the selected CVI subclass and validate fit settings."""
         self.cvi = CVI.registry[self.observation]
+        self.estimator_impl = Estimator.registry[self.estimator](
+            **(self.estimator_config or {})
+        )
+        if self.estimator_impl.requires_conjugate_terms and (
+            self.cvi.loading_terms.__func__ is CVI.loading_terms.__func__
+        ):
+            raise ValueError(
+                f"estimator {self.estimator!r} needs a conjugate loading "
+                f"representation, which {self.observation!r} does not provide"
+            )
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
             raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")
@@ -357,8 +384,13 @@ class CVHM:
             random_state = secrets.randbits(32)
         if issubclass(self.cvi, Gaussian) and self.params is not None:
             _validate_gaussian_noise(self.params, y.shape[-1])
-        params = self.cvi.initialize_params(
-            y, valid_y, self.n_components, random_state=random_state, params=self.params
+        params = self.estimator_impl.initialize_params(
+            self.cvi,
+            y,
+            valid_y,
+            self.n_components,
+            random_state=random_state,
+            params=self.params,
         )
         context = self._inference_context(y.shape[0])
         gaussian = issubclass(self.cvi, Gaussian)
@@ -375,9 +407,15 @@ class CVHM:
 
             def body(state):
                 _, _, m, V = self._infer_state(state.params, y, valid_y, context)
-                updated, nell = self.cvi.update_readout(state.params, y, valid_y, m, V)
+                updated, nell = self.estimator_impl.estimate(
+                    self.cvi, state.params, y, valid_y, m, V
+                )
                 metric = jnp.where(
-                    state.iteration > 0, readout_change(updated, state.params), jnp.inf
+                    state.iteration > 0,
+                    readout_change(
+                        updated, state.params, aligned=self.estimator_impl.isotropic
+                    ),
+                    jnp.inf,
                 )
                 iteration = state.iteration + 1
                 passing = (
@@ -440,6 +478,8 @@ class CVHM:
             "min_iter": int(self.min_iter),
             "convergence_patience": int(self.convergence_patience),
             "observation": str(self.observation),
+            "estimator": str(self.estimator),
+            "estimator_config": self.estimator_config,
             "kernels": [k.get_config() for k in self.kernels],
         }
 
@@ -470,7 +510,7 @@ class CVHM:
         required = (
             "n_components", "dt", "lr", "max_iter", "cvi_iter",
             "tol", "min_iter", "convergence_patience",
-            "observation", "kernels",
+            "observation", "estimator", "estimator_config", "kernels",
         )
         for key in required:
             if key not in config:
@@ -481,6 +521,8 @@ class CVHM:
             dt=config["dt"],
             kernels=kernels,
             observation=config["observation"],
+            estimator=config["estimator"],
+            estimator_config=config["estimator_config"],
             lr=config["lr"],
             max_iter=config["max_iter"],
             cvi_iter=config["cvi_iter"],
