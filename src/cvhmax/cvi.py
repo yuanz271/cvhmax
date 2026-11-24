@@ -446,7 +446,8 @@ def poisson_readout_objective(
         return jnp.sum(jnp.where(mask_t, jnp.exp(eta) - eta * observed_y, 0.0))
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
-    total = jnp.sum(step_objectives) + jnp.sum(penalty[1:, None] * C**2)
+    # One precision per latent column, broadcast across features.
+    total = jnp.sum(step_objectives) + jnp.sum(penalty[1:][None, :] * C**2)
     return total / n_valid_steps
 
 
