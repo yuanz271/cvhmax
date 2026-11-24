@@ -101,6 +101,17 @@ readout, holding the data, readout, and other kernel hyperparameters fixed:
 JAX_ENABLE_X64=1 python examples/demo_vdp.py
 ```
 
+A separate demo shows ARD. It simulates two Van der Pol latents, observes them
+through a Gaussian readout, and fits five latents with `RidgeEstimator` and with
+`ARDEstimator` on the same data. ARD separates the fitted precisions by more than
+three orders of magnitude and drives the three surplus loadings to numerical
+zero, where ridge only shrinks them. It prints the ranking and writes
+`examples/demo_ard.pdf`:
+
+```console
+JAX_ENABLE_X64=1 python examples/demo_ard.py
+```
+
 ## Numerical stability
 
 The recommended inference path is `JAX_ENABLE_X64=1` with CVHM correlation

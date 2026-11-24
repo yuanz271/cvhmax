@@ -4,6 +4,8 @@
 
 ### Added
 
+- Added `examples/demo_ard.py`, a standalone demo of `ARDEstimator`: two Van der
+  Pol latents, five fitted latents, ridge and ARD on the same data.
 - Added a loading-estimator axis, selected by `CVHM(estimator=...)`, separating
   how the readout loadings are fitted from the observation model. `RidgeEstimator`
   is the default, `FrozenEstimator` holds supplied parameters fixed, and
