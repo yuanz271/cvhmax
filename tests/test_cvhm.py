@@ -253,6 +253,31 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     assert ridge_norms[n_true:].min() > 1e-3 * ridge_norms[n_true - 1]
 
 
+def test_frozen_estimator_leaves_the_supplied_readout_untouched():
+    """A frozen fit infers latents under the given readout and never refits it."""
+    from cvhmax.cvi import Params
+
+    rng = np.random.default_rng(0)
+    kernels = [HidaMatern(1.0, 8.0, 0.0, 1)]
+    start = Params(
+        C=jnp.asarray(rng.normal(size=(4, 1))),
+        d=jnp.asarray(rng.normal(size=4)),
+        R=jnp.diag(jnp.asarray([0.5, 0.6, 0.7, 0.8])),
+    )
+    y = jnp.asarray(rng.normal(size=(1, 40, 4)))
+
+    model = CVHM(
+        n_components=1, dt=1.0, kernels=kernels, observation="Gaussian",
+        estimator="FrozenEstimator", params=start, max_iter=5,
+    ).fit(y, random_state=0)
+
+    for name in ("C", "d", "R"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(model.params, name)), np.asarray(getattr(start, name))
+        )
+    assert np.isfinite(np.asarray(model.posterior[0])).all()
+
+
 def test_ard_estimator_rejects_a_non_conjugate_readout():
     """ARD needs a conjugate loading block, which Poisson does not provide."""
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]

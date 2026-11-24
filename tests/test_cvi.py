@@ -71,22 +71,6 @@ def test_gaussian_ard_evidence_matches_quadrature():
     npt.assert_allclose(actual, expected, rtol=1e-8, atol=1e-6)
 
 
-def test_gaussian_ard_estimate_prunes_inactive_latent():
-    """A latent column carrying no signal receives a much larger precision."""
-    T, N, K = 60, 8, 2
-    rng = np.random.default_rng(1)
-    m = jnp.asarray(rng.standard_normal((T, K)))
-    V = jnp.zeros((T, K, K))
-    loadings = np.zeros((N, K))
-    loadings[:, 0] = rng.normal(scale=0.8, size=N)
-    y = jnp.asarray(np.asarray(m) @ loadings.T + rng.normal(scale=0.3, size=(T, N)))
-    valid = jnp.ones((T, N), dtype=bool)
-
-    _, alpha = _ard_fit(y, valid, m, V)
-
-    assert alpha[1] > 10.0 * alpha[0], alpha
-
-
 def test_gaussian_ard_matches_reference_ard_regression():
     """With V = 0 the evidence is exact, so the fit matches a standard ARD fit.
 

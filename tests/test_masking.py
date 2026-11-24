@@ -112,6 +112,31 @@ def test_masked_poisson_information_and_objective():
     npt.assert_allclose(J, expected_J, rtol=1e-10, atol=1e-10)
 
 
+def test_poisson_objective_penalises_each_latent_column_by_its_own_precision():
+    """Unequal precisions weight columns, not features.
+
+    Square ``C`` makes a transposed broadcast silently wrong rather than a shape
+    error, so equal-precision tests cannot see it.
+    """
+    rng = np.random.default_rng(3)
+    n_features = n_latents = 3
+    C = jnp.asarray(rng.normal(size=(n_features, n_latents)))
+    d = jnp.zeros(n_features)
+    y = jnp.asarray(rng.poisson(2.0, size=(5, n_features)).astype(float))
+    valid = jnp.ones_like(y, dtype=bool)
+    m = jnp.asarray(rng.normal(size=(5, n_latents)))
+    V = jnp.zeros((5, n_latents, n_latents))
+    precisions = jnp.asarray([0.2, 1.1, 3.0])
+
+    penalised = poisson_readout_objective(
+        (C, d), y, valid, m, V, jnp.concatenate((jnp.zeros(1), precisions))
+    )
+    plain = poisson_readout_objective((C, d), y, valid, m, V, jnp.zeros(n_latents + 1))
+
+    expected = jnp.sum(precisions * jnp.sum(C**2, axis=0)) / len(y)
+    npt.assert_allclose(penalised - plain, expected, rtol=1e-10)
+
+
 def test_all_observed_poisson_objective_preserves_step_scaling():
     C = jnp.array([[0.2], [0.7]])
     d = jnp.array([0.1, -0.2])

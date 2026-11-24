@@ -63,6 +63,26 @@ def test_fitted_gaussian_round_trip_and_infer(tmp_path):
     assert np.isfinite(np.asarray(covariances)).all()
 
 
+def test_ard_estimator_and_precisions_round_trip(tmp_path):
+    data = _data(n_features=4, n_time=24)
+    model = _model(
+        n_components=1,
+        estimator="ARDEstimator",
+        estimator_config={"alpha_rate": 1e-3, "iterations": 20},
+        max_iter=3,
+    ).fit(data, random_state=0)
+    path = tmp_path / "ard.cvhmax"
+    model.save(path)
+    restored = CVHM.load(path)
+
+    assert restored.estimator == "ARDEstimator"
+    assert restored.estimator_config == {"alpha_rate": 1e-3, "iterations": 20}
+    assert restored.estimator_impl.alpha_rate == 1e-3
+    assert restored.estimator_impl.iterations == 20
+    np.testing.assert_array_equal(np.asarray(restored.params.alpha), np.asarray(model.params.alpha))
+    np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
+
+
 def test_fitted_poisson_round_trip_with_sentinel_r(tmp_path):
     data = jnp.asarray(np.random.default_rng(1).poisson(2.0, size=(1, 8, 2)))
     model = _model("Poisson").fit(data, random_state=0)
@@ -157,6 +177,19 @@ def test_readout_change_is_invariant_to_glm_rotation():
     old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
     new = Params(C=C @ rotation, d=old.d, R=old.R)
     assert float(readout_change(new, old)) < 1e-6
+
+
+def test_readout_change_without_alignment_sees_a_rotation():
+    """Per-column (ARD) precisions break the rotation gauge, so it must not be absorbed."""
+    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
+    theta = 0.37
+    rotation = jnp.asarray(
+        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+    )
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C @ rotation, d=old.d, R=old.R)
+    assert float(readout_change(new, old, aligned=False)) > 0.1
+    assert float(readout_change(new, old, aligned=True)) < 1e-6
 
 
 def test_readout_change_detects_loading_gain():

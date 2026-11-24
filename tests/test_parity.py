@@ -5,9 +5,6 @@ They are marked with @pytest.mark.parity and will be skipped if either
 dependency is unavailable.
 """
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import numpy.testing as npt
 import pytest
@@ -16,15 +13,15 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import block_diag
 
+from cvhmax.hm import HidaMatern, Ks, spectral_density
+from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
+from cvhmax.utils import real_repr, symm, sequence_info_repr
+from cvhmax.filtering import predict, information_filter, bifilter
+from cvhmax.cvi import TAU, poisson_cvi_step_stats
+
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_PARITY = 1e-10 if X64_ENABLED else 5e-6
 RTOL_PARITY = 1e-8 if X64_ENABLED else 1e-5
-
-from cvhmax.hm import HidaMatern, Ks, spectral_density
-from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
-from cvhmax.utils import real_repr, symm, conjtrans, gamma, sequence_info_repr
-from cvhmax.filtering import predict, information_filter, bifilter
-from cvhmax.cvi import TAU, poisson_cvi_step_stats
 
 
 def _torch_and_ref_available():
@@ -244,7 +241,7 @@ def test_forward_filter_parity():
     from filters import information_filter_forward_batch
 
     rng = np.random.default_rng(99)
-    T, L = 30, 2
+    T = 30
     n_sequences = 1
 
     # Build SSM from a known kernel
@@ -853,7 +850,9 @@ def test_bifilter_merging_parity():
     J_np = np.tile(np.eye(state_dim) * 0.5, (1, T, 1, 1))
 
     # --- reference ---
-    to_t = lambda x: torch.tensor(x, dtype=torch.float64)
+    def to_t(x):
+        return torch.tensor(x, dtype=torch.float64)
+
     h_f, J_f, h_fp, J_fp = information_filter_forward_batch(
         to_t(j_np), to_t(J_np), to_t(Af_r), to_t(Qf_r), to_t(z0_np), to_t(Z0_np)
     )
@@ -912,7 +911,9 @@ def test_observation_info_parity():
     valid_y_np = np.ones((1, T, N))
 
     # --- reference ---
-    to_t = lambda x: torch.tensor(x, dtype=torch.float64)
+    def to_t(x):
+        return torch.tensor(x, dtype=torch.float64)
+
     h_ref, J_ref = get_information_representation(
         to_t(y_np), to_t(C_np), to_t(d_np), to_t(R_np)
     )

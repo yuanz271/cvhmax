@@ -2,14 +2,10 @@ import numpy as np
 import jax
 from jax import random as jrnd
 import jax.numpy as jnp
-import chex
 import numpy.testing as npt
 
 from cvhmax import pad_sequences, unpad_sequences, utils
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
-ATOL_TINY = 1e-14 if X64_ENABLED else 1e-6
-ATOL_MED = 1e-10 if X64_ENABLED else 1e-6
 from cvhmax.utils import (
     real_repr,
     symm,
@@ -17,6 +13,10 @@ from cvhmax.utils import (
     step_info_repr,
     sequence_info_repr,
 )
+
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_TINY = 1e-14 if X64_ENABLED else 1e-6
+ATOL_MED = 1e-10 if X64_ENABLED else 1e-6
 
 
 def test_filter_array():
