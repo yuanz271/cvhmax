@@ -130,6 +130,7 @@ def run_case(
     kernels,
     dt,
     observation,
+    estimator,
     title,
     out_path,
     *,
@@ -152,6 +153,8 @@ def run_case(
         Sampling interval.
     observation : str
         Observation model name, e.g. ``"Poisson"``.
+    estimator : str
+        Loading estimator name, e.g. ``"FrozenEstimator"`` to hold ``params``.
     title : str
         Figure super-title.
     out_path : str
@@ -341,6 +344,7 @@ def main():
         kernels,
         dt,
         observation="Poisson",
+        estimator="RidgeEstimator",
         title="CVHM on Van der Pol latents (estimated readout)",
         out_path="examples/demo_vdp_estimated.pdf",
         max_iter=50,
