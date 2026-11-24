@@ -109,6 +109,8 @@ A representative manifest is:
     "min_iter": 2,
     "convergence_patience": 2,
     "observation": "Gaussian",
+    "estimator": "RidgeEstimator",
+    "estimator_config": null,
     "kernels": [
       {
         "sigma": 1.0,
@@ -125,7 +127,8 @@ A representative manifest is:
     "arrays": {
       "C": {"shape": [2, 1], "dtype": "float64"},
       "d": {"shape": [2], "dtype": "float64"},
-      "R": {"shape": [2, 2], "dtype": "float64"}
+      "R": {"shape": [2, 2], "dtype": "float64"},
+      "alpha": {"shape": [1], "dtype": "float64"}
     }
   }
 }
@@ -139,11 +142,14 @@ The manifest must record:
 
 - archive format and integer version;
 - all `CVHM`-owned configuration: `n_components`, `dt`, `lr`, `max_iter`,
-  `cvi_iter`, `tol`, `min_iter`, `convergence_patience`, and `observation`;
+  `cvi_iter`, `tol`, `min_iter`, `convergence_patience`, `observation`,
+  `estimator` (an exact class name), and `estimator_config` (constructor
+  keywords, or `null`);
 - each HidaMatern configuration: `sigma`, `rho`, `omega`, `order`, and `s`;
 - whether fitted parameters are present;
 - parameter-tree metadata needed to create the runtime Equinox `like` PyTree,
-  including the always-present JAX-compatible `Params.R` leaf; and
+  including the always-present JAX-compatible `Params.R` leaf and the optional
+  `Params.alpha` leaf (the fitted loading precisions); and
 - array shape and dtype metadata required by the Equinox restore path.
 
 JSON values must be finite and representable without loss of model semantics.

@@ -60,28 +60,39 @@ archive format and compatibility policy.
 
 ## CVI and Readouts
 
-- `CVI`: registry-backed base class with stateless abstract methods
-  - `initialize_params(y, valid_y, n_factors, *, random_state)` — create params
+- `CVI`: registry-backed base class for an observation model, with stateless
+  class methods
   - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
   - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
-  - `update_readout(params, y, valid_y, m, V)` — M-step for observation params
-- `Gaussian`, `Poisson`: built-in readouts
-- `Params`: convenience container of `C`, `d`, `R` (no `M` — that lives in CVHM)
+  - `loading_terms(y, valid_y, m, V)` — conjugate loading statistics
+    (`LoadingTerms`), or `None` when the likelihood has no conjugate form
+  - `readout_objective(params, y, valid_y, m, V, penalty)` — penalised negative
+    expected log-likelihood, averaged per observed time step
+- `Estimator`: registry-backed base class that owns the readout M-step and the
+  loading prior
+  - `initialize_params(likelihood, y, valid_y, n_factors, *, random_state, params=None)`
+  - `estimate(likelihood, params, y, valid_y, m, V)` — returns `(Params, objective)`
+- `Gaussian`, `Poisson`: built-in observation models
+- `RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`: built-in estimators
+- `Params`: container of `C`, `d`, `R`, and the fitted loading precisions
+  `alpha` (no `M` — that lives in CVHM)
 
 The built-in readouts use the loading matrix `Params.C`. Gaussian `Params.R`
 is a positive diagonal observation-noise covariance; Poisson uses a scalar zero
 sentinel. Fixed GP kernel amplitudes set the latent prior scale, while `C`
 retains observation-specific gains.
 
-For a Gaussian readout, `gaussian_ard_estimate(y, valid_y, m, V)` fits the
-loadings under a per-latent ARD prior, holding the latent moments fixed, and
-returns `(Params, alpha, log_evidence)`. The fitted precisions `alpha` separate
-latent columns the readout needs from columns shrunk towards zero.
-`gaussian_ard_evidence(...)` evaluates the marginal log-evidence at supplied
-precisions. See `algorithms.md` for the derivation and its limits.
+`ARDEstimator` fits the loadings of a Gaussian readout under a per-latent ARD
+prior, holding the latent moments fixed within each M-step. The fitted
+precisions `Params.alpha` separate latent columns the readout needs from columns
+pruned to numerical zero. `ard_evidence(terms, log_alpha, log_variance)` in
+`cvhmax.estimator` evaluates the marginal log-evidence at supplied precisions.
+See `algorithms.md` for the derivation and its limits.
 
 CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
-explicitly and compares their `C`, `d`, and `R` fields for convergence.
+explicitly and compares their `C`, `d`, and `R` fields for convergence; the
+comparison drops the rotational alignment when the loading prior is anisotropic,
+since ARD ties each precision to a specific column.
 
 Source: `src/cvhmax/cvi.py`
 

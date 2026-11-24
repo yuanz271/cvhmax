@@ -96,6 +96,7 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 | Task | Location | Notes |
 |------|----------|-------|
 | Add new observation model | `src/cvhmax/cvi.py` | Subclass `CVI`; registry via `__init_subclass__` |
+| Add new loading estimator / prior | `src/cvhmax/estimator.py` | Subclass `Estimator`; registry via `__init_subclass__` |
 | Adjust EM loop / training | `src/cvhmax/cvhm.py` | `CVHM.fit()`, `em_step` |
 | Filtering logic | `src/cvhmax/filtering.py` | `information_filter_step`, `bifilter` |
 | Kernel / dynamics blocks | `src/cvhmax/hm.py` | `Af/Qf/Ab/Qb`, `K(tau)` |

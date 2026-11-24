@@ -88,6 +88,12 @@ to the shape of `y`; time-step masks shaped `(sequences, time)` are also support
 Gaussian observation noise is diagonal. For smoother latent
 trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
+`estimator` chooses how the loadings are fitted. The default `"RidgeEstimator"`
+uses a fixed precision. With a Gaussian readout, `"ARDEstimator"` fits one
+precision per latent and drives the loadings of surplus latents to zero, which
+makes `n_components` less critical; read the ranking from `model.params.alpha`.
+`"FrozenEstimator"` holds supplied parameters fixed.
+
 The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen
 readout, holding the data, readout, and other kernel hyperparameters fixed:
 

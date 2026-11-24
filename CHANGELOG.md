@@ -9,9 +9,10 @@
   is the default, `FrozenEstimator` holds supplied parameters fixed, and
   `ARDEstimator` fits one loading precision per latent against the evidence by a
   closed-form fixed point. Fitted precisions are reported as `Params.alpha`.
-- Added `gaussian_ard_estimate` and `gaussian_ard_evidence`: automatic relevance
-  determination for the Gaussian loading matrix, conditional on the latent
-  moments. The expected readout log-likelihood is quadratic in the loadings, so
+- Added automatic relevance determination for the Gaussian loading matrix
+  (`ARDEstimator`, with `ard_evidence` for the marginal log-evidence),
+  conditional on the latent moments. The expected readout log-likelihood is
+  quadratic in the loadings, so
   the evidence is closed form and no Laplace approximation is needed. Precisions
   and observation variances are fitted jointly against the evidence: the
   observation variance comes from expected residuals with no prior, and the

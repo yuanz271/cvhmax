@@ -20,7 +20,7 @@ The `CVHM.fit` method alternates between:
 1) CVI pseudo-observation refresh: `initialize_info` in latent space
 2) Forward-filter warm-up: lift → forward filter → project predictions → `update_pseudo`
 3) CVI iterations: lift → bifilter → project → `update_pseudo` (repeated)
-4) Readout update: `update_readout` in latent space
+4) Readout update: `Estimator.estimate` in latent space
 
 ```
 CVHM loop:
@@ -34,7 +34,7 @@ CVHM loop:
         z, Z = bifilter(j_s, J_s, ...)                          # state
         m, V = project(z, Z, M)                                  # state → latent
         j, J = CVI.update_pseudo(params, y, valid_y, m, V, ...) # latent
-    params = CVI.update_readout(params, y, valid_y, m, V)        # latent
+    params = Estimator.estimate(CVI, params, y, valid_y, m, V)   # latent
 ```
 
 ### Convergence detection
@@ -106,8 +106,8 @@ and clamps the log rate at `MAX_LOGRATE` to bound the rate.
 
 ## Gaussian ARD Loadings
 
-`gaussian_ard_estimate` fits Gaussian loadings under a per-latent automatic
-relevance determination prior. It is a conditional analysis: the latent moments
+`ARDEstimator` fits Gaussian loadings under a per-latent automatic relevance
+determination prior. It is a conditional analysis: the latent moments
 are held fixed, and it answers which latent columns the readout needs, not which
 latents the latent prior supports.
 
@@ -136,8 +136,8 @@ at the supplied moments.
 
 Precisions and observation variances are both maximised against the evidence,
 jointly, mirroring the evidence-based noise update used in the ARD literature.
-Precisions are optimised with a floor in an unconstrained variable, since the
-evidence flattens rather than diverges as a precision vanishes.
+The maximisers are reached by the fixed-point iteration described under
+*Loading Estimators*, so no optimiser runs inside the EM loop.
 
 Sparsity is *not* exact. A fitted precision plateaus at a large but finite
 value and the column is shrunk towards zero rather than deleted, because the
@@ -148,8 +148,8 @@ leaves that choice to the caller. The reference ARD implementation behaves the
 same way: with pruning disabled its precisions plateau, and its exact zeros
 come from a hard precision threshold rather than from divergence.
 
-`gaussian_ard_estimate` replaces `ridge_estimate` as the Gaussian loading
-update rather than supplementing it, since both regularise the same block.
+ARD and ridge regularise the same block of loadings, so choosing between them is
+the choice of `estimator`, not a second update step.
 
 With `V = 0` the Jensen bound is tight: `E_q[log p]` becomes the ordinary
 Gaussian log-likelihood at the latent means, so the evidence is the exact
@@ -268,7 +268,7 @@ Z_post = Z_pred + J
 Where it appears:
 
 - `sde2gp` output — converts information form to `(m, V)` for downstream use
-- Readout/observation model updates (`update_readout`)
+- Readout updates (`Estimator.estimate`)
 - Poisson readout objective (`poisson_readout_objective`)
 
 ### Observation information increments `(j, J)`
