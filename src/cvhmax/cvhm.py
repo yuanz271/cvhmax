@@ -136,8 +136,17 @@ class CVHM:
         Initial CVI parameter state. Defaults to ``None``.
     observation : str, default="Gaussian"
         Name of the CVI observation model registered in `CVI.registry`.
+    estimator : str, default="RidgeEstimator"
+        Name of the loading estimator registered in `Estimator.registry`. It
+        owns the readout M-step and the loading prior. ``"ARDEstimator"``
+        requires an observation model with a conjugate loading representation
+        and is rejected at construction otherwise.
+    estimator_config : dict or None, default=None
+        Keyword arguments for the estimator's constructor, for example
+        ``{"alpha": 0.5}``.
     lr : float, default=1.0
-        Learning rate for pseudo-observation updates.
+        Step size of the CVI update of the pseudo-observations. The fixed point
+        does not depend on it; it only sets how fast the inner loop gets there.
     max_iter : int, default=200
         Maximum number of outer EM iterations.
     cvi_iter : int, default=5

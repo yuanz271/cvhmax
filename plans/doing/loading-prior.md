@@ -81,7 +81,9 @@ class Estimator:
 
 `initialize_params` keeps its `params=None` escape hatch: supplying parameters
 short-circuits initialisation, which is how a fit is currently frozen at preset
-values. See Migration.
+values. The data-driven start itself stays on the likelihood
+(`CVI.initialize_params`); the estimator drives it and supplies the penalty, so
+only the M-step left `CVI`. See Migration.
 
 Estimation is selected with the exact class name, exactly as
 `observation="Gaussian"` selects a likelihood:
@@ -119,8 +121,9 @@ be stated in the docs so nobody expects to keep the prior and change the solver.
 
 ## Migration
 
-Moving `update_readout` and `initialize_params` out of `CVI` breaks four call
-sites, all of which must move in the same change:
+Moving `update_readout` out of `CVI` (and routing `initialize_params` through
+the estimator) breaks four call sites, all of which must move in the same
+change:
 
 | Site | Today | Becomes |
 |---|---|---|
@@ -164,7 +167,7 @@ and friends grow a field. That is contained and preferable to threading a
 second pytree through `fit` and the archive.
 
 Store the precision itself, not its log: it is representable directly, reads
-better in a manifest, and the hyperprior parameters are static estimator
+better in a manifest, and the prior parameters are static estimator
 configuration rather than fitted state, so `alpha` is the only new quantity
 that has to persist and serialise.
 
@@ -232,14 +235,15 @@ Findings that changed the plan while implementing:
    full suite pass, and the reference objective in `test_masking.py` was
    updated to the flat-bias convention.
 2. **Extract `Estimator` and `RidgeEstimator`**, reproducing step 1 exactly. No
-   ARD yet — this step must not change any number. This is where the M-step and
-   `initialize_params` move out of `CVI`; likelihoods keep only the E-step and
-   the data term, and `initialize_info`/`update_pseudo` are untouched.
+   ARD yet — this step must not change any number. This is where the M-step
+   moves out of `CVI`; likelihoods keep the E-step, the data term, and the
+   data-driven start (`initialize_params`, now called through the estimator),
+   and `initialize_info`/`update_pseudo` are untouched.
 3. **Expose `Gaussian.loading_terms`** by moving `_gaussian_loading_moments`
    from module level onto the readout so the estimator can request it.
 4. **Add `ARDEstimator`** wrapping the existing `gaussian_ard_estimate` body.
    Nothing calls that function today, so this is a move rather than a
-   replacement: the evidence, the hyperprior, and the jointly fitted variances
+   replacement: the evidence, the prior, and the jointly fitted variances
    are already written and verified.
 
    **Blocker found while implementing.** The standalone function fits the
@@ -314,19 +318,19 @@ Findings that changed the plan while implementing:
 ## Settled
 
 - **The bias is unpenalised**: a flat prior on `d`, penalty on `C` only.
-- **Hyperprior instead of a floor.** `alpha` takes a Gamma hyperprior
-  (`alpha_shape`, `alpha_rate`), which bounds it at both ends rather than by an
-  ad-hoc floor, and is the standard formulation; the reference implementation
-  uses it on both precisions. Enabled as an option and measured: with a weak
-  prior `Gamma(1 + 1e-6, 1e-6)` an irrelevant column's precision drops from
-  `9.5e10` to `9.9e3` and its norm from `6e-10` to `5e-3`, matching the
-  reference behaviour of plateauing rather than diverging. The strength is a
-  knob; the default is to leave it off.
+- **A Gamma prior on the loading precisions instead of a floor.** `alpha` takes
+  a Gamma prior (`alpha_shape`, `alpha_rate`), which bounds it at both ends
+  rather than by an ad-hoc floor and is the standard formulation. It is a guard
+  on the updater, not a modelling choice: without it the fixed point diverges
+  or reaches precisions near `1e17` on most of a 32-problem grid. The defaults
+  are the reference implementation's weak `Gamma(1 + 1e-6, 1e-6)`, enabled by
+  default, and the fit is insensitive to them over many orders of magnitude.
 - **Observation variances are fitted by the evidence**, jointly with `alpha`,
   not frozen. An earlier revision of this plan froze them because the evidence
   appeared to diverge as a variance vanished; that was an error in the
   evidence's normalisation, since fixed, and the maximum in `R` is interior and
-  clean (`log R* = -2` at `V = 0`, `-1` at `V = 0.3`).
+  clean (`log R* = -2` at `V = 0`, `-1` at `V = 0.3`). The variance itself takes
+  no prior: the residual rule has no `0 / 0` corner.
 - **No hard threshold.** Report `alpha` and document that a large value marks a
   shrunk column; leave any cut to the caller.
 - **The noise rule follows what the estimator fits.** `RidgeEstimator` keeps the

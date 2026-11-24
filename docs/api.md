@@ -62,6 +62,8 @@ archive format and compatibility policy.
 
 - `CVI`: registry-backed base class for an observation model, with stateless
   class methods
+  - `initialize_params(y, valid_y, n_factors, *, random_state, penalty=None, params=None)`
+    — data-driven starting readout, called by the estimator
   - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
   - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
   - `loading_terms(y, valid_y, m, V)` — conjugate loading statistics
@@ -71,6 +73,7 @@ archive format and compatibility policy.
 - `Estimator`: registry-backed base class that owns the readout M-step and the
   loading prior
   - `initialize_params(likelihood, y, valid_y, n_factors, *, random_state, params=None)`
+    — drives the likelihood's start and fills `Params.alpha`
   - `estimate(likelihood, params, y, valid_y, m, V)` — returns `(Params, objective)`
 - `Gaussian`, `Poisson`: built-in observation models
 - `RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`: built-in estimators

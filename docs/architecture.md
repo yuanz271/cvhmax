@@ -105,15 +105,17 @@ all operating in latent space:
 
 | Method | Input | Output |
 |--------|-------|--------|
+| `initialize_params` | observations, loading penalty | data-driven starting readout params |
 | `initialize_info` | params, observations | `(j, J)` in latent space |
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
 | `loading_terms` | observations, posterior `(m, V)` | conjugate loading statistics, or `None` |
 | `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
 
 How the readout parameters are fitted is a separate axis. An `Estimator`
-(`RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`) owns `initialize_params`
-and the M-step `estimate`, and decides the loading prior; it asks the
-observation model for `loading_terms` or `readout_objective`.
+(`RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`) owns the M-step
+`estimate` and decides the loading prior. It asks the observation model for
+`initialize_params` (supplying the penalty), and for `loading_terms` or
+`readout_objective`.
 
 ### Readout params
 

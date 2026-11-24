@@ -107,7 +107,7 @@ class Estimator:
         likelihood : CVI
             Readout whose observation model supplies the starting point.
         y : Array
-            Observations shaped ``(time, features)``.
+            Observations shaped ``(sequences, time, features)``.
         valid_y : Array
             Observation mask aligned with ``y``.
         n_factors : int
@@ -156,13 +156,14 @@ class Estimator:
         params : Params
             Current readout parameters.
         y : Array
-            Observations shaped ``(time, features)``.
+            Observations shaped ``(sequences, time, features)``.
         valid_y : Array
             Observation mask aligned with ``y``.
         m : Array
-            Latent posterior means shaped ``(time, latent_dim)``.
+            Latent posterior means shaped ``(sequences, time, latent_dim)``.
         V : Array
-            Latent posterior covariances shaped ``(time, latent_dim, latent_dim)``.
+            Latent posterior covariances shaped
+            ``(sequences, time, latent_dim, latent_dim)``.
 
         Returns
         -------
@@ -256,7 +257,7 @@ class ARDEstimator(Estimator):
     latent uncertainty. The observation variance needs no prior: its rule is
     the residual variance with the effective parameter count removed, and that
     denominator is bounded away from zero whenever a feature has more observed
-    bins than parameters.
+    time steps than parameters.
 
     The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` both
     vanish together for a column that is being pruned, so the bare rule is a
@@ -266,9 +267,10 @@ class ARDEstimator(Estimator):
     implementation's settings, which removes the corner. It is not a modelling
     claim so much as a guard on the updater.
 
-    Fitted precisions are *not* zeros: an irrelevant column is shrunk towards
-    zero and its precision plateaus at a large finite value, so exact selection
-    remains the caller's decision.
+    An irrelevant column's loadings are driven to numerical zero, but the column
+    is not removed from ``C`` and its precision plateaus at a large finite value
+    set by the guard prior rather than by the data. Only the ranking of the
+    precisions is meaningful, and any threshold is the caller's decision.
     """
 
     requires_conjugate_terms = True

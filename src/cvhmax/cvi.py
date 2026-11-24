@@ -62,7 +62,7 @@ class Params(Module):
 
     This container is used by the built-in Gaussian and Poisson readouts.
     CVHM's convergence metric compares the readout fields ``C``, ``d``, and
-    ``R``.
+    ``R``; ``alpha`` is reported, not compared.
 
     Attributes
     ----------
@@ -76,8 +76,8 @@ class Params(Module):
     alpha : Array or None
         Fitted loading precisions with shape ``(latent_dim (K),)`` when the
         estimator fits them, otherwise ``None``. A large value marks a latent
-        column shrunk towards zero; ranking the columns by ``alpha`` is how
-        effective dimensionality is read off.
+        column whose loadings have been driven to numerical zero; ranking the
+        columns by ``alpha`` is how effective dimensionality is read off.
     """
 
     C: Array
@@ -240,13 +240,16 @@ class CVI:
         n_factors: int,
         *,
         random_state: int,
+        penalty: Array | None = None,
         params=None,
     ):
         """Create the initial readout parameter state.
 
-        When ``params`` is provided, return it directly and skip
-        initialisation.  This allows callers to supply pre-set
-        parameters (e.g. the true readout in a simulation).
+        The data-driven start belongs to the observation model; the estimator
+        calls this and supplies the loading penalty. When ``params`` is
+        provided, return it directly and skip initialisation. This allows
+        callers to supply pre-set parameters (e.g. the true readout in a
+        simulation).
 
         CVHM's convergence metric compares the returned state's ``C``, ``d``,
         and ``R`` fields.
@@ -261,6 +264,10 @@ class CVI:
             Number of latent factors to initialize.
         random_state : int
             Seed for any stochastic initialisation.
+        penalty : Array, optional
+            Diagonal loading penalty shaped ``(latent_dim (K) + 1,)``, with index
+            0 the bias, for readouts whose start is refined against their
+            objective.
         params : optional
             If provided, returned as-is (skipping initialisation).
 
@@ -685,13 +692,17 @@ class Poisson(CVI):
         Parameters
         ----------
         y : Array
-            Flattened observation tensor shaped ``(sequences * time, obs_dim)``.
+            Observation tensor shaped ``(sequences, time, obs_dim)``; leading
+            axes are flattened.
         valid_y : Array
             Observation mask aligned with ``y``.
         n_factors : int
             Number of latent factors.
         random_state : int
             Seed used for factor analysis.
+        penalty : Array, optional
+            Diagonal loading penalty shaped ``(latent_dim (K) + 1,)``, with index
+            0 the bias. Defaults to no penalty.
         params : Params or None, optional
             If provided, returned as-is (skipping initialisation).
 

@@ -18,8 +18,9 @@
   observation variance comes from expected residuals with no prior, and the
   loading precisions take a weak Gamma prior that keeps their updater away from
   a `0 / 0` limit. It reports per-latent precisions
-  whose separation indicates an effective latent dimensionality; columns are
-  shrunk rather than deleted, and any threshold is left to the caller.
+  whose separation indicates an effective latent dimensionality. Surplus
+  columns' loadings are driven to numerical zero but the columns are not removed
+  from `C`, and any threshold on the precisions is left to the caller.
 
 ### Changed
 

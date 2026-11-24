@@ -49,7 +49,9 @@ After each outer iteration, the implementation compares three readout
 parameter quantities:
 
 - Procrustes-aligned loading matrix change (`C`), accounting for the GLM
-  latent sign/permutation/orthogonal rotation gauge;
+  latent sign/permutation/orthogonal rotation gauge. That rotation gauge exists
+  only while the loading prior treats every latent alike, so under `ARDEstimator`
+  the alignment is dropped and `C` is compared directly;
 - readout bias change (`d`); and
 - observation-noise covariance change (`R`); `R` is always a JAX-compatible
   array/scalar, with Poisson using a preserved scalar zero sentinel so this
@@ -88,16 +90,17 @@ matrix. After the last readout update, `fit()` performs a final inference pass:
 Gaussian observation noise is diagonal. For observed feature mask `w` and
 variance vector `r = diag(R)`, Gaussian information increments are
 `J = C.T @ diag(w / r) @ C` and `j = C.T @ (w * (y - d) / r)`. The readout
-update solves a ridge objective per feature from the masked first and second
-moments, then refreshes that feature's noise variance from its expected
-residual squares. The penalty is `lam` on each loading and **zero on the
-bias**: the prior is `C[:, k] ~ N(0, lam^-1)` with a flat bias, so the fit does
-not shrink the baseline rate. Poisson CVI and the existing readout objective
-likewise sum only observed feature contributions.
+update, under the default `RidgeEstimator`, solves a ridge objective per
+feature from the masked first and second moments, then refreshes that feature's
+noise variance from its expected residual squares. The penalty is `alpha_k` on
+each loading and **zero on the bias**: the prior is
+`C[:, k] ~ N(0, alpha_k^-1)` with a flat bias, so the fit does not shrink the
+baseline rate. Poisson CVI and the Poisson readout objective likewise sum only
+observed feature contributions.
 Initialization fills missing entries with per-feature observed means for Factor
 Analysis only; subsequent updates use the actual observation mask. For Poisson,
 FA count-space loadings are scaled to log-rate space, with a half-count per
-feature used only to initialize a finite baseline rate. The retained Poisson
+feature used only to initialize a finite baseline rate. The Poisson
 readout objective is the exact negative expected log-likelihood,
 `exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
 the rate carries the variance correction. Masking does not change it. It
@@ -198,7 +201,7 @@ with `Sigma_n = (Prec_n / R_n + diag(0, alpha))^-1` and `RSS_n` the expected
 residual sum of squares including latent uncertainty. The observation variance
 is estimated from expected residuals alone, with the effective parameter count
 removed; it needs no prior, and its denominator is bounded away from zero
-whenever a feature has more observed bins than parameters.
+whenever a feature has more observed time steps than parameters.
 
 The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` vanish
 together as a column is pruned, so the bare rule is a `0 / 0` limit; measured
@@ -207,17 +210,19 @@ majority of cases. `(a, b)` is a weak Gamma prior -- the reference ARD
 regression's defaults -- that removes the corner. It is a guard on the updater
 rather than a modelling claim, which is why the shape and rate are not meant to
 be tuned: the fit is insensitive to them across many orders of magnitude, and
-their only visible effect is how far an inactive column is ultimately shrunk. Precisions are shared
-across features, because a latent is one shared object here, so this is a
+their only visible effect is how large an inactive column's precision
+plateaus. Precisions are shared across features, because a latent is one shared object here, so this is a
 hierarchical ARD rather than one ARD regression per feature.
 
-Sparsity is *not* exact: an irrelevant column's precision plateaus at a large
-finite value and the column is shrunk rather than deleted, because the evidence
-tends to the reduced model's evidence as a precision grows. The precisions are
-reported on `Params.alpha` and any threshold is left to the caller. What makes a
-threshold workable is the size of the gap, typically one to two orders of
-magnitude; the absolute value is gauge dependent, so a fixed threshold does not
-transfer between fits.
+An irrelevant column's loadings are driven to numerical zero -- as small as
+`1e-130` in a full fit -- but the column is not deleted from `C`, and its precision
+plateaus at a large finite value that the guard prior's constants set, not the
+data, because the evidence tends to the reduced model's evidence as a precision
+grows. The precisions are reported on `Params.alpha` and any threshold is left
+to the caller. What makes a threshold workable is the size of the gap, from one
+to several orders of magnitude; the absolute value is gauge dependent, so a
+fixed threshold does not transfer between fits. Without the ARD estimator, fixed
+ridge only shrinks surplus latents to a small nonzero norm.
 
 At `V = 0` the Jensen bound is tight, so the evidence is the exact marginal
 likelihood of an ARD linear regression on the latent means and the fit matches a
