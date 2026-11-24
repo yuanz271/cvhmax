@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.4.0
+
 ### Changed
 
 - Raised the default `max_iter` from 10 to 200. Fits stop on the convergence
