@@ -181,6 +181,7 @@ def run_case(
         dt=dt,
         kernels=kernels,
         observation=observation,
+        estimator=estimator,
         max_iter=max_iter,
         cvi_iter=cvi_iter,
     )
