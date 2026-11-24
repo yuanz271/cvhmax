@@ -16,8 +16,10 @@ disagree. Making the prior a first-class object gives one convention, makes
 ridge the fixed equal-precision special case of ARD, and puts the ARD/ridge
 choice in the user's hands instead of in the readout's implementation.
 
-This depends on the conditional ARD estimator already added on
-`feature/ard-loading` (`gaussian_ard_estimate`, `gaussian_ard_evidence`).
+The ARD estimator body already exists on this branch
+(`gaussian_ard_estimate`, `gaussian_ard_evidence`), with its conventions settled
+and checked against a reference ARD regression. What remains is structural:
+moving it, and the ridge solve, behind a common estimator interface.
 
 ## Why: the current disagreement
 
@@ -136,8 +138,10 @@ Cost: `serialization.py` must record and validate it, and `_params_manifest`
 and friends grow a field. That is contained and preferable to threading a
 second pytree through `fit` and the archive.
 
-Store the precision itself, not its log: the floored range is `[e^-12, inf)`,
-which is representable directly and reads better in a manifest.
+Store the precision itself, not its log: it is representable directly, reads
+better in a manifest, and the hyperprior parameters are static estimator
+configuration rather than fitted state, so `alpha` is the only new quantity
+that has to persist and serialise.
 
 ## Convergence metric
 
@@ -162,9 +166,11 @@ the metric alongside `C`, `d`, and `R`.
    `initialize_params` move out of `CVI`; likelihoods keep only the E-step and
    the data term, and `initialize_info`/`update_pseudo` are untouched.
 3. **Expose `Gaussian.loading_terms`** by moving `_gaussian_loading_moments`
-   onto the readout so the estimator can request it.
-4. **Add `ARDEstimator`** and wire the evidence update into its `estimate`,
-   replacing the standalone `gaussian_ard_estimate` call path.
+   from module level onto the readout so the estimator can request it.
+4. **Add `ARDEstimator`** wrapping the existing `gaussian_ard_estimate` body.
+   Nothing calls that function today, so this is a move rather than a
+   replacement: the evidence, the hyperprior, and the jointly fitted variances
+   are already written and verified.
 5. **Thread the estimator through `CVHM`** — config key, `_FitState`, boundary
    check, serialization, `readout_change`.
 6. **Docs and changelog.**
@@ -180,6 +186,15 @@ the metric alongside `C`, `d`, and `R`.
   `readout_change` skipping the alignment when `isotropic` is false.
 - Re-run the rank and kernel-amplitude sweeps through the composed API and
   confirm the earlier separation survives.
+- **Reference-implementation check.** With `V = 0` the Jensen bound is tight, so
+  `ARDEstimator` must reproduce a standard ARD regression on the same design:
+  signal precisions to ~1e-3 and coefficients to ~1e-2 at `N = 1`, with `R`
+  differing only by the single degree of freedom the bias costs. This is the
+  strongest guard against convention drift and belongs in the suite, not as a
+  one-off.
+- **Estimator identity check.** `RidgeEstimator` with equal precisions must
+  reproduce `ridge_estimate`'s closed form, including the `R_nn` unit
+  conversion, so the refactor is verifiably behaviour-preserving.
 
 ## Out of scope
 
@@ -211,6 +226,21 @@ the metric alongside `C`, `d`, and `R`.
   clean (`log R* = -2` at `V = 0`, `-1` at `V = 0.3`).
 - **No hard threshold.** Report `alpha` and document that a large value marks a
   shrunk column; leave any cut to the caller.
+- **The noise rule follows what the estimator fits.** `RidgeEstimator` keeps the
+  EM/expected-residual update, which is correct when the penalty is fixed.
+  `ARDEstimator` fits the variances against the evidence, jointly with `alpha`.
+  Pairing an EM residual with an evidence-based precision would put the two on
+  different criteria, and the joint fixed point would maximise neither, so
+  "which residual rule" is a property of the estimator rather than a detail.
+- **Precisions are shared across features**, making this a hierarchical ARD
+  rather than one ARD regression per feature. Deliberate: relevance is a
+  property of the latent dimension, not of each feature. It is the main
+  structural difference from the reference implementation, which fits one
+  output at a time and so carries per-feature precisions.
+- **The bias costs one residual degree of freedom.** The fitted variance uses
+  `n - sum(gamma) - 1`, the classical account for a model with an intercept; an
+  implementation that centers the design away uses `n - sum(gamma)`. The two
+  agree as `n` grows.
 
 - Second axis is an estimator, not a prior: classes `RidgeEstimator` and
   `ARDEstimator`.
