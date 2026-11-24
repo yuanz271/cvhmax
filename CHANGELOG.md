@@ -13,8 +13,10 @@
   determination for the Gaussian loading matrix, conditional on the latent
   moments. The expected readout log-likelihood is quadratic in the loadings, so
   the evidence is closed form and no Laplace approximation is needed. Precisions
-  and observation variances are fitted jointly against the evidence, with an
-  optional Gamma prior on the precisions. It reports per-latent precisions
+  and observation variances are fitted jointly against the evidence: the
+  observation variance comes from expected residuals with no prior, and the
+  loading precisions take a weak Gamma prior that keeps their updater away from
+  a `0 / 0` limit. It reports per-latent precisions
   whose separation indicates an effective latent dimensionality; columns are
   shrunk rather than deleted, and any threshold is left to the caller.
 
