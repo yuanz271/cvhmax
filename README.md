@@ -101,22 +101,6 @@ readout, holding the data, readout, and other kernel hyperparameters fixed:
 JAX_ENABLE_X64=1 python examples/demo_vdp.py
 ```
 
-It writes `examples/demo_vdp_frozen_order0.pdf`,
-`examples/demo_vdp_frozen_order1.pdf`, and
-`examples/demo_vdp_frozen_order2.pdf`, and reports pooled R² for each case.
-
-The demo also fits two synthetic sequences generated from the same VdP
-trajectory. Each observes 40 features, with 20 shared feature identities. It
-holds out 20% of observed feature-time entries and reports count-prediction R²,
-latent R² using one truth-based rotation for both sequences, and fit convergence
-status. It writes `examples/demo_vdp_overlap.pdf`. The fit treats the sequences
-as independent and does not use the simulated latent truth. Run just this case
-with:
-
-```console
-JAX_ENABLE_X64=1 uv run python -c 'from examples.demo_vdp import run_overlapping_features_case; run_overlapping_features_case()'
-```
-
 ## Numerical stability
 
 The recommended inference path is `JAX_ENABLE_X64=1` with CVHM correlation
