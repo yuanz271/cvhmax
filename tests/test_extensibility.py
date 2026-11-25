@@ -113,10 +113,8 @@ class Bernoulli(CVI):
 
     @classmethod
     @override
-    def solve_readout(cls, loading, settings, params, y, valid_y, m, V):
-        """Ridge and fixed come from the base class; ARD reuses the Laplace loop."""
-        if loading != "ard":
-            return super().solve_readout(loading, settings, params, y, valid_y, m, V)
+    def solve_ard(cls, settings, params, y, valid_y, m, V):
+        """Only ARD needs readout-specific code; ridge and fixed come for free."""
         y, valid_y, m, V = (
             y.reshape(-1, y.shape[-1]),
             valid_y.reshape(-1, y.shape[-1]),

@@ -217,7 +217,9 @@ class CVHM:
                 f"loading {self.loading!r} is not supported by observation "
                 f"model {self.observation!r}"
             )
-        self.loading_settings = loading_settings(self.loading, self.loading_config)
+        self.loading_settings = loading_settings(
+            self.loading, self.loading_config, self.n_components
+        )
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
             raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")

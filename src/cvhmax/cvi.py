@@ -112,9 +112,11 @@ class CVI:
     ):
         """Scalar readout objective including the loading penalty.
 
-        The readout owns its own averaging, so the penalty it receives is in
-        the same units as its data term. The penalty has one entry per
-        coefficient of ``[d, C]``, with index 0 the bias.
+        Average over **observed time steps**, not over entries. ARD undoes this
+        averaging to recover a per-feature curvature, so a different convention
+        silently rescales its Hessian and evidence. The penalty the readout
+        receives is in the same units as its data term, with one entry per
+        coefficient of ``[d, C]`` and index 0 the bias.
 
         Parameters
         ----------
@@ -147,20 +149,37 @@ class CVI:
     ) -> tuple[Params, Array]:
         """Fit the readout at the given loading kind.
 
-        The generic path covers ``"ridge"`` (fixed precision) and ``"fixed"``
-        (leave the parameters untouched). A readout that supports ``"ard"``
-        overrides this and delegates the generic kinds back here.
+        ``"ridge"`` and ``"fixed"`` are handled here for every readout. ``"ard"``
+        dispatches to :meth:`solve_ard`, so a readout that declares it overrides
+        that hook and nothing else.
         """
         if loading == "fixed":
             return params, jnp.nan
-        y, valid_y, m, V = flattened(y, valid_y, m, V)
-        return ridge_fit(cls, params, y, valid_y, m, V, settings["alpha"])
+        if loading == "ridge":
+            y, valid_y, m, V = flattened(y, valid_y, m, V)
+            return ridge_fit(cls, params, y, valid_y, m, V, settings["alpha"])
+        return cls.solve_ard(settings, params, y, valid_y, m, V)
+
+    @classmethod
+    def solve_ard(
+        cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> tuple[Params, Array]:
+        """ARD readout M-step; overridden by readouts that declare ``"ard"``."""
+        raise NotImplementedError(
+            f"{cls.__name__} declares ARD but does not implement solve_ard"
+        )
 
     @classmethod
     def check_readout_fit(
         cls, loading: str, y: Array, valid_y: Array, n_components: int
     ) -> None:
         """Validate that this readout and loading kind can be fitted to the data."""
+        if loading == "ard":
+            cls.check_ard_fit(y, valid_y, n_components)
+
+    @classmethod
+    def check_ard_fit(cls, y: Array, valid_y: Array, n_components: int) -> None:
+        """Constraint ARD imposes on the data; none by default."""
 
     @classmethod
     @abstractmethod
@@ -369,13 +388,10 @@ class Gaussian(CVI):
 
     @classmethod
     @override
-    def solve_readout(
-        cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
-        m: Array, V: Array,
+    def solve_ard(
+        cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
     ) -> tuple[Params, Array]:
-        """Fit Gaussian loadings; ARD uses the exact conditional evidence."""
-        if loading != "ard":
-            return super().solve_readout(loading, settings, params, y, valid_y, m, V)
+        """Fit Gaussian loadings against the exact conditional evidence."""
         y, valid_y, m, V = flattened(y, valid_y, m, V)
         terms = cls.loading_terms(y, valid_y, m, V)
         return ard_fit_conjugate(
@@ -388,12 +404,8 @@ class Gaussian(CVI):
 
     @classmethod
     @override
-    def check_readout_fit(
-        cls, loading: str, y: Array, valid_y: Array, n_components: int
-    ) -> None:
+    def check_ard_fit(cls, y: Array, valid_y: Array, n_components: int) -> None:
         """ARD needs more observations than readout parameters per feature."""
-        if loading != "ard":
-            return
         counts = jnp.sum(valid_y, axis=(0, 1))
         minimum = n_components + 1
         if not bool(jnp.all(counts > minimum)):
@@ -739,13 +751,10 @@ class Poisson(CVI):
 
     @classmethod
     @override
-    def solve_readout(
-        cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
-        m: Array, V: Array,
+    def solve_ard(
+        cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
     ) -> tuple[Params, Array]:
-        """Fit Poisson loadings; ARD uses a Laplace approximation."""
-        if loading != "ard":
-            return super().solve_readout(loading, settings, params, y, valid_y, m, V)
+        """Fit Poisson loadings against a Laplace approximation of the evidence."""
         y, valid_y, m, V = flattened(y, valid_y, m, V)
         return ard_fit_laplace(
             cls, params, y, valid_y, m, V,
@@ -757,12 +766,8 @@ class Poisson(CVI):
 
     @classmethod
     @override
-    def check_readout_fit(
-        cls, loading: str, y: Array, valid_y: Array, n_components: int
-    ) -> None:
+    def check_ard_fit(cls, y: Array, valid_y: Array, n_components: int) -> None:
         """The flat-bias loading integral needs bounded, positive counts."""
-        if loading != "ard":
-            return
         counts = jnp.sum(valid_y, axis=(0, 1))
         totals = jnp.sum(y, axis=(0, 1))
         if not bool(jnp.all((totals > 0) & (totals < jnp.exp(MAX_LOGRATE) * counts))):

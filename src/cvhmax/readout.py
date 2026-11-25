@@ -27,6 +27,15 @@ if TYPE_CHECKING:
 # which breaks both the Newton step and the evidence log-determinant.
 CURVATURE_JITTER = 1e-10
 
+# Work per Laplace precision update. Three damped Newton steps track the moving
+# loading mode closely enough that the MacKay step sees a settled curvature;
+# nine further steps refine the mode once, before the evidence is evaluated. A
+# halving ladder of fifteen scales is enough backtracking for the objectives
+# these readouts expose.
+NEWTON_STEPS_PER_UPDATE = 3
+EVIDENCE_SETTLE_STEPS = 9
+BACKTRACKING_STEPS = 15
+
 # Per-kind defaults. ``alpha`` is held fixed for ridge and fixed readouts and is
 # only a starting point for ARD, so the two kinds keep their own default.
 DEFAULTS: dict[str, dict[str, Any]] = {
@@ -86,8 +95,20 @@ def flattened(
     return y, valid_y, m, V
 
 
-def loading_settings(loading: str, config: dict | None) -> dict[str, Any]:
-    """Merge user configuration over the defaults for one loading kind."""
+def loading_settings(
+    loading: str, config: dict | None, n_latents: int | None = None
+) -> dict[str, Any]:
+    """Merge user configuration over the defaults for one loading kind.
+
+    Parameters
+    ----------
+    loading : str
+        Loading kind, one of :data:`DEFAULTS`.
+    config : dict or None
+        Overrides for the kind's defaults.
+    n_latents : int, optional
+        When given, a per-column ``alpha`` must have exactly this length.
+    """
     defaults = DEFAULTS[loading]
     settings = {**defaults, **(config or {})}
     unknown = set(settings) - set(defaults)
@@ -95,22 +116,32 @@ def loading_settings(loading: str, config: dict | None) -> dict[str, Any]:
         raise ValueError(
             f"unknown loading_config keys for {loading!r}: {sorted(unknown)}"
         )
-    alpha = float(np.asarray(settings["alpha"]).reshape(-1)[0])
-    if not math.isfinite(alpha) or alpha < 0 or (loading == "ard" and alpha == 0):
-        raise ValueError(f"{loading!r} alpha must be finite and positive")
+
+    alpha = np.asarray(settings["alpha"], dtype=float)
+    if alpha.ndim > 1:
+        raise ValueError("alpha must be a scalar or one value per latent column")
+    if n_latents is not None and alpha.shape not in ((), (n_latents,)):
+        raise ValueError(
+            f"alpha has shape {alpha.shape}; expected a scalar or ({n_latents},)"
+        )
+    positive = loading == "ard"
+    if not np.all(np.isfinite(alpha)) or np.any(alpha < 0) or (positive and np.any(alpha == 0)):
+        bound = "positive" if positive else "non-negative"
+        raise ValueError(f"{loading!r} alpha must be finite and {bound}")
+
     if loading == "ard":
         shape = float(settings["alpha_shape"])
         rate = float(settings["alpha_rate"])
-        iterations = int(settings["iterations"])
+        iterations = float(settings["iterations"])
         if not math.isfinite(shape) or shape <= 1:
             raise ValueError(
                 f"alpha_shape must be finite and greater than one, got {shape!r}"
             )
         if not math.isfinite(rate) or rate <= 0:
             raise ValueError(f"alpha_rate must be finite and positive, got {rate!r}")
-        if iterations < 1:
-            raise ValueError(f"iterations must be >= 1, got {iterations!r}")
-        settings = {**settings, "iterations": iterations}
+        if not math.isfinite(iterations) or iterations < 1 or not iterations.is_integer():
+            raise ValueError(f"iterations must be an integer >= 1, got {iterations!r}")
+        settings = {**settings, "iterations": int(iterations)}
     return settings
 
 
@@ -124,9 +155,29 @@ def stack_readout(params: Params) -> Array:
     return jnp.concatenate((params.d[:, None], params.C), axis=1)
 
 
+def split_readout(beta: Array) -> tuple[Array, Array]:
+    """Split ``[d, C]`` coefficients into ``(C, d)``."""
+    return beta[:, 1:], beta[:, 0]
+
+
 def unstack_readout(beta: Array, R: Array, alpha: Array) -> Params:
     """Split ``[d, C]`` coefficients back into readout parameters."""
-    return Params(C=beta[:, 1:], d=beta[:, 0], R=R, alpha=alpha)
+    C, d = split_readout(beta)
+    return Params(C=C, d=d, R=R, alpha=alpha)
+
+
+def mackay_update(
+    alpha: Array, covariance_diagonal: Array, loadings: Array,
+    alpha_shape: float, alpha_rate: float,
+) -> Array:
+    """Per-column precision after one MacKay fixed-point step.
+
+    ``covariance_diagonal`` is ``(features, K + 1)`` including the unpenalised
+    bias column, which is dropped here so callers never slice it themselves.
+    """
+    effective = 1.0 - alpha[None, :] * covariance_diagonal[:, 1:]
+    denominator = jnp.sum(loadings**2, axis=0) + 2.0 * alpha_rate
+    return (jnp.sum(effective, axis=0) + 2.0 * alpha_shape - 2.0) / denominator
 
 
 def conjugate_solve(
@@ -149,13 +200,13 @@ def conjugate_solve(
     beta = jnp.linalg.solve(
         posterior, (terms.linear / variance[:, None])[..., None]
     )[..., 0]
-    C, d = beta[:, 1:], beta[:, 0]
+    C, d = split_readout(beta)
     residual = jnp.where(valid_y, y - (m @ C.T + d), 0.0)
     uncertainty = jnp.einsum("nk,tkl,nl->tn", C, V, C)
     variance = jnp.sum(
         jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
     ) / terms.counts
-    return Params(C=C, d=d, R=jnp.diag(variance), alpha=penalty_diagonal[1:])
+    return unstack_readout(beta, jnp.diag(variance), penalty_diagonal[1:])
 
 
 def ridge_fit(
@@ -216,15 +267,17 @@ def ard_fit_conjugate(
     def step(carry, _):
         alpha_, variance_ = carry
         _, beta, diagonal = solve(alpha_, variance_)
-        loadings, bias = beta[:, 1:], beta[:, 0]
-        effective = 1.0 - jnp.concatenate((jnp.zeros(1), alpha_))[None, :] * diagonal
-        alpha_next = (
-            jnp.sum(effective[:, 1:], axis=0) + 2.0 * alpha_shape - 2.0
-        ) / (jnp.sum(loadings**2, axis=0) + 2.0 * alpha_rate)
+        loadings, bias = split_readout(beta)
+        alpha_next = mackay_update(alpha_, diagonal, loadings, alpha_shape, alpha_rate)
         residual = jnp.where(valid_y, y - (m @ loadings.T + bias), 0.0)
         uncertainty = jnp.einsum("nk,tkl,nl->tn", loadings, V, loadings)
         rss = jnp.sum(jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0)
-        variance_next = rss / (terms.counts - jnp.sum(effective, axis=-1))
+        # The residual degrees of freedom remove each loading's effective count
+        # plus one for the unpenalised bias.
+        effective_count = 1.0 - alpha_[None, :] * diagonal[:, 1:]
+        variance_next = rss / (
+            terms.counts - 1.0 - jnp.sum(effective_count, axis=-1)
+        )
         return (alpha_next, variance_next), None
 
     initial = (jnp.broadcast_to(alpha, (n_latents,)), jnp.diag(params.R))
@@ -238,10 +291,7 @@ def ard_fit_conjugate(
         alpha_shape=alpha_shape,
         alpha_rate=alpha_rate,
     )
-    return (
-        Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance), alpha=alpha),
-        evidence,
-    )
+    return unstack_readout(beta, jnp.diag(variance), alpha), evidence
 
 
 def ard_fit_laplace(
@@ -273,7 +323,7 @@ def ard_fit_laplace(
         # The readout objective averages over observed steps. Undo that
         # averaging before forming the per-feature posterior curvature.
         return jnp.sum(mask_n) * likelihood.readout_objective(
-            (beta_n[None, 1:], beta_n[:1]),
+            split_readout(beta_n[None, :]),
             y_n[:, None], mask_n[:, None], m, V, penalty_diagonal,
         )
 
@@ -287,7 +337,7 @@ def ard_fit_laplace(
     def newton_step(beta_n, alpha_, y_n, mask_n):
         grad = gradient(beta_n, alpha_, y_n, mask_n)
         direction = jnp.linalg.solve(curvature(beta_n, alpha_, y_n, mask_n), grad)
-        scales = 0.5 ** jnp.arange(15)
+        scales = 0.5 ** jnp.arange(BACKTRACKING_STEPS)
         candidates = beta_n[None, :] - scales[:, None] * direction[None, :]
         losses = jax.vmap(lambda candidate: objective(candidate, alpha_, y_n, mask_n))(
             candidates
@@ -304,24 +354,29 @@ def ard_fit_laplace(
     def update(carry, _):
         beta_, alpha_ = carry
         beta_ = jax.lax.fori_loop(
-            0, 3, lambda _, value: newton(value, alpha_, y, valid_y), beta_
+            0,
+            NEWTON_STEPS_PER_UPDATE,
+            lambda _, value: newton(value, alpha_, y, valid_y),
+            beta_,
         )
         local = curvatures(beta_, alpha_, y, valid_y)
         covariance = jnp.linalg.solve(
             local, jnp.broadcast_to(jnp.eye(n_latents + 1), local.shape)
         )
-        effective = 1.0 - alpha_[None, :] * jnp.diagonal(
-            covariance, axis1=1, axis2=2
-        )[:, 1:]
-        alpha_ = (jnp.sum(effective, axis=0) + 2.0 * alpha_shape - 2.0) / (
-            jnp.sum(beta_[:, 1:] ** 2, axis=0) + 2.0 * alpha_rate
+        loadings, _ = split_readout(beta_)
+        alpha_ = mackay_update(
+            alpha_, jnp.diagonal(covariance, axis1=1, axis2=2), loadings,
+            alpha_shape, alpha_rate,
         )
         return (beta_, alpha_), None
 
     (beta, alpha), _ = jax.lax.scan(update, (beta, alpha), None, length=iterations)
     # Refine the loadings at the final precision before evaluating the evidence.
     beta = jax.lax.fori_loop(
-        0, 9, lambda _, value: newton(value, alpha, y, valid_y), beta
+        0,
+        EVIDENCE_SETTLE_STEPS,
+        lambda _, value: newton(value, alpha, y, valid_y),
+        beta,
     )
     local = curvatures(beta, alpha, y, valid_y)
     _, logdet = jnp.linalg.slogdet(local)
