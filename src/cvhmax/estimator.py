@@ -21,7 +21,7 @@ import jax
 import numpy as np
 from jax import Array, numpy as jnp
 
-from .cvi import Params
+from .cvi import CVI, Params, Poisson
 from .utils import LoadingTerms, lbfgs_solve
 
 Penalty = Array
@@ -105,8 +105,8 @@ class Estimator:
     registry : dict
         Maps class names to estimator classes, mirroring `CVI.registry`.
     requires_conjugate_terms : bool
-        Whether the estimator needs the likelihood's conjugate loading
-        representation. Checked at the API boundary.
+        Whether the default likelihood check requires conjugate loading terms.
+        An estimator may additionally support a specific likelihood.
     fits_ard_precisions : bool
         Whether the estimator fits ARD loading precisions. Checked at the fit
         boundary for the residual degrees-of-freedom contract and for
@@ -136,6 +136,12 @@ class Estimator:
         if not bool(jnp.all(jnp.isfinite(alpha) & (alpha >= 0))):
             raise ValueError("alpha must be finite and non-negative")
         self.alpha = alpha
+
+    def _supports_likelihood(self, likelihood: type[CVI]) -> bool:
+        """Check whether the likelihood provides the required loading terms."""
+        return not self.requires_conjugate_terms or (
+            likelihood.loading_terms.__func__ is not CVI.loading_terms.__func__
+        )
 
     def penalty(self, n_latents: int) -> Penalty:
         """Return the penalty diagonal, zero at the bias index.
@@ -314,29 +320,25 @@ def _conjugate_solve(
 
 
 class ARDEstimator(Estimator):
-    """Per-column precision fitted against the evidence.
+    """Per-column loading precision fitted from conditional evidence.
 
-    Maximises the marginal evidence over the precisions and the observation
-    variances jointly, with the loadings integrated out rather than profiled.
-    Needs the likelihood's conjugate loading representation, because the
-    evidence integral is only closed form when the data term is quadratic in
-    the loadings.
+    Gaussian loadings have a closed-form evidence integral and jointly fitted
+    observation variances. Poisson loadings use a Laplace approximation to that
+    integral, with the latent CVI E-step unchanged. Its precision update fixes
+    the local curvature, so it is not the exact gradient of Laplace evidence.
 
-    Both stationary points have closed forms, so the fit is a fixed-point
-    iteration rather than an optimisation: for each feature,
+    Both likelihoods use the shared-precision fixed-point update
 
     ```
     gamma_nk = 1 - alpha_k * Sigma_n[k, k]
     alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
-    R_n      = RSS_n / (N_n - 1 - sum_k gamma_nk)
     ```
 
-    with `Sigma_n` the exact posterior covariance `(Prec_n / R_n + diag(0,
-    alpha))^-1` and `RSS_n` the expected residual sum of squares including
-    latent uncertainty. The observation variance needs no prior: its rule is
-    the residual variance with the effective parameter count removed, and that
-    denominator is bounded away from zero whenever a feature has more observed
-    time steps than parameters.
+    For Gaussian observations, `Sigma_n` is the exact conditional covariance
+    `(Prec_n / R_n + diag(0, alpha))^-1`. The observation variance is updated
+    from expected residuals as `R_n = RSS_n / (N_n - 1 - sum_k gamma_nk)`.
+    Poisson instead uses the inverse Hessian at each feature's penalized MAP
+    readout as `Sigma_n` and has no fitted observation variance.
 
     The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` both
     vanish together for a column that is being pruned, so the bare rule is a
@@ -346,23 +348,24 @@ class ARDEstimator(Estimator):
     implementation's settings, which removes the corner. It is not a modelling
     claim so much as a guard on the updater.
 
-    An irrelevant column's loadings are driven to numerical zero, but the column
-    is not removed from ``C`` and its precision plateaus at a large finite value
-    set by the guard prior rather than by the data. Only the ranking of the
-    precisions is meaningful, and any threshold is the caller's decision.
+    An irrelevant column's loadings may shrink toward numerical zero, but the
+    column is not removed from ``C``. The fitted precision ranking can indicate
+    effective dimensionality; it does not guarantee the true rank, and any
+    threshold is the caller's decision.
 
-    The observation-variance denominator is ``N_n - sum_k gamma_nk - 1``, where
-    the ``-1`` is the bias's effective parameter count. The fit therefore
-    requires every feature to have more than ``K + 1`` observed time steps;
-    `CVHM.fit` rejects a configuration that violates this conservative
-    contract. The fixed-point iteration starts from ``params.alpha`` when it is
-    present, so a fit continues across EM steps from the previous precisions,
-    and falls back to the configured initial precision when ``params.alpha`` is
-    absent.
+    Gaussian ARD requires each feature to have more than ``K + 1`` observed
+    time steps to keep the variance denominator positive. Poisson ARD requires
+    each feature's observed total to be positive and its mean below
+    ``exp(MAX_LOGRATE)``: otherwise the flat-bias loading integral diverges under
+    the capped readout objective. The fixed-point iteration warm-starts from
+    ``params.alpha`` when available, or the configured initial precision.
     """
 
     requires_conjugate_terms = True
     fits_ard_precisions = True
+
+    def _supports_likelihood(self, likelihood: type[CVI]) -> bool:
+        return issubclass(likelihood, Poisson) or super()._supports_likelihood(likelihood)
 
     def __init__(
         self,
@@ -387,7 +390,9 @@ class ARDEstimator(Estimator):
             Rate of the Gamma prior on the loading precisions. Must be finite
             and strictly positive.
         iterations : int, default=50
-            Fixed-point iterations. Must be at least 1.
+            Fixed-point iterations per readout update. For Poisson, each
+            iteration uses three damped Newton steps for the readout MAP.
+            Must be at least 1.
         """
         super().__init__(alpha)
         if not bool(jnp.all(self.alpha > 0)):
@@ -414,6 +419,12 @@ class ARDEstimator(Estimator):
     ) -> tuple[Params, float]:
         y, valid_y, m, V = _flattened(y, valid_y, m, V)
         terms = likelihood.loading_terms(y, valid_y, m, V)
+        if terms is None:
+            return _poisson_laplace_ard(
+                likelihood, params, y, valid_y, m, V,
+                initial_alpha=self.alpha, alpha_shape=self.alpha_shape,
+                alpha_rate=self.alpha_rate, iterations=self.iterations,
+            )
         n_latents = m.shape[-1]
 
         def solve(alpha_: Array, variance_: Array) -> tuple[Array, Array, Array]:
@@ -460,6 +471,98 @@ class ARDEstimator(Estimator):
             Params(C=beta[:, 1:], d=beta[:, 0], R=jnp.diag(variance), alpha=alpha),
             evidence,
         )
+
+
+def _poisson_laplace_ard(
+    likelihood: type[Poisson],
+    params: Params,
+    y: Array,
+    valid_y: Array,
+    m: Array,
+    V: Array,
+    *,
+    initial_alpha: Array,
+    alpha_shape: float,
+    alpha_rate: float,
+    iterations: int,
+) -> tuple[Params, Array]:
+    """Fit Poisson loadings and shared precisions using a local Laplace approximation.
+
+    Each feature has its own bias and loading MAP, while the loading precisions
+    are shared across features. The fixed-point update treats the MAP Hessian as
+    locally constant; its full derivative through the MAP is not included.
+    """
+    n_latents = m.shape[-1]
+    beta = jnp.concatenate((params.d[:, None], params.C), axis=1)
+    alpha = params.alpha if params.alpha is not None else initial_alpha
+    alpha = jnp.broadcast_to(alpha, (n_latents,))
+
+    def objective(beta_n, alpha_, y_n, mask_n):
+        penalty = jnp.concatenate((jnp.zeros(1), alpha_))
+        # The readout objective averages over observed steps. Undo that
+        # averaging before forming the per-feature posterior curvature.
+        return jnp.sum(mask_n) * likelihood.readout_objective(
+            (beta_n[None, 1:], beta_n[:1]),
+            y_n[:, None], mask_n[:, None], m, V, penalty,
+        )
+
+    gradient = jax.grad(objective)
+    hessian = jax.hessian(objective)
+
+    def newton_step(beta_n, alpha_, y_n, mask_n):
+        grad = gradient(beta_n, alpha_, y_n, mask_n)
+        curvature = hessian(beta_n, alpha_, y_n, mask_n)
+        direction = jnp.linalg.solve(curvature, grad)
+        scales = 0.5 ** jnp.arange(15)
+        candidates = beta_n[None, :] - scales[:, None] * direction[None, :]
+        losses = jax.vmap(lambda candidate: objective(candidate, alpha_, y_n, mask_n))(
+            candidates
+        )
+        best = jnp.argmin(losses)
+        return jnp.where(
+            losses[best] < objective(beta_n, alpha_, y_n, mask_n),
+            candidates[best], beta_n,
+        )
+
+    newton = jax.vmap(newton_step, in_axes=(0, None, 1, 1))
+    curvatures = jax.vmap(hessian, in_axes=(0, None, 1, 1))
+
+    def update(carry, _):
+        beta_, alpha_ = carry
+        beta_ = jax.lax.fori_loop(
+            0, 3, lambda _, value: newton(value, alpha_, y, valid_y), beta_
+        )
+        curvature = curvatures(beta_, alpha_, y, valid_y)
+        covariance = jnp.linalg.solve(
+            curvature, jnp.broadcast_to(jnp.eye(n_latents + 1), curvature.shape)
+        )
+        effective = 1.0 - alpha_[None, :] * jnp.diagonal(
+            covariance, axis1=1, axis2=2
+        )[:, 1:]
+        alpha_ = (jnp.sum(effective, axis=0) + 2.0 * alpha_shape - 2.0) / (
+            jnp.sum(beta_[:, 1:] ** 2, axis=0) + 2.0 * alpha_rate
+        )
+        return (beta_, alpha_), None
+
+    (beta, alpha), _ = jax.lax.scan(update, (beta, alpha), None, length=iterations)
+    # Refine the loadings at the final precision before evaluating the evidence.
+    beta = jax.lax.fori_loop(
+        0, 9, lambda _, value: newton(value, alpha, y, valid_y), beta
+    )
+    curvature = curvatures(beta, alpha, y, valid_y)
+    chol = jnp.linalg.cholesky(curvature)
+    logdet = 2.0 * jnp.sum(jnp.log(jnp.diagonal(chol, axis1=1, axis2=2)), axis=1)
+    objective_values = jax.vmap(objective, in_axes=(0, None, 1, 1))(
+        beta, alpha, y, valid_y
+    )
+    evidence = (
+        -jnp.sum(objective_values)
+        + 0.5 * y.shape[-1] * (jnp.sum(jnp.log(alpha)) + jnp.log(2.0 * jnp.pi))
+        - 0.5 * jnp.sum(logdet)
+        + (alpha_shape - 1.0) * jnp.sum(jnp.log(alpha))
+        - alpha_rate * jnp.sum(alpha)
+    )
+    return Params(C=beta[:, 1:], d=beta[:, 0], R=params.R, alpha=alpha), evidence
 
 
 def ard_evidence(

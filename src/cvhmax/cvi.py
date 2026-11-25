@@ -75,9 +75,9 @@ class Params(Module):
         For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
     alpha : Array or None
         Loading precisions with shape ``(latent_dim (K),)`` when supplied by
-        the estimator, otherwise ``None``. For ARD, a large value marks a latent
-        column whose loadings have been driven to numerical zero; ranking the
-        columns by ``alpha`` is how effective dimensionality is read off.
+        the estimator, otherwise ``None``. For ARD, a large value indicates
+        stronger shrinkage of a loading column; the precision ranking can help
+        assess effective dimensionality but does not guarantee the true rank.
     """
 
     C: Array
@@ -413,11 +413,11 @@ class Gaussian(CVI):
 def _capped_exp(x: Array) -> Array:
     """``exp(x)`` up to ``MAX_LOGRATE``, then its tangent line there.
 
-    Bounds the rate without making the readout objective unbounded below. A
-    flat clip would leave ``-y * lin`` free to fall without limit once an
-    optimiser step crosses the cap, so the objective would have no minimum and
-    the readout would run away. The tangent keeps the objective convex and
-    rising beyond the cap, and equals ``exp`` wherever the cap is inactive.
+    Limits exponential growth without flattening the rate. A flat clip would
+    leave ``-y * lin`` free to fall without limit once an optimiser step crosses
+    the cap. The tangent is convex and matches the value and first derivative
+    of ``exp`` at the cap. It does not bound the rate or ensure a bounded
+    objective when the observed mean count is at least ``exp(MAX_LOGRATE)``.
     """
     cap = jnp.exp(MAX_LOGRATE)
     below = x <= MAX_LOGRATE
@@ -438,14 +438,15 @@ def poisson_readout_objective(
     V: Array,
     penalty: Array,
 ) -> float | Array:
-    """Average negative expected Poisson log-likelihood per observed time step.
+    """Average Poisson readout objective per observed time step.
 
     With ``eta = C m + d`` and ``q = diag(C V C^T)``, the Gaussian expectation
     of ``y * log(rate) - rate`` is ``y * eta - exp(eta + q / 2)``; only the rate
     carries the variance correction. Moving it into the ``y`` term as well
     adds ``y q / 2``, which rewards inflating ``C`` and makes ``C`` drift along
-    the latent-scale gauge without converging. The rate is capped at
-    ``MAX_LOGRATE`` by its tangent line, see :func:`_capped_exp`.
+    the latent-scale gauge without converging. The expected log-likelihood is
+    exact while the cap is inactive; above it the rate follows a tangent line,
+    see :func:`_capped_exp`.
 
     Parameters
     ----------

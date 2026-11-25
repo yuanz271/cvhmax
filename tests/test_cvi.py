@@ -3,6 +3,7 @@ import numpy.testing as npt
 import pytest
 
 import chex
+import jax
 from jax import numpy as jnp
 from scipy.integrate import trapezoid
 from sklearn.linear_model import ARDRegression, LinearRegression
@@ -56,6 +57,72 @@ def test_poisson_initialization_stays_bounded_on_a_problem_that_crossed_the_cap(
     )
     assert float(jnp.abs(params.d).max()) < 10.0, params.d
     assert float(jnp.abs(params.C).max()) < 10.0
+
+
+@pytest.mark.parametrize("alpha_shape,alpha_rate", [(1.0 + 1e-6, 1e-6), (1.2, 0.2)])
+def test_poisson_ard_laplace_evidence_matches_quadrature(alpha_shape, alpha_rate):
+    """Check the loading-block approximation against a two-dimensional integral."""
+    rng = np.random.default_rng(4)
+    n_time = 80
+    m = jnp.asarray(rng.standard_normal((n_time, 1)))
+    V = jnp.full((n_time, 1, 1), 0.1)
+    y = jnp.asarray(rng.poisson(np.exp(0.4 + 0.6 * np.asarray(m[:, 0])))[:, None])
+    valid = jnp.asarray((rng.random((n_time, 1)) > 0.2))
+    start = Params(C=jnp.zeros((1, 1)), d=jnp.zeros(1), R=jnp.asarray(0.0), alpha=jnp.ones(1))
+    params, evidence = ARDEstimator(
+        iterations=40, alpha_shape=alpha_shape, alpha_rate=alpha_rate
+    ).estimate(Poisson, start, y, valid, m, V)
+
+    # Integrate the likelihood times the normalized loading prior over bias and
+    # loading. As in the estimator, the flat bias prior has unit density and
+    # count-factorial terms are omitted.
+    bias = np.linspace(-1.5, 2.0, 301)
+    loading = np.linspace(-2.0, 2.0, 301)
+    d, c = np.meshgrid(bias, loading, indexing="ij")
+    alpha = float(params.alpha[0])
+    selected = np.asarray(valid[:, 0])
+    mt, yt = np.asarray(m[:, 0])[selected], np.asarray(y[:, 0])[selected]
+    linear = d[..., None] + c[..., None] * mt
+    log_rate = linear + 0.05 * c[..., None] ** 2
+    log_integrand = np.sum(yt * linear - np.exp(log_rate), axis=-1)
+    log_integrand += 0.5 * np.log(alpha / (2 * np.pi)) - 0.5 * alpha * c**2
+    maximum = log_integrand.max()
+    integral = trapezoid(trapezoid(np.exp(log_integrand - maximum), loading, axis=1), bias)
+    exact = np.log(integral) + maximum + (alpha_shape - 1) * np.log(alpha) - alpha_rate * alpha
+    npt.assert_allclose(evidence, exact, rtol=0, atol=0.02)
+
+    beta = jnp.concatenate((params.d, params.C[0]))
+    penalty = jnp.array([0.0, alpha])
+
+    def objective(value):
+        return jnp.sum(valid) * Poisson.readout_objective(
+            (value[None, 1:], value[:1]), y, valid, m, V, penalty
+        )
+
+    npt.assert_allclose(jax.grad(objective)(beta), 0.0, atol=1e-5)
+    covariance = jnp.linalg.inv(jax.hessian(objective)(beta))
+    gamma = 1.0 - alpha * covariance[1, 1]
+    next_alpha = (gamma + 2 * alpha_shape - 2) / (params.C[0, 0] ** 2 + 2 * alpha_rate)
+    npt.assert_allclose(alpha, next_alpha, rtol=1e-3)
+
+
+def test_poisson_ard_ignores_masked_counts():
+    rng = np.random.default_rng(12)
+    n_time, n_features, n_latents = 60, 3, 2
+    m = jnp.asarray(rng.standard_normal((n_time, n_latents)))
+    V = jnp.broadcast_to(0.05 * jnp.eye(n_latents), (n_time, n_latents, n_latents))
+    y = jnp.asarray(rng.poisson(2.0, size=(n_time, n_features)))
+    valid = jnp.asarray(rng.random(y.shape) > 0.25)
+    start = Params(C=jnp.zeros((n_features, n_latents)), d=jnp.zeros(n_features),
+                   R=jnp.asarray(0.0), alpha=jnp.ones(n_latents))
+    estimator = ARDEstimator(iterations=10)
+    first, evidence = estimator.estimate(Poisson, start, y, valid, m, V)
+    changed, changed_evidence = estimator.estimate(
+        Poisson, start, jnp.where(valid, y, 10000), valid, m, V
+    )
+    for actual, expected in ((changed.C, first.C), (changed.d, first.d),
+                             (changed.alpha, first.alpha), (changed_evidence, evidence)):
+        npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
 
 def test_gaussian_ard_evidence_matches_quadrature():

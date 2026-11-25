@@ -104,6 +104,24 @@ def test_ard_estimator_and_precisions_round_trip(tmp_path):
     np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
 
 
+def test_poisson_ard_round_trip(tmp_path):
+    data = jnp.asarray(np.random.default_rng(6).poisson(2.0, size=(1, 20, 2)))
+    model = _model(
+        "Poisson", estimator="ARDEstimator", estimator_config={"iterations": 5}, max_iter=3
+    ).fit(data, random_state=0)
+    path = tmp_path / "poisson_ard.cvhmax"
+    model.save(path)
+    restored = CVHM.load(path)
+
+    assert restored.observation == "Poisson"
+    assert restored.estimator == "ARDEstimator"
+    assert restored.estimator_config == {"iterations": 5}
+    for name in ("C", "d", "R", "alpha"):
+        np.testing.assert_array_equal(getattr(restored.params, name), getattr(model.params, name))
+    for actual, expected in zip(restored.infer(data), model.infer(data)):
+        np.testing.assert_allclose(actual, expected)
+
+
 def test_fitted_poisson_round_trip_with_sentinel_r(tmp_path):
     data = jnp.asarray(np.random.default_rng(1).poisson(2.0, size=(1, 8, 2)))
     model = _model("Poisson").fit(data, random_state=0)

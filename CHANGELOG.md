@@ -7,11 +7,18 @@
 - Renamed `FrozenEstimator` to `FixedEstimator`. Configurations and archives
   using the former estimator name are not supported.
 
+### Added
+
+- Added Poisson support to `ARDEstimator` using a Laplace approximation for the
+  loading M-step while retaining CVI for latent inference.
+
 ### Changed
 
 - Raised the default number of inner CVI iterations from 5 to 20. Poisson
   inference may be more accurate at additional computational cost; set
   `cvi_iter` explicitly to choose a different count.
+- Renamed the training progress label to `Readout score`, since ARD reports
+  evidence rather than a negative expected log-likelihood.
 
 ## 0.5.1
 

@@ -4,7 +4,7 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
-from cvhmax.cvi import Params
+from cvhmax.cvi import CVI, MAX_LOGRATE, Params, Poisson
 from cvhmax.hm import HidaMatern, sample_matern
 from cvhmax.utils import real_repr
 
@@ -413,17 +413,84 @@ def test_fixed_estimator_leaves_the_supplied_readout_untouched():
     assert np.isfinite(np.asarray(model.posterior[0])).all()
 
 
-def test_ard_estimator_rejects_a_non_conjugate_readout():
-    """ARD needs a conjugate loading block, which Poisson does not provide."""
-    kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
-    with pytest.raises(ValueError, match="conjugate loading"):
-        CVHM(
-            n_components=1,
-            dt=1.0,
-            kernels=kernels,
-            observation="Poisson",
-            estimator="ARDEstimator",
-        )
+def test_poisson_ard_recovers_relevance_in_full_fit():
+    """Poisson ARD prunes surplus latents while fitting partially observed data."""
+    from cvhmax.estimator import RidgeEstimator
+
+    rng = np.random.default_rng(3)
+    n_sequences, n_time, n_features = 2, 120, 12
+    n_true, n_fit, dt = 2, 4, 0.1
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
+    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * dt
+    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
+    chol = np.linalg.cholesky(prior)
+    latent = np.stack([chol @ rng.standard_normal((n_time, n_true)) for _ in range(n_sequences)])
+    C = rng.normal(size=(n_features, n_true))
+    C = 0.7 * C / np.linalg.norm(C, axis=1, keepdims=True)
+    d = np.log(0.5) + rng.normal(scale=0.15, size=n_features)
+    y = jnp.asarray(rng.poisson(np.exp(latent @ C.T + d)).astype(float))
+    valid = jnp.asarray(rng.random(y.shape) > 0.2).at[0, 0, :].set(True)
+    initial = RidgeEstimator().initialize_params(Poisson, y, valid, n_fit, random_state=3)
+    initial = Params(C=initial.C, d=initial.d, R=initial.R, alpha=jnp.ones(n_fit))
+
+    model = CVHM(
+        n_components=n_fit, dt=dt, kernels=[kernel] * n_fit, params=initial,
+        observation="Poisson", estimator="ARDEstimator", estimator_config={"iterations": 10},
+        max_iter=150, min_iter=5, tol=1e-3, convergence_patience=3,
+    ).fit(y, valid, random_state=3)
+    alpha = np.sort(np.asarray(model.params.alpha))
+    assert model.converged_
+    assert alpha[n_true] > 10 * alpha[n_true - 1]
+    means, covariances = map(np.asarray, model.posterior)
+    estimated_C = np.asarray(model.params.C)
+    log_rate = means @ estimated_C.T + np.asarray(model.params.d)
+    log_rate += 0.5 * np.einsum("ni,stij,nj->stn", estimated_C, covariances, estimated_C)
+    rate = np.exp(np.minimum(log_rate, MAX_LOGRATE))
+    observations, mask = np.asarray(y), np.asarray(valid)
+    baseline = np.sum(np.where(mask, observations, 0), axis=(0, 1)) / np.sum(mask, axis=(0, 1))
+    baseline = np.broadcast_to(baseline, observations.shape)
+
+    def deviance(prediction):
+        counts, expected = observations[~mask], prediction[~mask]
+        term = np.zeros_like(counts)
+        positive = counts > 0
+        term[positive] = counts[positive] * np.log(counts[positive] / expected[positive])
+        return 2 * np.sum(term - counts + expected)
+
+    assert 1 - deviance(rate) / deviance(baseline) > 0.1
+
+
+def test_poisson_ard_does_not_require_gaussian_residual_degrees_of_freedom():
+    """Poisson has no fitted variance, so its loading Hessian permits three steps and two latents."""
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    params = Params(C=0.3 * jnp.eye(2), d=jnp.zeros(2), R=jnp.asarray(0.0), alpha=jnp.ones(2))
+    model = CVHM(
+        2, 1.0, [kernel, kernel], params=params, observation="Poisson",
+        estimator="ARDEstimator", estimator_config={"iterations": 5},
+        max_iter=1, min_iter=1, cvi_iter=0,
+    ).fit(jnp.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]), random_state=0)
+    assert np.isfinite(np.asarray(model.params.alpha)).all()
+
+
+@pytest.mark.parametrize("count", [0.0, 1100.0])
+def test_poisson_ard_rejects_unbounded_bias_evidence(count):
+    """A flat bias prior yields a divergent integral at either count extreme."""
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    model = CVHM(1, 1.0, [kernel], observation="Poisson", estimator="ARDEstimator")
+    with pytest.raises(ValueError, match="positive total counts and a mean count"):
+        model.fit(jnp.full((10, 1), count), random_state=0)
+
+
+def test_ard_estimator_rejects_unsupported_nonconjugate_readout():
+    class UnsupportedReadout(CVI):
+        pass
+
+    try:
+        with pytest.raises(ValueError, match="does not support observation"):
+            CVHM(1, 1.0, [HidaMatern(1.0, 1.0, 0.0, 0)],
+                 observation="UnsupportedReadout", estimator="ARDEstimator")
+    finally:
+        CVI.registry.pop("UnsupportedReadout", None)
 
 
 def test_estimators_are_exported_at_top_level():

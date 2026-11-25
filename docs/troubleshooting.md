@@ -28,11 +28,13 @@
   `convergence_patience` settings and inspect `model.converged_` and
   `model.n_iter_`. Held-out metrics are not used as the stopping criterion.
 
-## Training progress shows `Negative ELL n/a`
+## Training progress shows `Readout score n/a`
 
-`n/a` indicates a non-finite readout objective. It is expected for Gaussian
-and frozen-readout models that do not report an objective, but can also
-indicate a numerical problem. Inspect fitted parameters and posterior moments
-rather than treating `n/a` as a posterior-finiteness check. The displayed
-Poisson objective is the negative expected log-likelihood plus the loading penalty,
-per observed time step.
+`n/a` indicates a non-finite or unreported readout score. Gaussian ridge and
+fixed-readout models do not report a score. For Poisson ridge, the score is the
+unpenalized negative expected log-likelihood per observed time step; for ARD,
+it is the conditional evidence plus the precision-prior term
+(Laplace-approximated for Poisson). These scores
+have different scales and directions and should not be compared across
+estimators. Inspect fitted parameters and posterior moments rather than treating
+`n/a` as a posterior-finiteness check.

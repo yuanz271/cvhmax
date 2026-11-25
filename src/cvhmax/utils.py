@@ -330,7 +330,7 @@ def latent_mask(latent_spec):
 
 
 def training_progress():
-    """Create a rich progress bar configured for CVI training.
+    """Create a rich progress bar displaying the estimator's readout score.
 
     Returns
     -------
@@ -348,7 +348,7 @@ def training_progress():
         "Remaining",
         TimeRemainingColumn(),
         TextColumn("•"),
-        "Negative ELL",
+        "Readout score",
         TextColumn("{task.fields[nell_display]}"),
     )
 

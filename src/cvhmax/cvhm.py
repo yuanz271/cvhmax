@@ -10,7 +10,7 @@ from jax import Array, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
-from .cvi import CVI, Gaussian, Params
+from .cvi import CVI, MAX_LOGRATE, Gaussian, Params, Poisson
 from .estimator import Estimator, _portable_estimator_config
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
@@ -156,8 +156,8 @@ class CVHM:
     estimator : str, default="RidgeEstimator"
         Name of the loading estimator registered in `Estimator.registry`. It
         owns the readout M-step and the loading prior. ``"ARDEstimator"``
-        requires an observation model with a conjugate loading representation
-        and is rejected at construction otherwise.
+        supports conjugate loading representations and the Poisson readout,
+        where it uses a Laplace approximation.
     estimator_config : dict or None, default=None
         Keyword arguments for the estimator's constructor, for example
         ``{"alpha": 0.5}``.
@@ -186,9 +186,9 @@ class CVHM:
     Raises
     ------
     ValueError
-        If the estimator needs a conjugate loading representation that the
-        observation does not provide, a fit setting is invalid, or the
-        estimator configuration contains invalid precision or prior parameters.
+        If the estimator does not support the observation model, a fit setting
+        is invalid, or the estimator configuration contains invalid precision or
+        prior parameters.
     """
 
     n_components: int
@@ -213,12 +213,10 @@ class CVHM:
         self.estimator_impl = Estimator.registry[self.estimator](
             **(self.estimator_config or {})
         )
-        if self.estimator_impl.requires_conjugate_terms and (
-            self.cvi.loading_terms.__func__ is CVI.loading_terms.__func__
-        ):
+        if not self.estimator_impl._supports_likelihood(self.cvi):
             raise ValueError(
-                f"estimator {self.estimator!r} needs a conjugate loading "
-                f"representation, which {self.observation!r} does not provide"
+                f"estimator {self.estimator!r} does not support observation "
+                f"model {self.observation!r}"
             )
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
@@ -403,10 +401,10 @@ class CVHM:
         Raises
         ------
         ValueError
-            If a feature is never observed, if the ARD estimator is selected
-            and a feature has ``n_components + 1`` or fewer observed time
-            steps, or if ARD's ``params.alpha`` is not finite and strictly
-            positive.
+            If a feature is never observed, if Gaussian ARD has too few
+            observations per feature, if Poisson ARD has a feature without
+            positive counts or with a mean count at least ``exp(MAX_LOGRATE)``,
+            or if ARD's ``params.alpha`` is not finite and strictly positive.
         FloatingPointError
             If Gaussian variances or ARD precisions become non-positive or
             non-finite, or ARD evidence becomes non-finite.
@@ -427,13 +425,21 @@ class CVHM:
             raise ValueError("Every feature must be observed at least once during fitting")
         if self.estimator_impl.fits_ard_precisions:
             counts = jnp.sum(valid_y, axis=(0, 1))
-            minimum = self.n_components + 1
-            if not bool(jnp.all(counts > minimum)):
-                raise ValueError(
-                    "ARDEstimator requires every feature to be observed at more "
-                    f"than n_components + 1 = {minimum} time steps; "
-                    f"minimum observed count is {int(jnp.min(counts))}"
-                )
+            if self.cvi.loading_terms.__func__ is not CVI.loading_terms.__func__:
+                minimum = self.n_components + 1
+                if not bool(jnp.all(counts > minimum)):
+                    raise ValueError(
+                        "ARDEstimator requires every feature to be observed at more "
+                        f"than n_components + 1 = {minimum} time steps; "
+                        f"minimum observed count is {int(jnp.min(counts))}"
+                    )
+            elif issubclass(self.cvi, Poisson):
+                totals = jnp.sum(jnp.where(valid_y, y, 0.0), axis=(0, 1))
+                if not bool(jnp.all((totals > 0) & (totals < math.exp(MAX_LOGRATE) * counts))):
+                    raise ValueError(
+                        "Poisson ARD requires positive total counts and a mean count "
+                        "below exp(MAX_LOGRATE) for every feature"
+                    )
         if random_state is None:
             random_state = secrets.randbits(32)
         if issubclass(self.cvi, Gaussian) and self.params is not None:

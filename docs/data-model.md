@@ -30,7 +30,10 @@ mask; use an explicit singleton axis to specify another interpretation. Missing
 features may be filled with any finite value in `y`; they contribute neither
 readout information nor readout updates. Every feature must be observed at least
 once across training sequences and time steps. An already-fitted model can infer
-from any subset.
+from any subset. Gaussian ARD additionally requires more than `K + 1` observed
+steps per feature. Poisson ARD requires a positive total count and an observed
+mean below `exp(MAX_LOGRATE)` for every feature; masked counts are excluded from
+both conditions.
 
 ### How masking works
 

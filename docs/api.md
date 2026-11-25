@@ -39,18 +39,18 @@ loading precision fixed at `alpha` (default 0.1); `"ARDEstimator"` fits one
 precision per latent column against the evidence; `"FixedEstimator"` holds the
 readout fixed. It uses supplied `params`, or initializes them from the data if
 none are supplied.
-`ARDEstimator` needs a conjugate loading representation, so it is not available
-with the Poisson readout. Precisions are reported on the fitted parameters as
-`Params.alpha`: ranking the columns by it is how effective dimensionality is
-read off, and any threshold is the caller's.
+`ARDEstimator` supports Gaussian and Poisson readouts. Its Poisson loading
+integral uses a Laplace approximation; latent inference remains CVI. Precisions
+are reported as `Params.alpha`, with any relevance threshold left to the caller.
 
 `valid_y` may be `None`, a time-step mask shaped `(sequences, time)` (or `(time,)`
 for one sequence), or a boolean mask broadcastable to `y`, including
 `(sequences, time, 1)` and `(sequences, 1, features)`. Fitting requires each
-feature to be observed in at least one time step. With ARD, each feature must
-be observed at more than `n_components + 1` time steps; ARD's initial
-precisions must be positive and its Gamma prior requires `alpha_shape > 1` and
-`alpha_rate > 0`. Sequences have independent
+feature to be observed in at least one time step. Gaussian ARD requires more
+than `n_components + 1` observed steps per feature. Poisson ARD requires each
+feature's observed total count to be positive and its mean count below
+`exp(MAX_LOGRATE)`. ARD's initial precisions must be positive and its Gamma
+prior requires `alpha_shape > 1` and `alpha_rate > 0`. Sequences have independent
 latent trajectories but share kernels, `dt`, and the readout; feature indices
 must refer to the same variables across sequences. Sequence-specific readouts
 are not represented.
@@ -94,12 +94,13 @@ is a positive diagonal observation-noise covariance; Poisson uses a scalar zero
 sentinel. Fixed GP kernel amplitudes set the latent prior scale, while `C`
 retains observation-specific gains.
 
-`ARDEstimator` fits the loadings of a Gaussian readout under a per-latent ARD
-prior, holding the latent moments fixed within each M-step. The fitted
-precisions `Params.alpha` separate latent columns the readout needs from columns
-pruned to numerical zero. `ard_evidence(terms, log_alpha, log_variance)` in
-`cvhmax.estimator` evaluates the marginal log-evidence at supplied precisions.
-See `algorithms.md` for the derivation and its limits.
+`ARDEstimator` fits readout loadings under a per-latent ARD prior, holding the
+latent moments fixed within each M-step. The fitted precisions `Params.alpha`
+rank the loading columns, but do not guarantee recovery of the true latent
+count. `ard_evidence(terms, log_alpha, log_variance)` in `cvhmax.estimator`
+evaluates the Gaussian loading evidence at supplied precisions; the Poisson
+loading evidence is approximated locally. See `algorithms.md` for the
+assumptions and limits.
 
 CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
 explicitly and compares the loading Gram `C C^T`, `d`, and `R` for convergence;

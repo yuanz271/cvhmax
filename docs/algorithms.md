@@ -102,15 +102,17 @@ Initialization fills missing entries with per-feature observed means for Factor
 Analysis only; subsequent updates use the actual observation mask. For Poisson,
 FA count-space loadings are scaled to log-rate space, with a half-count per
 feature used only to initialize a finite baseline rate. The Poisson
-readout objective is the exact negative expected log-likelihood,
-`exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
-the rate carries the variance correction. Masking does not change it. It
-adds the same Gaussian-prior penalty `0.5 * sum_k alpha_k * ||C[:, k]||²`,
-averaged with the data term. The rate is exact up to `MAX_LOGRATE` and continues
-along its tangent line beyond it, so the objective stays convex and bounded
-below; a flat clip would let `-y * eta` fall without limit once an optimiser step
-crossed the cap. The training progress reports the unpenalized negative expected
-log-likelihood. Ridge reports its configured precision in `Params.alpha`.
+readout objective matches the negative expected log-likelihood,
+`exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`,
+while the rate cap is inactive. Only the rate carries the variance correction.
+Masking does not change it. It adds the same Gaussian-prior penalty
+`0.5 * sum_k alpha_k * ||C[:, k]||²`, averaged with the data term. Beyond
+`MAX_LOGRATE` the rate continues along its tangent line rather than remaining
+flat. This avoids the flat clip's runaway for mean counts below the capped rate;
+it does not keep the objective bounded for all possible counts. For ridge, training progress reports the unpenalized negative
+expected log-likelihood. For ARD, it reports the conditional loading evidence
+(Laplace-approximated for Poisson). Ridge reports its configured precision in
+`Params.alpha`.
 
 ## Gaussian ARD Loadings
 
@@ -182,6 +184,33 @@ producing a non-finite variance inside the fixed-point iteration. The fit also
 stops loudly if an ARD loading precision becomes non-positive or non-finite,
 or if the evidence becomes non-finite.
 
+## Poisson ARD Loadings
+
+For Poisson observations, ARD leaves the CVI latent E-step unchanged and
+approximates only the conditional loading integral. Holding the latent moments
+fixed, it finds each feature's penalized loading and bias MAP using damped
+Newton steps. The inverse Hessian at that MAP approximates the loading
+covariance, and the fixed-point update below fits one precision per latent,
+shared across features. `iterations` controls the number of precision updates;
+each uses three Newton steps, followed by nine final MAP steps. These are fixed
+counts, not a convergence guarantee.
+
+The update treats the Hessian as locally fixed. Because the Hessian also
+changes through the MAP as precisions change, this is not the exact gradient of
+the full Laplace evidence and need not increase it at every iteration. The
+reported score is conditional loading evidence with the Gamma precision prior;
+count-factorial constants are omitted. It is neither an exact marginal
+likelihood nor a guaranteed bound on it. Latent uncertainty enters the
+expected Poisson rate through the CVI posterior covariance.
+
+The bias has a flat prior. If an observed feature's total count is zero, its
+loading evidence integral diverges as the bias tends to negative infinity. With
+the linearly extended rate used by the readout objective, a mean count at least
+`exp(MAX_LOGRATE)` likewise makes the bias tail non-integrable. `CVHM.fit`
+rejects these cases for Poisson ARD. Sparse counts can make relevance ranking
+unreliable even when these conditions hold; evaluate the ranking and held-out
+predictions rather than assuming a fixed precision threshold recovers rank.
+
 ## Loading Estimators
 
 The observation model and the loading estimator are separate axes. A `CVI`
@@ -191,20 +220,18 @@ readout M-step and the loading prior. Ridge and ARD share one prior,
 `C[:, k] ~ N(0, alpha_k^-1 I)` with a flat bias, and differ in whether `alpha` is
 fitted -- so choosing an estimator chooses a prior as well as an algorithm.
 
-An estimator uses the closed form when the likelihood exposes conjugate loading
-terms and a generic gradient solve otherwise. `Gaussian` exposes them; `Poisson`
-does not, because `exp(eta)` breaks conjugacy in the loadings, so
-`ARDEstimator` is rejected with Poisson at construction.
+Gaussian exposes conjugate loading terms. Poisson does not, because `exp(eta)`
+breaks conjugacy in the loadings: ridge uses a gradient solve and ARD uses a
+Laplace approximation restricted to the loading M-step.
 
 `RidgeEstimator` solves the penalised conjugate objective directly. Note that
 solving each feature against its own noise variance brings an `R_nn` factor into
 the regulariser; that is the unit conversion for an absolute precision, not a
 different penalty strength.
 
-`ARDEstimator` maximises the evidence over the precisions and the observation
-variances jointly, with the loadings integrated out. Both stationary points have
-closed forms and are reached by a fixed-point iteration, so no optimiser is
-involved:
+For Gaussian observations, `ARDEstimator` maximises the evidence over the
+precisions and observation variances jointly, with the loadings integrated out.
+Both stationary points are reached by a fixed-point iteration:
 
 ```
 gamma_nk = 1 - alpha_k * Sigma_n[k, k]
