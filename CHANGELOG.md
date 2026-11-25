@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.5.1
+
 ### Fixed
 
 - Fixed a runaway in the Poisson readout fit. Since 0.4.0 the objective clipped the
