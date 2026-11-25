@@ -16,6 +16,7 @@ from cvhmax.cvi import (
     Gaussian,
     Poisson,
     Params,
+    _capped_exp,
     poisson_cvi_step_stats_latent,
     poisson_readout_objective,
 )
@@ -136,6 +137,34 @@ def test_poisson_objective_penalises_each_latent_column_by_its_own_precision():
 
     expected = 0.5 * jnp.sum(precisions * jnp.sum(C**2, axis=0)) / len(y)
     npt.assert_allclose(penalised - plain, expected, rtol=1e-10)
+
+
+def test_capped_exp_is_exp_below_the_cap_and_its_tangent_above():
+    """Exact value and slope below the cap, continuous at it, finite where exp overflows."""
+    below = jnp.linspace(-5.0, MAX_LOGRATE, 40)
+    npt.assert_allclose(_capped_exp(below), jnp.exp(below), rtol=1e-12)
+    npt.assert_allclose(jax.vmap(jax.grad(_capped_exp))(below), jnp.exp(below), rtol=1e-12)
+
+    cap = jnp.exp(MAX_LOGRATE)
+    above = MAX_LOGRATE + jnp.asarray([1e-9, 1.0, 10.0, 1000.0])  # exp(1007) overflows float64
+    npt.assert_allclose(_capped_exp(above), cap * (1.0 + above - MAX_LOGRATE), rtol=1e-12)
+    npt.assert_allclose(jax.vmap(jax.grad(_capped_exp))(above), cap, rtol=1e-12)
+    assert bool(jnp.all(jnp.isfinite(jax.vmap(jax.grad(_capped_exp))(above))))
+    npt.assert_allclose(_capped_exp(MAX_LOGRATE + 1e-12), cap, rtol=1e-9)
+
+
+def test_poisson_objective_rises_beyond_the_cap_through_the_variance_term():
+    """The posterior-variance term can cross the cap too; the objective must still rise."""
+    y = jnp.asarray([[3.0]])
+    valid = jnp.ones_like(y, dtype=bool)
+    m, V = jnp.ones((1, 1)), jnp.ones((1, 1, 1))
+    values = jnp.stack([
+        poisson_readout_objective(
+            (jnp.asarray([[s]]), jnp.zeros(1)), y, valid, m, V, jnp.zeros(2)
+        )
+        for s in (5.0, 10.0, 30.0, 100.0)  # lin + q/2 = s + s**2/2, past the cap from s = 3
+    ])
+    assert bool(jnp.all(jnp.diff(values) > 0)), values
 
 
 def test_poisson_objective_rises_beyond_the_rate_cap():

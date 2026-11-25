@@ -33,6 +33,31 @@ def _ard_fit(y, valid, m, V, **kwargs):
     return params, np.asarray(params.alpha)
 
 
+def test_poisson_initialization_stays_bounded_on_a_problem_that_crossed_the_cap():
+    """L-BFGS in initialization used to run to bias ~1e34 on this data.
+
+    The objective's rate was clipped at MAX_LOGRATE but its ``y * lin`` term was
+    not, so a step across the cap found an objective with no minimum.
+    """
+    from cvhmax.estimator import RidgeEstimator
+
+    rng = np.random.default_rng(7)
+    n_sequences, n_time, n_features, n_latents = 2, 300, 20, 2
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
+    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * 0.02
+    chol = np.linalg.cholesky(np.asarray(kernel.kernel(jnp.asarray(lags))) + 1e-8 * np.eye(n_time))
+    latents = np.stack([chol @ rng.standard_normal((n_time, n_latents)) for _ in range(n_sequences)])
+    loadings = rng.normal(size=(n_features, n_latents))
+    loadings = 0.8 * loadings / np.linalg.norm(loadings, axis=1, keepdims=True)
+    y = jnp.asarray(rng.poisson(np.exp(2.0 + latents @ loadings.T)).astype(float))
+
+    params = RidgeEstimator().initialize_params(
+        Poisson, y, jnp.ones(y.shape, dtype=bool), 5, random_state=0
+    )
+    assert float(jnp.abs(params.d).max()) < 10.0, params.d
+    assert float(jnp.abs(params.C).max()) < 10.0
+
+
 def test_gaussian_ard_evidence_matches_quadrature():
     """The closed-form evidence equals a brute-force integral over (d, C)."""
     T, N, K = 8, 2, 1

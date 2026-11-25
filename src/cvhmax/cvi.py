@@ -420,9 +420,12 @@ def _capped_exp(x: Array) -> Array:
     rising beyond the cap, and equals ``exp`` wherever the cap is inactive.
     """
     cap = jnp.exp(MAX_LOGRATE)
+    below = x <= MAX_LOGRATE
+    # The inner where keeps exp finite on the unused branch; jnp.minimum would do
+    # the same but splits the gradient between its arguments at x == MAX_LOGRATE.
     return jnp.where(
-        x <= MAX_LOGRATE,
-        jnp.exp(jnp.minimum(x, MAX_LOGRATE)),
+        below,
+        jnp.exp(jnp.where(below, x, 0.0)),
         cap * (1.0 + x - MAX_LOGRATE),
     )
 
