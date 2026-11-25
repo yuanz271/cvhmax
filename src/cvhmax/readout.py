@@ -21,8 +21,6 @@ from .utils import LoadingTerms, lbfgs_solve
 if TYPE_CHECKING:
     from .cvi import Poisson
 
-Penalty = Array
-
 # Damping on the local curvature. A feature whose likelihood is locally flat
 # (saturated probabilities, empty counts) otherwise yields a singular Hessian,
 # which breaks both the Newton step and the evidence log-determinant.
@@ -115,7 +113,7 @@ def loading_settings(loading: str, config: dict | None) -> dict[str, Any]:
     return settings
 
 
-def penalty(alpha: Array, n_latents: int) -> Penalty:
+def penalty(alpha: Array, n_latents: int) -> Array:
     """Return the penalty diagonal, zero at the bias index."""
     return jnp.concatenate((jnp.zeros(1), jnp.broadcast_to(alpha, (n_latents,))))
 
@@ -132,7 +130,7 @@ def unstack_readout(beta: Array, R: Array, alpha: Array) -> Params:
 
 def conjugate_solve(
     terms: LoadingTerms,
-    penalty_: Penalty,
+    penalty_diagonal: Array,
     params: Params,
     y: Array,
     valid_y: Array,
@@ -146,7 +144,7 @@ def conjugate_solve(
     regulariser, which is a unit conversion rather than a change in strength.
     """
     variance = jnp.diag(params.R)
-    posterior = terms.precision / variance[:, None, None] + jnp.diag(penalty_)[None]
+    posterior = terms.precision / variance[:, None, None] + jnp.diag(penalty_diagonal)[None]
     beta = jnp.linalg.solve(
         posterior, (terms.linear / variance[:, None])[..., None]
     )[..., 0]
@@ -156,7 +154,7 @@ def conjugate_solve(
     variance = jnp.sum(
         jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
     ) / terms.counts
-    return Params(C=C, d=d, R=jnp.diag(variance), alpha=penalty_[1:])
+    return Params(C=C, d=d, R=jnp.diag(variance), alpha=penalty_diagonal[1:])
 
 
 def ridge_fit(
@@ -169,20 +167,20 @@ def ridge_fit(
     alpha: Array,
 ) -> tuple[Params, Array]:
     """Fit loadings at a fixed precision, using a closed form where one exists."""
-    penalty_ = penalty(alpha, m.shape[-1])
+    penalty_diagonal = penalty(alpha, m.shape[-1])
     terms = likelihood.loading_terms(y, valid_y, m, V)
     if terms is not None:
-        return conjugate_solve(terms, penalty_, params, y, valid_y, m, V), jnp.nan
+        return conjugate_solve(terms, penalty_diagonal, params, y, valid_y, m, V), jnp.nan
     C, d = lbfgs_solve(
         (params.C, params.d),
         lambda readout: likelihood.readout_objective(
-            readout, y, valid_y, m, V, penalty=penalty_
+            readout, y, valid_y, m, V, penalty=penalty_diagonal
         ),
     )
     objective = likelihood.readout_objective(
-        (C, d), y, valid_y, m, V, penalty=jnp.zeros_like(penalty_)
+        (C, d), y, valid_y, m, V, penalty=jnp.zeros_like(penalty_diagonal)
     )
-    return Params(C=C, d=d, R=params.R, alpha=penalty_[1:]), objective
+    return Params(C=C, d=d, R=params.R, alpha=penalty_diagonal[1:]), objective
 
 
 def ard_fit_conjugate(
@@ -270,12 +268,12 @@ def ard_fit_laplace(
     alpha = jnp.broadcast_to(alpha, (n_latents,))
 
     def objective(beta_n, alpha_, y_n, mask_n):
-        penalty_ = jnp.concatenate((jnp.zeros(1), alpha_))
+        penalty_diagonal = jnp.concatenate((jnp.zeros(1), alpha_))
         # The readout objective averages over observed steps. Undo that
         # averaging before forming the per-feature posterior curvature.
         return jnp.sum(mask_n) * likelihood.readout_objective(
             (beta_n[None, 1:], beta_n[:1]),
-            y_n[:, None], mask_n[:, None], m, V, penalty_,
+            y_n[:, None], mask_n[:, None], m, V, penalty_diagonal,
         )
 
     gradient = jax.grad(objective)
