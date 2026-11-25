@@ -23,8 +23,6 @@ Variational latent-state inference with Hida-Matern kernels.
 - CVI-EM loop with Gaussian and Poisson readouts via the `CVI` registry.
 - Hida–Matérn kernels parameterised as linear Gaussian state-space models.
 - Forward/backward information filtering (`bifilter`) for smoothing latent trajectories.
-- Whittle-style spectral hyperparameter refinement through `hp.whittle`.
-- Progress-aware training loops with `rich` instrumentation.
 
 ## Installation
 
