@@ -16,7 +16,8 @@ from cvhmax.cvi import (
     Poisson,
     Gaussian,
 )
-from cvhmax.estimator import ARDEstimator, ard_evidence
+from cvhmax.estimator import ARDEstimator
+from cvhmax.readout import ard_evidence
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 

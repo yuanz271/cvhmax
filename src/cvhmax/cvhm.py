@@ -11,7 +11,8 @@ from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
 from .cvi import CVI, MAX_LOGRATE, Gaussian, Params, Poisson
-from .estimator import Estimator, _portable_estimator_config
+from .estimator import Estimator
+from .readout import portable_config
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
 from .utils import cho_inv, real_repr, symm, training_progress
@@ -569,7 +570,7 @@ class CVHM:
             "convergence_patience": int(self.convergence_patience),
             "observation": str(self.observation),
             "estimator": str(self.estimator),
-            "estimator_config": _portable_estimator_config(self.estimator_config),
+            "estimator_config": portable_config(self.estimator_config),
             "kernels": [k.get_config() for k in self.kernels],
         }
 
