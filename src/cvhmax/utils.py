@@ -80,7 +80,7 @@ class LoadingTerms(NamedTuple):
 
     The expected readout log-likelihood is ``-0.5 beta' precision beta
     + beta' linear`` up to terms independent of ``beta = [d, C]``, which is what
-    makes a Gaussian loading prior conjugate and lets an estimator integrate
+    makes a Gaussian loading prior conjugate and lets a fit integrate
     the loadings out rather than profile them. The bias is index 0.
 
     Attributes
@@ -331,7 +331,7 @@ def latent_mask(latent_spec):
 
 
 def training_progress():
-    """Create a rich progress bar displaying the estimator's readout score.
+    """Create a rich progress bar displaying the readout score.
 
     Returns
     -------
@@ -473,7 +473,7 @@ class Params(eqx.Module):
         For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
     alpha : Array or None
         Loading precisions with shape ``(latent_dim (K),)`` when supplied by
-        the loading estimator, otherwise ``None``. For ARD, a large value
+        the loading kind, otherwise ``None``. For ARD, a large value
         indicates stronger shrinkage of a loading column; the precision ranking
         can help assess effective dimensionality but does not guarantee the
         true rank.

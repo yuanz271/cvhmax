@@ -4,13 +4,23 @@
 
 ### Breaking changes
 
-- Renamed `FrozenEstimator` to `FixedEstimator`. Configurations and archives
-  using the former estimator name are not supported.
+- Removed the loading-estimator classes. `CVHM(estimator=..., estimator_config=...)`
+  becomes `CVHM(loading="ridge" | "ard" | "fixed", loading_config=...)`, and
+  `Estimator`, `RidgeEstimator`, `ARDEstimator` and `FixedEstimator` are no
+  longer exported. The observation model now owns its readout M-step, because
+  the conditional loading distribution depends on the data term; `Gaussian` and
+  `Poisson` implement the three loading kinds, and `CVI.supported_loadings`
+  declares which are available.
+- Moved `Params` to `cvhmax.utils`; `cvhmax.cvi.Params` no longer exists.
+- Bumped the archive format version to 3. Manifests record `loading` and
+  `loading_config` in place of `estimator` and `estimator_config`.
 
 ### Added
 
-- Added Poisson support to `ARDEstimator` using a Laplace approximation for the
-  loading M-step while retaining CVI for latent inference.
+- Added Poisson support to ARD using a Laplace approximation for the loading
+  M-step while retaining CVI for latent inference.
+- Added `cvhmax.readout` with the shared readout fitting functions: penalty,
+  conjugate solve, ridge fit, both ARD fits, and the loading evidence.
 
 ### Changed
 

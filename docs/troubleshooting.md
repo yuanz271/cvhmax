@@ -36,5 +36,5 @@ unpenalized negative expected log-likelihood per observed time step; for ARD,
 it is the conditional evidence plus the precision-prior term
 (Laplace-approximated for Poisson). These scores
 have different scales and directions and should not be compared across
-estimators. Inspect fitted parameters and posterior moments rather than treating
+loading kinds. Inspect fitted parameters and posterior moments rather than treating
 `n/a` as a posterior-finiteness check.

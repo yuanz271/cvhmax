@@ -88,14 +88,15 @@ default; `cvi_iter` adjusts the accuracy–compute tradeoff for Poisson. For the
 built-in Gaussian readout, `cvi_iter=0` gives the same posterior. For smoother
 latent trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
-`estimator` chooses how the loadings are fitted. The default `"RidgeEstimator"`
-uses a fixed precision. `"ARDEstimator"` fits one precision per latent for
-Gaussian or Poisson observations; larger values in `model.params.alpha` indicate
-more strongly shrunk loading columns. Poisson ARD uses a Laplace approximation
-and may be less reliable when counts are sparse. For example, use
-`observation="Poisson", estimator="ARDEstimator"` in the `CVHM` constructor.
-`"FixedEstimator"` holds the initialized readout fixed. See
-`docs/algorithms.md` for ARD's assumptions.
+`loading` chooses how the loadings are fitted. The default `"ridge"` holds a
+fixed precision. `"ard"` fits one precision per latent for Gaussian or Poisson
+observations; larger values in `model.params.alpha` indicate more strongly
+shrunk loading columns. Poisson ARD uses a Laplace approximation and may be less
+reliable when counts are sparse, for example
+`CVHM(..., observation="Poisson", loading="ard")`. `"fixed"` holds the
+initialized readout fixed. `loading_config` overrides the kind's defaults, such
+as `{"alpha": 0.5}` or `{"iterations": 20}`. See `docs/algorithms.md` for ARD's
+assumptions.
 
 The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen
 readout, holding the data, readout, and other kernel hyperparameters fixed:
@@ -105,8 +106,8 @@ JAX_ENABLE_X64=1 python examples/demo_vdp.py
 ```
 
 A separate demo shows ARD. It simulates two Van der Pol latents, observes them
-through a Gaussian readout, and fits five latents with `RidgeEstimator` and with
-`ARDEstimator` on the same data. ARD separates the fitted precisions by more than
+through a Gaussian readout, and fits five latents with `loading="ridge"` and
+`loading="ard"` on the same data. ARD separates the fitted precisions by more than
 three orders of magnitude and drives the three surplus loadings to numerical
 zero, where ridge only shrinks them. It prints the ranking and writes
 `examples/demo_ard.pdf`:

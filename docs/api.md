@@ -7,8 +7,6 @@ This page summarizes the public API. For full details, consult the docstrings.
 Public exports live in `src/cvhmax/__init__.py`:
 
 - `CVHM`: high-level model wrapper
-- `Estimator`, `RidgeEstimator`, `ARDEstimator`, `FixedEstimator`: loading
-  estimators, selected by `CVHM(estimator=...)`
 - `CVI`: base class for conjugate variational inference readouts
 - `Gaussian`, `Poisson`: built-in readouts
 - `Params`: readout parameter container
@@ -33,15 +31,14 @@ Public exports live in `src/cvhmax/__init__.py`:
 
 Source: `src/cvhmax/cvhm.py`
 
-`estimator` selects how the loadings are fitted, by exact class name, the same
-way `observation` selects a readout. `"RidgeEstimator"` (default) holds the
-loading precision fixed at `alpha` (default 0.1); `"ARDEstimator"` fits one
-precision per latent column against the evidence; `"FixedEstimator"` holds the
-readout fixed. It uses supplied `params`, or initializes them from the data if
-none are supplied.
-`ARDEstimator` supports Gaussian and Poisson readouts. Its Poisson loading
-integral uses a Laplace approximation; latent inference remains CVI. Precisions
-are reported as `Params.alpha`, with any relevance threshold left to the caller.
+`loading` selects how the loadings are fitted: `"ridge"` (default) holds the
+precision fixed at `alpha` (default 0.1), `"ard"` fits one precision per latent
+column against the conditional evidence, and `"fixed"` holds the readout fixed.
+`loading_config` overrides the kind's defaults. Which kinds are available
+depends on the observation model, through `CVI.supported_loadings`. ARD's
+Poisson loading integral uses a Laplace approximation; latent inference remains
+CVI. Precisions are reported as `Params.alpha`, with any relevance threshold
+left to the caller.
 
 `valid_y` may be `None`, a time-step mask shaped `(sequences, time)` (or `(time,)`
 for one sequence), or a boolean mask broadcastable to `y`, including
@@ -58,8 +55,8 @@ are not represented.
 `CVHM.save(path)` and `CVHM.load(path)` persist and restore model state without
 saving posterior or latent caches. The serialization uses the
 `get_config()`/`from_config()` protocol on both `CVHM` and `HidaMatern`. Only
-the built-in readout names and built-in estimators are supported; user-defined
-estimators are rejected. `estimator_config` is written as finite JSON
+the built-in observation models and loading kinds are supported; other names
+are rejected. `loading_config` is written as finite JSON
 primitives, so a numpy or JAX `alpha` becomes a list with its logical shape
 preserved.
 After fitting, `CVHM.posterior` and `CVHM.latent` describe the same posterior
@@ -72,20 +69,19 @@ archive format and compatibility policy.
 - `CVI`: registry-backed base class for an observation model, with stateless
   class methods
   - `initialize_params(y, valid_y, n_factors, *, random_state, penalty=None, params=None)`
-    — data-driven starting readout, called by the estimator
+    — data-driven starting readout, called during `fit`
   - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
   - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
   - `loading_terms(y, valid_y, m, V)` — conjugate loading statistics
     (`LoadingTerms`), or `None` when the likelihood has no conjugate form
   - `readout_objective(params, y, valid_y, m, V, penalty)` — penalised negative
     expected log-likelihood, averaged per observed time step
-- `Estimator`: registry-backed base class that owns the readout M-step and the
-  loading prior
-  - `initialize_params(likelihood, y, valid_y, n_factors, *, random_state, params=None)`
-    — drives the likelihood's start and fills `Params.alpha`
-  - `estimate(likelihood, params, y, valid_y, m, V)` — returns `(Params, objective)`
+  - `solve_readout(loading, settings, params, y, valid_y, m, V)` — readout M-step
+    for one loading kind; returns `(Params, score)`
+  - `check_readout_fit(loading, y, valid_y, n_components)` — rejects data the
+    kind cannot be fitted to
+  - `supported_loadings` — the loading kinds the readout implements
 - `Gaussian`, `Poisson`: built-in observation models
-- `RidgeEstimator`, `ARDEstimator`, `FixedEstimator`: built-in estimators
 - `Params`: container of `C`, `d`, `R`, and the fitted loading precisions
   `alpha` (no `M` — that lives in CVHM)
 
@@ -94,10 +90,10 @@ is a positive diagonal observation-noise covariance; Poisson uses a scalar zero
 sentinel. Fixed GP kernel amplitudes set the latent prior scale, while `C`
 retains observation-specific gains.
 
-`ARDEstimator` fits readout loadings under a per-latent ARD prior, holding the
-latent moments fixed within each M-step. The fitted precisions `Params.alpha`
+ARD fits readout loadings under a per-latent prior, holding the latent moments
+fixed within each M-step. The fitted precisions `Params.alpha`
 rank the loading columns, but do not guarantee recovery of the true latent
-count. `ard_evidence(terms, log_alpha, log_variance)` in `cvhmax.estimator`
+count. `ard_evidence(terms, log_alpha, log_variance)` in `cvhmax.readout`
 evaluates the Gaussian loading evidence at supplied precisions; the Poisson
 loading evidence is approximated locally. See `algorithms.md` for the
 assumptions and limits.
@@ -105,7 +101,7 @@ assumptions and limits.
 CVI methods work entirely in latent space `(K)`. CVHM passes readout parameters
 explicitly and compares the loading Gram `C C^T`, `d`, and `R` for convergence;
 the Gram is invariant to latent rotation, so the same criterion serves every
-estimator. `Params.alpha` is reported, not compared.
+loading kind. `Params.alpha` is reported, not compared.
 
 Source: `src/cvhmax/cvi.py`
 

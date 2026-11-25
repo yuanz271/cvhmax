@@ -51,7 +51,7 @@ observations ──→ initialize_info ──→ j_latent, J_latent
                                          (repeat)
                                            │
                                            ▼
-                              m, V ──→ Estimator.estimate ──→ params
+                              m, V ──→ CVI.solve_readout ──→ params
 ```
 
 ## Spaces and Dimensions
@@ -110,12 +110,14 @@ all operating in latent space:
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
 | `loading_terms` | observations, posterior `(m, V)` | conjugate loading statistics, or `None` |
 | `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
+| `solve_readout` | loading kind, settings, params, observations, posterior | updated params and a score |
+| `check_readout_fit` | loading kind, observations | raises when the data cannot support the kind |
 
-How the readout parameters are fitted is a separate axis. An `Estimator`
-(`RidgeEstimator`, `ARDEstimator`, `FixedEstimator`) owns the M-step
-`estimate` and decides the loading prior. It asks the observation model for
-`initialize_params` (supplying the penalty), and for `loading_terms` or
-`readout_objective`.
+The readout M-step belongs to the observation model, because the conditional
+distribution of the loadings depends on the data term. `CVI.solve_readout`
+handles `"ridge"` and `"fixed"` generically and raises for `"ard"`;
+`Gaussian` and `Poisson` override it with their own ARD implementation.
+`CVI.supported_loadings` declares the kinds a readout accepts.
 
 ### Readout params
 
@@ -129,7 +131,7 @@ metric compares `C`, `d`, and `R`.
 1. **Clean separation**: CVI knows nothing about state space; filtering
    knows nothing about observations; CVHM bridges the two.
 2. **Easy to extend**: new observation models implement the stateless
-   methods above in latent space; new loading priors are a separate
-   `Estimator`.
+   methods above in latent space, including whichever loading kinds it
+   supports.
 3. **Smaller arrays in CVI**: latent dimension `K ≤ L`, less computation.
 4. **Testable**: each CVI method is a pure function of its inputs.

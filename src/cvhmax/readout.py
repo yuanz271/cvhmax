@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 
 Penalty = Array
 
+# Damping on the local curvature. A feature whose likelihood is locally flat
+# (saturated probabilities, empty counts) otherwise yields a singular Hessian,
+# which breaks both the Newton step and the evidence log-determinant.
+CURVATURE_JITTER = 1e-10
+
 # Per-kind defaults. ``alpha`` is held fixed for ridge and fixed readouts and is
 # only a starting point for ARD, so the two kinds keep their own default.
 DEFAULTS: dict[str, dict[str, Any]] = {
@@ -274,12 +279,15 @@ def ard_fit_laplace(
         )
 
     gradient = jax.grad(objective)
-    hessian = jax.hessian(objective)
+
+    def curvature(beta_n, alpha_, y_n, mask_n):
+        """Local curvature, damped so a flat feature stays positive definite."""
+        hessian = jax.hessian(objective)(beta_n, alpha_, y_n, mask_n)
+        return hessian + CURVATURE_JITTER * jnp.eye(hessian.shape[-1])
 
     def newton_step(beta_n, alpha_, y_n, mask_n):
         grad = gradient(beta_n, alpha_, y_n, mask_n)
-        curvature = hessian(beta_n, alpha_, y_n, mask_n)
-        direction = jnp.linalg.solve(curvature, grad)
+        direction = jnp.linalg.solve(curvature(beta_n, alpha_, y_n, mask_n), grad)
         scales = 0.5 ** jnp.arange(15)
         candidates = beta_n[None, :] - scales[:, None] * direction[None, :]
         losses = jax.vmap(lambda candidate: objective(candidate, alpha_, y_n, mask_n))(
@@ -292,16 +300,16 @@ def ard_fit_laplace(
         )
 
     newton = jax.vmap(newton_step, in_axes=(0, None, 1, 1))
-    curvatures = jax.vmap(hessian, in_axes=(0, None, 1, 1))
+    curvatures = jax.vmap(curvature, in_axes=(0, None, 1, 1))
 
     def update(carry, _):
         beta_, alpha_ = carry
         beta_ = jax.lax.fori_loop(
             0, 3, lambda _, value: newton(value, alpha_, y, valid_y), beta_
         )
-        curvature = curvatures(beta_, alpha_, y, valid_y)
+        local = curvatures(beta_, alpha_, y, valid_y)
         covariance = jnp.linalg.solve(
-            curvature, jnp.broadcast_to(jnp.eye(n_latents + 1), curvature.shape)
+            local, jnp.broadcast_to(jnp.eye(n_latents + 1), local.shape)
         )
         effective = 1.0 - alpha_[None, :] * jnp.diagonal(
             covariance, axis1=1, axis2=2
@@ -316,9 +324,8 @@ def ard_fit_laplace(
     beta = jax.lax.fori_loop(
         0, 9, lambda _, value: newton(value, alpha, y, valid_y), beta
     )
-    curvature = curvatures(beta, alpha, y, valid_y)
-    chol = jnp.linalg.cholesky(curvature)
-    logdet = 2.0 * jnp.sum(jnp.log(jnp.diagonal(chol, axis1=1, axis2=2)), axis=1)
+    local = curvatures(beta, alpha, y, valid_y)
+    _, logdet = jnp.linalg.slogdet(local)
     objective_values = jax.vmap(objective, in_axes=(0, None, 1, 1))(
         beta, alpha, y, valid_y
     )

@@ -73,7 +73,7 @@ def test_poisson_ard_laplace_evidence_matches_quadrature(alpha_shape, alpha_rate
     )
 
     # Integrate the likelihood times the normalized loading prior over bias and
-    # loading. As in the estimator, the flat bias prior has unit density and
+    # loading. As in the fit, the flat bias prior has unit density and
     # count-factorial terms are omitted.
     bias = np.linspace(-1.5, 2.0, 301)
     loading = np.linspace(-2.0, 2.0, 301)

@@ -83,9 +83,9 @@ class CVI:
         """Conjugate loading representation, if the readout has one.
 
         A readout that exposes this makes its dependence on the loadings
-        quadratic, which is what lets an estimator integrate them out instead
+        quadratic, which is what lets a fit integrate them out instead
         of profiling them. Returning ``None`` means the readout offers only
-        :meth:`readout_objective`, so an estimator that needs conjugacy cannot
+        :meth:`readout_objective`, so a fit that needs conjugacy cannot
         be used with it.
 
         Parameters
@@ -244,7 +244,7 @@ class CVI:
     ):
         """Create the initial readout parameter state.
 
-        The data-driven start belongs to the observation model; the estimator
+        The data-driven start belongs to the observation model; the loading
         calls this and supplies the loading penalty. When ``params`` is
         provided, return it directly and skip initialisation. This allows
         callers to supply pre-set parameters (e.g. the true readout in a
@@ -428,9 +428,9 @@ class Gaussian(CVI):
         random_state : int
             Seed used for factor analysis.
         penalty : Array, optional
-            Loading penalty supplied by the estimator. Unused here: the
-            Gaussian start is data-driven and is refined by the calling
-            estimator.
+            Loading penalty supplied by the fit. Unused here: the
+            Gaussian start is data-driven and is refined by the selected
+            loading kind.
         params : Params or None, optional
             If provided, returned as-is (skipping initialisation).
 
