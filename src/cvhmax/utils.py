@@ -1,6 +1,7 @@
 from functools import partial
 from typing import NamedTuple
 
+import equinox as eqx
 import jax
 import optax
 import optax.tree_utils as otu
@@ -452,3 +453,33 @@ def unpad_sequences(arrays, sequence_lengths):
 
 def to_device(arrays, sharding=None) -> tuple[Array, ...]:
     return tuple(jax.device_put(arr, sharding) for arr in arrays)
+
+
+class Params(eqx.Module):
+    """Container of readout parameters.
+
+    Shared by the built-in Gaussian and Poisson readouts. CVHM's convergence
+    metric compares ``C``, ``d``, and ``R``; ARD also compares the loading
+    basis and ``alpha``.
+
+    Attributes
+    ----------
+    C : Array
+        Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
+    d : Array
+        Bias vector with shape ``(obs_dim (N),)``.
+    R : Array
+        Diagonal Gaussian observation covariance with shape ``(N, N)``.
+        For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
+    alpha : Array or None
+        Loading precisions with shape ``(latent_dim (K),)`` when supplied by
+        the loading estimator, otherwise ``None``. For ARD, a large value
+        indicates stronger shrinkage of a loading column; the precision ranking
+        can help assess effective dimensionality but does not guarantee the
+        true rank.
+    """
+
+    C: Array
+    d: Array
+    R: Array
+    alpha: Array | None = None

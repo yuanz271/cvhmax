@@ -1,28 +1,39 @@
 """Readout fitting: penalty convention, solvers, and loading evidence.
 
-These are pure functions over a likelihood's data term. An estimator decides
-*which* fit to run and with what hyperparameters; the mechanics live here so
-that the same code serves every observation model.
+These are pure functions over a likelihood's data term. The observation model
+decides *which* fit to run, per loading kind; the mechanics live here so the
+same code serves every observation model.
 
 All functions expect leading sequence and time axes already collapsed by
 :func:`flattened`; the readout is fitted per feature across all observed steps.
 """
 
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jax
 import numpy as np
 from jax import Array, numpy as jnp
 
-from .cvi import Params, Poisson
+from .utils import Params
 from .utils import LoadingTerms, lbfgs_solve
+
+if TYPE_CHECKING:
+    from .cvi import Poisson
 
 Penalty = Array
 
+# Per-kind defaults. ``alpha`` is held fixed for ridge and fixed readouts and is
+# only a starting point for ARD, so the two kinds keep their own default.
+DEFAULTS: dict[str, dict[str, Any]] = {
+    "ridge": {"alpha": 0.1},
+    "ard": {"alpha": 1.0, "alpha_shape": 1.0 + 1e-6, "alpha_rate": 1e-6, "iterations": 50},
+    "fixed": {"alpha": 0.1},
+}
+
 
 def portable_json(value: Any, name: str) -> Any:
-    """Convert one estimator-configuration value to finite JSON primitives."""
+    """Convert one loading-configuration value to finite JSON primitives."""
     if value is None or isinstance(value, (bool, str)):
         return value
     if isinstance(value, (int, np.integer)):
@@ -52,12 +63,12 @@ def portable_json(value: Any, name: str) -> Any:
 
 
 def portable_config(config: dict | None) -> dict | None:
-    """Return estimator constructor keywords as finite JSON primitives."""
+    """Return loading-configuration keywords as finite JSON primitives."""
     if config is None:
         return None
     if not isinstance(config, dict):
-        raise ValueError("estimator_config must be a dict or None")
-    return portable_json(config, "estimator_config")
+        raise ValueError("loading_config must be a dict or None")
+    return portable_json(config, "loading_config")
 
 
 def flattened(
@@ -69,6 +80,34 @@ def flattened(
     m = m.reshape(-1, m.shape[-1])
     V = V.reshape(-1, *V.shape[-2:])
     return y, valid_y, m, V
+
+
+def loading_settings(loading: str, config: dict | None) -> dict[str, Any]:
+    """Merge user configuration over the defaults for one loading kind."""
+    defaults = DEFAULTS[loading]
+    settings = {**defaults, **(config or {})}
+    unknown = set(settings) - set(defaults)
+    if unknown:
+        raise ValueError(
+            f"unknown loading_config keys for {loading!r}: {sorted(unknown)}"
+        )
+    alpha = float(np.asarray(settings["alpha"]).reshape(-1)[0])
+    if not math.isfinite(alpha) or alpha < 0 or (loading == "ard" and alpha == 0):
+        raise ValueError(f"{loading!r} alpha must be finite and positive")
+    if loading == "ard":
+        shape = float(settings["alpha_shape"])
+        rate = float(settings["alpha_rate"])
+        iterations = int(settings["iterations"])
+        if not math.isfinite(shape) or shape <= 1:
+            raise ValueError(
+                f"alpha_shape must be finite and greater than one, got {shape!r}"
+            )
+        if not math.isfinite(rate) or rate <= 0:
+            raise ValueError(f"alpha_rate must be finite and positive, got {rate!r}")
+        if iterations < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations!r}")
+        settings = {**settings, "iterations": iterations}
+    return settings
 
 
 def penalty(alpha: Array, n_latents: int) -> Penalty:
@@ -202,7 +241,7 @@ def ard_fit_conjugate(
 
 
 def ard_fit_laplace(
-    likelihood: type[Poisson],
+    likelihood: "type[Poisson]",
     params: Params,
     y: Array,
     valid_y: Array,

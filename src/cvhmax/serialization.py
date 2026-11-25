@@ -14,29 +14,17 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 
-from .cvi import Params
-from .estimator import (
-    ARDEstimator,
-    FixedEstimator,
-    RidgeEstimator,
-)
+from .utils import Params
 
 FORMAT = "cvhmax.CVHM"
-VERSION = 2
+VERSION = 3
 _MANIFEST = "manifest.json"
 _PARAMS = "params.eqx"
 _MAX_MANIFEST_BYTES = 1 << 20
 _MAX_PARAMS_BYTES = 1 << 30
 _SUPPORTED_OBSERVATIONS = {"Gaussian", "Poisson"}
-# The format supports only the built-in estimators. Resolving a name through the
-# mutable `Estimator.registry` would accept a user subclass registered under a
-# built-in name and silently substitute it on load, so the supported names map
-# to the exact built-in classes and are checked by identity.
-_SUPPORTED_ESTIMATORS = {
-    "RidgeEstimator": RidgeEstimator,
-    "ARDEstimator": ARDEstimator,
-    "FixedEstimator": FixedEstimator,
-}
+# Loading kinds the built-in observation models implement.
+_SUPPORTED_LOADINGS = {"ridge", "ard", "fixed"}
 
 
 def _array_metadata(array: Any) -> dict[str, Any]:
@@ -55,10 +43,10 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
     if params is None:
         return {"present": False}
     if not isinstance(params, Params):
-        raise TypeError("Only cvhmax.cvi.Params can be serialized")
+        raise TypeError("Only cvhmax.utils.Params can be serialized")
     return {
         "present": True,
-        "type": "cvhmax.cvi.Params",
+        "type": "cvhmax.utils.Params",
         "arrays": {
             "C": _array_metadata(params.C),
             "d": _array_metadata(params.d),
@@ -68,20 +56,11 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
     }
 
 
-def _estimator_name(value: Any) -> str:
-    """Validate a serialized loading estimator name against the built-ins."""
-    if not isinstance(value, str) or value not in _SUPPORTED_ESTIMATORS:
-        raise ValueError(f"Unsupported loading estimator: {value!r}")
+def _loading_name(value: Any) -> str:
+    """Validate a serialized loading kind."""
+    if not isinstance(value, str) or value not in _SUPPORTED_LOADINGS:
+        raise ValueError(f"Unsupported loading kind: {value!r}")
     return value
-
-
-def _validate_estimator_class(estimator_impl: Any, name: str) -> None:
-    """Reject a same-named user subclass standing in for a built-in."""
-    if type(estimator_impl) is not _SUPPORTED_ESTIMATORS[name]:
-        raise ValueError(
-            f"Loading estimator {name!r} is not the built-in "
-            f"{_SUPPORTED_ESTIMATORS[name].__name__} class"
-        )
 
 
 def _integer(value: Any, name: str, *, minimum: int = 0) -> int:
@@ -112,8 +91,7 @@ def build_manifest(model: Any) -> dict[str, Any]:
     config = model.get_config()
     if len(config["kernels"]) != config["n_components"]:
         raise ValueError("CVHM requires one kernel per component")
-    estimator = _estimator_name(config["estimator"])
-    _validate_estimator_class(model.estimator_impl, estimator)
+    loading = _loading_name(config["loading"])
     return {
         "format": FORMAT,
         "version": VERSION,
@@ -121,8 +99,8 @@ def build_manifest(model: Any) -> dict[str, Any]:
             "n_components": _integer(config["n_components"], "model.n_components", minimum=1),
             "dt": _finite_float(config["dt"], "model.dt"),
             "observation": config["observation"],
-            "estimator": estimator,
-            "estimator_config": config["estimator_config"],
+            "loading": loading,
+            "loading_config": config["loading_config"],
             "lr": _finite_float(config["lr"], "model.lr"),
             "max_iter": _integer(config["max_iter"], "model.max_iter"),
             "cvi_iter": _integer(config["cvi_iter"], "model.cvi_iter"),
@@ -236,8 +214,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         "n_components",
         "dt",
         "observation",
-        "estimator",
-        "estimator_config",
+        "loading",
+        "loading_config",
         "lr",
         "max_iter",
         "cvi_iter",
@@ -259,10 +237,10 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         raise ValueError("model.min_iter must not exceed model.max_iter")
     if model["observation"] not in _SUPPORTED_OBSERVATIONS:
         raise ValueError(f"Unsupported observation model: {model['observation']!r}")
-    _estimator_name(model["estimator"])
-    config = model["estimator_config"]
+    _loading_name(model["loading"])
+    config = model["loading_config"]
     if config is not None and not isinstance(config, dict):
-        raise ValueError("model.estimator_config must be an object or null")
+        raise ValueError("model.loading_config must be an object or null")
     if len(kernels) != model["n_components"]:
         raise ValueError("Manifest kernel count does not match n_components")
     for index, kernel in enumerate(kernels):
@@ -285,7 +263,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         if set(params) != {"present"}:
             raise ValueError("Unfitted params metadata has unexpected fields")
         return
-    if params.get("type") != "cvhmax.cvi.Params":
+    if params.get("type") != "cvhmax.utils.Params":
         raise ValueError(f"Unsupported parameter type: {params.get('type')!r}")
     arrays = params.get("arrays")
     required = {"C", "d", "R"}
@@ -398,7 +376,6 @@ def load(path: str | os.PathLike[str]) -> Any:
         model_config = manifest["model"]
         model_config["kernels"] = manifest["kernels"]
         model = CVHM.from_config(model_config)
-        _validate_estimator_class(model.estimator_impl, model_config["estimator"])
         if has_params:
             model.params = _deserialize_params(archive.read(_PARAMS), params_metadata)
             _validate_params_shapes(

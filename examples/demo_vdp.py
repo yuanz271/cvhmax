@@ -130,7 +130,7 @@ def run_case(
     kernels,
     dt,
     observation,
-    estimator,
+    loading,
     title,
     out_path,
     *,
@@ -153,8 +153,8 @@ def run_case(
         Sampling interval.
     observation : str
         Observation model name, e.g. ``"Poisson"``.
-    estimator : str
-        Loading estimator name, e.g. ``"FixedEstimator"`` to hold ``params``.
+    loading : str
+        Loading kind, e.g. ``"fixed"`` to hold ``params``.
     title : str
         Figure super-title.
     out_path : str
@@ -181,7 +181,7 @@ def run_case(
         dt=dt,
         kernels=kernels,
         observation=observation,
-        estimator=estimator,
+        loading=loading,
         max_iter=max_iter,
         cvi_iter=cvi_iter,
     )
@@ -321,7 +321,7 @@ def main():
             make_kernels(n_latents, order, **kernel_hyperparams),
             dt,
             observation="Poisson",
-            estimator="FixedEstimator",
+            loading="fixed",
             title=(
                 "CVHM on Van der Pol latents "
                 f"(frozen readout, Matérn order={order})"
@@ -345,7 +345,7 @@ def main():
         kernels,
         dt,
         observation="Poisson",
-        estimator="RidgeEstimator",
+        loading="ridge",
         title="CVHM on Van der Pol latents (estimated readout)",
         out_path="examples/demo_vdp_estimated.pdf",
         max_iter=50,

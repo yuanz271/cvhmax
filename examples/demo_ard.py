@@ -2,11 +2,11 @@
 
 Simulates two Van der Pol latent trajectories, observes them through a
 Gaussian readout, and fits a model with more latents than the data contains.
-The same data, kernels, and initialisation are used with two estimators:
+The same data, kernels, and initialisation are used with two loading kinds:
 
-* ``RidgeEstimator`` holds every loading precision at a fixed value, so the
-  surplus latents are shrunk but keep a small nonzero loading.
-* ``ARDEstimator`` fits one precision per latent against the evidence, so the
+* ``"ridge"`` holds every loading precision at a fixed value, so the surplus
+  latents are shrunk but keep a small nonzero loading.
+* ``"ard"`` fits one precision per latent against the evidence, so the
   loadings of surplus latents are driven to numerical zero and their
   precisions separate from those of the latents the data needs.
 
@@ -57,8 +57,8 @@ def simulate_vdp(n_sequences, n_time, dt, rng, mu=1.0, noise_std=0.05):
     return (x - flat.mean(axis=0)) / flat.std(axis=0)
 
 
-def fit(y, estimator, dt):
-    """Fit an over-specified model with the given loading estimator."""
+def fit(y, loading, dt):
+    """Fit an over-specified model with the given loading kind."""
     kernels = [
         HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5) for _ in range(N_FIT)
     ]
@@ -67,7 +67,7 @@ def fit(y, estimator, dt):
         dt=dt,
         kernels=kernels,
         observation="Gaussian",
-        estimator=estimator,
+        loading=loading,
         max_iter=500,
         tol=1e-3,
         min_iter=5,
@@ -109,7 +109,7 @@ def main():
         f"data {tuple(y.shape)} (sequences, time, features)"
     )
 
-    fits = {name: fit(y, name, dt) for name in ("RidgeEstimator", "ARDEstimator")}
+    fits = {name: fit(y, name, dt) for name in ("ridge", "ard")}
 
     results = {}
     for name, model in fits.items():
@@ -122,7 +122,7 @@ def main():
         print(f"  true-latent R² on the {N_TRUE} strongest fitted latents:",
               np.array2string(r2, precision=3))
 
-    ard = fits["ARDEstimator"]
+    ard = fits["ard"]
     precision = np.asarray(ard.params.alpha)
     order = np.argsort(precision)
     print(
@@ -146,10 +146,10 @@ def main():
 
     width = 0.38
     axes[1].bar(
-        index - width / 2, results["RidgeEstimator"][0], width, label="ridge", color="tab:gray"
+        index - width / 2, results["ridge"][0], width, label="ridge", color="tab:gray"
     )
     axes[1].bar(
-        index + width / 2, results["ARDEstimator"][0], width, label="ARD", color="tab:blue"
+        index + width / 2, results["ard"][0], width, label="ARD", color="tab:blue"
     )
     axes[1].set_yscale("symlog", linthresh=1e-3)
     axes[1].set_xticks(index)
@@ -158,7 +158,7 @@ def main():
     axes[1].set_title("Surplus loadings: shrunk vs. removed")
     axes[1].legend()
 
-    keep = results["ARDEstimator"][2]
+    keep = results["ard"][2]
     means = np.asarray(ard.posterior[0])[0][:, keep]
     design = np.column_stack([means, np.ones(len(means))])
     fitted, *_ = np.linalg.lstsq(design, truth[0], rcond=None)

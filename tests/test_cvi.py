@@ -16,22 +16,22 @@ from cvhmax.cvi import (
     Poisson,
     Gaussian,
 )
-from cvhmax.estimator import ARDEstimator
-from cvhmax.readout import ard_evidence
+from cvhmax.readout import ard_evidence, loading_settings
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 
 
 def _ard_fit(y, valid, m, V, **kwargs):
-    """Fit the ARD estimator from a neutral start; return params and precisions."""
+    """Fit Gaussian ARD through the readout path; return params and precisions."""
     n_obs, n_latent = y.shape[-1], m.shape[-1]
+    settings = loading_settings("ard", kwargs)
     start = Params(
         C=jnp.zeros((n_obs, n_latent)),
         d=jnp.zeros(n_obs),
         R=jnp.eye(n_obs),
-        alpha=jnp.ones(n_latent),
+        alpha=jnp.full(n_latent, settings["alpha"]),
     )
-    params, _ = ARDEstimator(**kwargs).estimate(Gaussian, start, y, valid, m, V)
+    params, _ = Gaussian.solve_readout("ard", settings, start, y, valid, m, V)
     return params, np.asarray(params.alpha)
 
 
@@ -41,8 +41,6 @@ def test_poisson_initialization_stays_bounded_on_a_problem_that_crossed_the_cap(
     The objective's rate was clipped at MAX_LOGRATE but its ``y * lin`` term was
     not, so a step across the cap found an objective with no minimum.
     """
-    from cvhmax.estimator import RidgeEstimator
-
     rng = np.random.default_rng(7)
     n_sequences, n_time, n_features, n_latents = 2, 300, 20, 2
     kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
@@ -53,9 +51,7 @@ def test_poisson_initialization_stays_bounded_on_a_problem_that_crossed_the_cap(
     loadings = 0.8 * loadings / np.linalg.norm(loadings, axis=1, keepdims=True)
     y = jnp.asarray(rng.poisson(np.exp(2.0 + latents @ loadings.T)).astype(float))
 
-    params = RidgeEstimator().initialize_params(
-        Poisson, y, jnp.ones(y.shape, dtype=bool), 5, random_state=0
-    )
+    params = Poisson.initialize_params(y, jnp.ones(y.shape, dtype=bool), 5, random_state=0)
     assert float(jnp.abs(params.d).max()) < 10.0, params.d
     assert float(jnp.abs(params.C).max()) < 10.0
 
@@ -70,9 +66,11 @@ def test_poisson_ard_laplace_evidence_matches_quadrature(alpha_shape, alpha_rate
     y = jnp.asarray(rng.poisson(np.exp(0.4 + 0.6 * np.asarray(m[:, 0])))[:, None])
     valid = jnp.asarray((rng.random((n_time, 1)) > 0.2))
     start = Params(C=jnp.zeros((1, 1)), d=jnp.zeros(1), R=jnp.asarray(0.0), alpha=jnp.ones(1))
-    params, evidence = ARDEstimator(
-        iterations=40, alpha_shape=alpha_shape, alpha_rate=alpha_rate
-    ).estimate(Poisson, start, y, valid, m, V)
+    params, evidence = Poisson.solve_readout(
+        "ard",
+        loading_settings("ard", {"alpha_shape": alpha_shape, "alpha_rate": alpha_rate, "iterations": 40}),
+        start, y, valid, m, V,
+    )
 
     # Integrate the likelihood times the normalized loading prior over bias and
     # loading. As in the estimator, the flat bias prior has unit density and
@@ -116,10 +114,10 @@ def test_poisson_ard_ignores_masked_counts():
     valid = jnp.asarray(rng.random(y.shape) > 0.25)
     start = Params(C=jnp.zeros((n_features, n_latents)), d=jnp.zeros(n_features),
                    R=jnp.asarray(0.0), alpha=jnp.ones(n_latents))
-    estimator = ARDEstimator(iterations=10)
-    first, evidence = estimator.estimate(Poisson, start, y, valid, m, V)
-    changed, changed_evidence = estimator.estimate(
-        Poisson, start, jnp.where(valid, y, 10000), valid, m, V
+    settings = loading_settings("ard", {"iterations": 10})
+    first, evidence = Poisson.solve_readout("ard", settings, start, y, valid, m, V)
+    changed, changed_evidence = Poisson.solve_readout(
+        "ard", settings, start, jnp.where(valid, y, 10000), valid, m, V
     )
     for actual, expected in ((changed.C, first.C), (changed.d, first.d),
                              (changed.alpha, first.alpha), (changed_evidence, evidence)):
@@ -258,8 +256,8 @@ def test_ard_estimate_warm_starts_from_params_alpha():
 
     def fit(alpha):
         params = Params(C=base.C, d=base.d, R=base.R, alpha=alpha)
-        return ARDEstimator(iterations=1).estimate(
-            Gaussian, params, y, valid, m, V
+        return Gaussian.solve_readout(
+            "ard", loading_settings("ard", {"iterations": 1}), params, y, valid, m, V
         )[0]
 
     low = fit(jnp.full(K, 0.5))
@@ -276,13 +274,14 @@ def test_ard_estimate_falls_back_to_configured_alpha():
     y = jnp.asarray(rng.standard_normal((T, N)))
     valid = jnp.ones((T, N), dtype=bool)
     base = Params(C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N))
-    estimator = ARDEstimator(alpha=0.5, iterations=1)
+    settings = loading_settings("ard", {"alpha": 0.5, "iterations": 1})
 
-    absent = estimator.estimate(
-        Gaussian, Params(C=base.C, d=base.d, R=base.R, alpha=None), y, valid, m, V
+    absent = Gaussian.solve_readout(
+        "ard", settings, Params(C=base.C, d=base.d, R=base.R, alpha=None), y, valid, m, V
     )[0]
-    present = estimator.estimate(
-        Gaussian,
+    present = Gaussian.solve_readout(
+        "ard",
+        settings,
         Params(C=base.C, d=base.d, R=base.R, alpha=jnp.full(K, 0.5)),
         y,
         valid,
@@ -303,40 +302,46 @@ def test_ard_warm_start_continues_across_em_steps():
     start = Params(
         C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N), alpha=jnp.ones(K)
     )
-    estimator = ARDEstimator(iterations=1)
+    settings = loading_settings("ard", {"iterations": 1})
 
-    first, _ = estimator.estimate(Gaussian, start, y, valid, m, V)
-    second, _ = estimator.estimate(Gaussian, first, y, valid, m, V)
-    cold, _ = estimator.estimate(Gaussian, start, y, valid, m, V)
+    first, _ = Gaussian.solve_readout("ard", settings, start, y, valid, m, V)
+    second, _ = Gaussian.solve_readout("ard", settings, first, y, valid, m, V)
+    cold, _ = Gaussian.solve_readout("ard", settings, start, y, valid, m, V)
     assert not np.allclose(np.asarray(second.alpha), np.asarray(cold.alpha))
 
 
-@pytest.mark.parametrize("alpha", [0.0, -1.0, jnp.inf, jnp.nan])
-def test_ard_estimator_rejects_invalid_alpha(alpha):
+@pytest.mark.parametrize("alpha", [0.0, -1.0, float("inf"), float("nan")])
+def test_ard_settings_reject_invalid_alpha(alpha):
     """The loading precision must be finite and strictly positive."""
     with pytest.raises(ValueError, match="alpha"):
-        ARDEstimator(alpha=alpha)
+        loading_settings("ard", {"alpha": alpha})
 
 
-@pytest.mark.parametrize("alpha_shape", [0.0, 0.5, 1.0, -1.0, jnp.inf, jnp.nan])
-def test_ard_estimator_rejects_invalid_alpha_shape(alpha_shape):
-    """The Gamma shape must be finite and strictly positive."""
+@pytest.mark.parametrize("alpha_shape", [0.0, 0.5, 1.0, -1.0, float("inf"), float("nan")])
+def test_ard_settings_reject_invalid_alpha_shape(alpha_shape):
+    """The Gamma shape must be finite and greater than one."""
     with pytest.raises(ValueError, match="alpha_shape"):
-        ARDEstimator(alpha_shape=alpha_shape)
+        loading_settings("ard", {"alpha_shape": alpha_shape})
 
 
-@pytest.mark.parametrize("alpha_rate", [0.0, -1.0, jnp.inf, jnp.nan])
-def test_ard_estimator_rejects_invalid_alpha_rate(alpha_rate):
+@pytest.mark.parametrize("alpha_rate", [0.0, -1.0, float("inf"), float("nan")])
+def test_ard_settings_reject_invalid_alpha_rate(alpha_rate):
     """The Gamma rate must be finite and strictly positive."""
     with pytest.raises(ValueError, match="alpha_rate"):
-        ARDEstimator(alpha_rate=alpha_rate)
+        loading_settings("ard", {"alpha_rate": alpha_rate})
 
 
 @pytest.mark.parametrize("iterations", [0, -1])
-def test_ard_estimator_rejects_invalid_iterations(iterations):
+def test_ard_settings_reject_invalid_iterations(iterations):
     """The fixed-point iteration count must be at least one."""
     with pytest.raises(ValueError, match="iterations"):
-        ARDEstimator(iterations=iterations)
+        loading_settings("ard", {"iterations": iterations})
+
+
+def test_loading_settings_reject_unknown_keys():
+    """A misspelled key fails instead of being silently ignored."""
+    with pytest.raises(ValueError, match="unknown loading_config keys"):
+        loading_settings("ard", {"iteration": 3})
 
 
 def test_gaussian_initialize_info_values(rng):

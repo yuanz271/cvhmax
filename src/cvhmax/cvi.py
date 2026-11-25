@@ -7,10 +7,10 @@ from sklearn.decomposition import FactorAnalysis
 from jax import Array, numpy as jnp, vmap
 from jax.numpy.linalg import multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
-from equinox import Module
-
+from .readout import ard_fit_conjugate, ard_fit_laplace, flattened, ridge_fit
 from .utils import (
     LoadingTerms,
+    Params,
     sequence_info_repr,
     lbfgs_solve,
 )
@@ -57,40 +57,17 @@ def _initialization_data(y: Array, valid_y: Array) -> tuple[Array, Array, Array]
     return observed, valid_y, jnp.where(valid_y, y, means)
 
 
-class Params(Module):
-    """Container of CVI readout parameters.
-
-    This container is used by the built-in Gaussian and Poisson readouts.
-    CVHM's convergence metric compares ``C``, ``d``, and ``R``; for ARD it
-    also compares the loading basis and ``alpha``.
-
-    Attributes
-    ----------
-    C : Array
-        Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
-    d : Array
-        Bias vector with shape ``(obs_dim (N),)``.
-    R : Array
-        Diagonal Gaussian observation covariance with shape ``(N, N)``.
-        For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
-    alpha : Array or None
-        Loading precisions with shape ``(latent_dim (K),)`` when supplied by
-        the estimator, otherwise ``None``. For ARD, a large value indicates
-        stronger shrinkage of a loading column; the precision ranking can help
-        assess effective dimensionality but does not guarantee the true rank.
-    """
-
-    C: Array
-    d: Array
-    R: Array
-    alpha: Array | None = None
-
-
 class CVI:
     """Base class for conjugate variational inference readouts.
 
-    Subclasses register by name in `CVI.registry` for lookup via `likelihood`.
+    Subclasses register by name in `CVI.registry` for lookup via `observation`.
+    A readout supplies the latent E-step and its own readout M-step, so the
+    loading kind it accepts and the way it is fitted live together here.
     """
+
+    #: Loading kinds this readout can fit. ``"ridge"`` and ``"fixed"`` are
+    #: generic; a readout adds ``"ard"`` only when it implements the evidence.
+    supported_loadings: ClassVar[frozenset[str]] = frozenset({"ridge", "fixed"})
 
     registry: ClassVar[dict] = dict()
 
@@ -162,6 +139,28 @@ class CVI:
         raise NotImplementedError(
             f"{cls.__name__} exposes neither loading_terms nor a readout objective"
         )
+
+    @classmethod
+    def solve_readout(
+        cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
+        m: Array, V: Array,
+    ) -> tuple[Params, Array]:
+        """Fit the readout at the given loading kind.
+
+        The generic path covers ``"ridge"`` (fixed precision) and ``"fixed"``
+        (leave the parameters untouched). A readout that supports ``"ard"``
+        overrides this and delegates the generic kinds back here.
+        """
+        if loading == "fixed":
+            return params, jnp.nan
+        y, valid_y, m, V = flattened(y, valid_y, m, V)
+        return ridge_fit(cls, params, y, valid_y, m, V, settings["alpha"])
+
+    @classmethod
+    def check_readout_fit(
+        cls, loading: str, y: Array, valid_y: Array, n_components: int
+    ) -> None:
+        """Validate that this readout and loading kind can be fitted to the data."""
 
     @classmethod
     @abstractmethod
@@ -365,6 +364,44 @@ class Gaussian(CVI):
         m = m.reshape(-1, m.shape[-1])
         V = V.reshape(-1, *V.shape[-2:])
         return _gaussian_loading_moments(y, valid_y, m, V)
+
+    supported_loadings = frozenset({"ridge", "ard", "fixed"})
+
+    @classmethod
+    @override
+    def solve_readout(
+        cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
+        m: Array, V: Array,
+    ) -> tuple[Params, Array]:
+        """Fit Gaussian loadings; ARD uses the exact conditional evidence."""
+        if loading != "ard":
+            return super().solve_readout(loading, settings, params, y, valid_y, m, V)
+        y, valid_y, m, V = flattened(y, valid_y, m, V)
+        terms = cls.loading_terms(y, valid_y, m, V)
+        return ard_fit_conjugate(
+            terms, params, y, valid_y, m, V,
+            alpha=params.alpha if params.alpha is not None else settings["alpha"],
+            alpha_shape=settings["alpha_shape"],
+            alpha_rate=settings["alpha_rate"],
+            iterations=settings["iterations"],
+        )
+
+    @classmethod
+    @override
+    def check_readout_fit(
+        cls, loading: str, y: Array, valid_y: Array, n_components: int
+    ) -> None:
+        """ARD needs more observations than readout parameters per feature."""
+        if loading != "ard":
+            return
+        counts = jnp.sum(valid_y, axis=(0, 1))
+        minimum = n_components + 1
+        if not bool(jnp.all(counts > minimum)):
+            raise ValueError(
+                "ARD requires every feature to be observed at more than "
+                f"n_components + 1 = {minimum} time steps; "
+                f"minimum observed count is {int(jnp.min(counts))}"
+            )
 
     @classmethod
     @override
@@ -697,6 +734,42 @@ class Poisson(CVI):
         J = (1 - lr) * J + lr * K
 
         return j, J
+
+    supported_loadings = frozenset({"ridge", "ard", "fixed"})
+
+    @classmethod
+    @override
+    def solve_readout(
+        cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
+        m: Array, V: Array,
+    ) -> tuple[Params, Array]:
+        """Fit Poisson loadings; ARD uses a Laplace approximation."""
+        if loading != "ard":
+            return super().solve_readout(loading, settings, params, y, valid_y, m, V)
+        y, valid_y, m, V = flattened(y, valid_y, m, V)
+        return ard_fit_laplace(
+            cls, params, y, valid_y, m, V,
+            initial_alpha=settings["alpha"],
+            alpha_shape=settings["alpha_shape"],
+            alpha_rate=settings["alpha_rate"],
+            iterations=settings["iterations"],
+        )
+
+    @classmethod
+    @override
+    def check_readout_fit(
+        cls, loading: str, y: Array, valid_y: Array, n_components: int
+    ) -> None:
+        """The flat-bias loading integral needs bounded, positive counts."""
+        if loading != "ard":
+            return
+        counts = jnp.sum(valid_y, axis=(0, 1))
+        totals = jnp.sum(y, axis=(0, 1))
+        if not bool(jnp.all((totals > 0) & (totals < jnp.exp(MAX_LOGRATE) * counts))):
+            raise ValueError(
+                "Poisson ARD requires positive total counts and a mean count "
+                "below exp(MAX_LOGRATE) for every feature"
+            )
 
     @classmethod
     def initialize_params(

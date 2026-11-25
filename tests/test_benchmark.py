@@ -111,7 +111,7 @@ def test_benchmark_jitter_regression(s):
         dt=DT,
         kernels=_kernels(s),
         observation="Poisson",
-        estimator="FixedEstimator",
+        loading="fixed",
         max_iter=50,
         cvi_iter=5,
     )
@@ -139,7 +139,7 @@ def test_benchmark_frozen_readout():
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
         observation="Poisson",
-        estimator="FixedEstimator", max_iter=50,
+        loading="fixed", max_iter=50,
     )
     model.params = true_params
     model.fit(y, random_state=42)
