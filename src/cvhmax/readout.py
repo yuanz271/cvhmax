@@ -15,11 +15,12 @@ import jax
 import numpy as np
 from jax import Array, numpy as jnp
 
-from .utils import Params
-from .utils import LoadingTerms, lbfgs_solve
+from .utils import LoadingTerms, Params, lbfgs_solve
 
 if TYPE_CHECKING:
-    from .cvi import Poisson
+    # Import-cycle guard: ``cvi`` imports this module at runtime, so the readout
+    # type is only named here for annotations.
+    from .cvi import CVI
 
 # Damping on the local curvature. A feature whose likelihood is locally flat
 # (saturated probabilities, empty counts) otherwise yields a singular Hessian,
@@ -244,7 +245,7 @@ def ard_fit_conjugate(
 
 
 def ard_fit_laplace(
-    likelihood: "type[Poisson]",
+    likelihood: type["CVI"],
     params: Params,
     y: Array,
     valid_y: Array,
@@ -256,7 +257,7 @@ def ard_fit_laplace(
     alpha_rate: float,
     iterations: int,
 ) -> tuple[Params, Array]:
-    """Fit Poisson loadings and shared precisions using a local Laplace approximation.
+    """Fit loadings and shared precisions using a local Laplace approximation.
 
     Each feature has its own bias and loading MAP, while the loading precisions
     are shared across features. The fixed-point update treats the MAP Hessian as
