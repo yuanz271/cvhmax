@@ -17,7 +17,7 @@ import numpy as np
 from .cvi import Params
 from .estimator import (
     ARDEstimator,
-    FrozenEstimator,
+    FixedEstimator,
     RidgeEstimator,
 )
 
@@ -35,7 +35,7 @@ _SUPPORTED_OBSERVATIONS = {"Gaussian", "Poisson"}
 _SUPPORTED_ESTIMATORS = {
     "RidgeEstimator": RidgeEstimator,
     "ARDEstimator": ARDEstimator,
-    "FrozenEstimator": FrozenEstimator,
+    "FixedEstimator": FixedEstimator,
 }
 
 

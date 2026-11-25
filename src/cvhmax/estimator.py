@@ -271,8 +271,12 @@ class RidgeEstimator(Estimator):
         return Params(C=C, d=d, R=params.R, alpha=penalty[1:]), objective
 
 
-class FrozenEstimator(Estimator):
-    """Hold the readout fixed while the latents are still inferred."""
+class FixedEstimator(Estimator):
+    """Keep the initialized readout fixed while inferring the latents.
+
+    Supplied ``C``, ``d``, and ``R`` are preserved; otherwise the observation
+    model initializes them from the data before they are held fixed.
+    """
 
     def estimate(
         self, likelihood, params: Params, y: Array, valid_y: Array, m: Array, V: Array

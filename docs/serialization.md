@@ -62,8 +62,10 @@ calling convention.
 
 For this working-version format, no cross-version compatibility is promised.
 The archive is expected to be loaded by the same working version of cvhmax
-that wrote it. The format version is retained only to reject incompatible or
-malformed files clearly; no migration framework is required.
+that wrote it. Archives using the former `FrozenEstimator` name cannot be loaded
+by versions using `FixedEstimator`. The format version is retained only to
+reject incompatible or malformed files clearly; no migration framework is
+required.
 
 ## File format
 
@@ -239,7 +241,7 @@ The initial implementation supports:
   base `HidaMatern` instances;
 - the stateless `Gaussian` and `Poisson` `CVI` algorithms;
 - the built-in loading estimators `RidgeEstimator`, `ARDEstimator`, and
-  `FrozenEstimator`; and
+  `FixedEstimator`; and
 - the Equinox `cvhmax.cvi.Params` parameter container.
 
 User-defined readouts are not part of the initial format. User-defined kernel

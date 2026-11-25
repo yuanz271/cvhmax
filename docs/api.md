@@ -7,7 +7,7 @@ This page summarizes the public API. For full details, consult the docstrings.
 Public exports live in `src/cvhmax/__init__.py`:
 
 - `CVHM`: high-level model wrapper
-- `Estimator`, `RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`: loading
+- `Estimator`, `RidgeEstimator`, `ARDEstimator`, `FixedEstimator`: loading
   estimators, selected by `CVHM(estimator=...)`
 - `CVI`: base class for conjugate variational inference readouts
 - `Gaussian`, `Poisson`: built-in readouts
@@ -36,8 +36,9 @@ Source: `src/cvhmax/cvhm.py`
 `estimator` selects how the loadings are fitted, by exact class name, the same
 way `observation` selects a readout. `"RidgeEstimator"` (default) holds the
 loading precision fixed at `alpha` (default 0.1); `"ARDEstimator"` fits one
-precision per latent column against the evidence; `"FrozenEstimator"` leaves the
-supplied `params` untouched, which is how a fit is held at preset values.
+precision per latent column against the evidence; `"FixedEstimator"` holds the
+readout fixed. It uses supplied `params`, or initializes them from the data if
+none are supplied.
 `ARDEstimator` needs a conjugate loading representation, so it is not available
 with the Poisson readout. Precisions are reported on the fitted parameters as
 `Params.alpha`: ranking the columns by it is how effective dimensionality is
@@ -84,7 +85,7 @@ archive format and compatibility policy.
     — drives the likelihood's start and fills `Params.alpha`
   - `estimate(likelihood, params, y, valid_y, m, V)` — returns `(Params, objective)`
 - `Gaussian`, `Poisson`: built-in observation models
-- `RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`: built-in estimators
+- `RidgeEstimator`, `ARDEstimator`, `FixedEstimator`: built-in estimators
 - `Params`: container of `C`, `d`, `R`, and the fitted loading precisions
   `alpha` (no `M` — that lives in CVHM)
 

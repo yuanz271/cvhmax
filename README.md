@@ -92,7 +92,7 @@ latent trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 uses a fixed precision. With a Gaussian readout, `"ARDEstimator"` fits one
 precision per latent and drives the loadings of surplus latents to zero, which
 makes `n_components` less critical; read the ranking from `model.params.alpha`.
-`"FrozenEstimator"` holds supplied parameters fixed.
+`"FixedEstimator"` holds the initialized readout fixed.
 
 The Van der Pol demo compares Matérn orders 0, 1, and 2 under a frozen
 readout, holding the data, readout, and other kernel hyperparameters fixed:

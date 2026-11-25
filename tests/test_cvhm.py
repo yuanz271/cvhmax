@@ -390,7 +390,7 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     assert ridge_norms[n_true:].min() > 1e-3 * ridge_norms[n_true - 1]
 
 
-def test_frozen_estimator_leaves_the_supplied_readout_untouched():
+def test_fixed_estimator_leaves_the_supplied_readout_untouched():
     """A frozen fit infers latents under the given readout and never refits it."""
     rng = np.random.default_rng(0)
     kernels = [HidaMatern(1.0, 8.0, 0.0, 1)]
@@ -403,7 +403,7 @@ def test_frozen_estimator_leaves_the_supplied_readout_untouched():
 
     model = CVHM(
         n_components=1, dt=1.0, kernels=kernels, observation="Gaussian",
-        estimator="FrozenEstimator", params=start, max_iter=5,
+        estimator="FixedEstimator", params=start, max_iter=5,
     ).fit(y, random_state=0)
 
     for name in ("C", "d", "R"):
@@ -431,7 +431,7 @@ def test_estimators_are_exported_at_top_level():
     import cvhmax
     from cvhmax import estimator as estimator_module
 
-    for name in ("Estimator", "RidgeEstimator", "ARDEstimator", "FrozenEstimator"):
+    for name in ("Estimator", "RidgeEstimator", "ARDEstimator", "FixedEstimator"):
         assert name in cvhmax.__all__
         assert getattr(cvhmax, name) is getattr(estimator_module, name)
 

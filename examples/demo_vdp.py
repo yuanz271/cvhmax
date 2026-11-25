@@ -154,7 +154,7 @@ def run_case(
     observation : str
         Observation model name, e.g. ``"Poisson"``.
     estimator : str
-        Loading estimator name, e.g. ``"FrozenEstimator"`` to hold ``params``.
+        Loading estimator name, e.g. ``"FixedEstimator"`` to hold ``params``.
     title : str
         Figure super-title.
     out_path : str
@@ -321,7 +321,7 @@ def main():
             make_kernels(n_latents, order, **kernel_hyperparams),
             dt,
             observation="Poisson",
-            estimator="FrozenEstimator",
+            estimator="FixedEstimator",
             title=(
                 "CVHM on Van der Pol latents "
                 f"(frozen readout, Matérn order={order})"

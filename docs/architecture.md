@@ -112,7 +112,7 @@ all operating in latent space:
 | `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
 
 How the readout parameters are fitted is a separate axis. An `Estimator`
-(`RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`) owns the M-step
+(`RidgeEstimator`, `ARDEstimator`, `FixedEstimator`) owns the M-step
 `estimate` and decides the loading prior. It asks the observation model for
 `initialize_params` (supplying the penalty), and for `loading_terms` or
 `readout_objective`.

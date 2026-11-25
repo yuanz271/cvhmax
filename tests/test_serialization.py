@@ -10,6 +10,7 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
+from cvhmax.cvi import Params
 from cvhmax.estimator import Estimator
 from cvhmax.hm import HidaMatern
 
@@ -62,6 +63,25 @@ def test_fitted_gaussian_round_trip_and_infer(tmp_path):
     assert covariances.shape == (1, data.shape[1], 1, 1)
     assert np.isfinite(np.asarray(means)).all()
     assert np.isfinite(np.asarray(covariances)).all()
+
+
+def test_fixed_estimator_round_trip(tmp_path):
+    params = Params(
+        C=jnp.array([[0.4], [-0.7]]), d=jnp.array([0.1, -0.2]), R=jnp.eye(2)
+    )
+    model = _model(estimator="FixedEstimator", params=params)
+    path = tmp_path / "fixed.cvhmax"
+    model.save(path)
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["model"]["estimator"] == "FixedEstimator"
+
+    restored = CVHM.load(path)
+    assert restored.estimator == "FixedEstimator"
+    for name in ("C", "d", "R"):
+        np.testing.assert_array_equal(getattr(restored.params, name), getattr(params, name))
+    for actual, expected in zip(restored.infer(_data()), model.infer(_data())):
+        np.testing.assert_allclose(actual, expected)
 
 
 def test_ard_estimator_and_precisions_round_trip(tmp_path):

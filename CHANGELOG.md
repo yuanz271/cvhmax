@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Renamed `FrozenEstimator` to `FixedEstimator`. Configurations and archives
+  using the former estimator name are not supported.
+
 ### Changed
 
 - Raised the default number of inner CVI iterations from 5 to 20. Poisson
