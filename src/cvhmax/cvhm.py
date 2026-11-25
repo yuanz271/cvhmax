@@ -166,8 +166,9 @@ class CVHM:
         does not depend on it; it only sets how fast the inner loop gets there.
     max_iter : int, default=200
         Maximum number of outer EM iterations.
-    cvi_iter : int, default=5
-        Number of inner CVI smoothing iterations per EM step.
+    cvi_iter : int, default=20
+        Fixed number of inner CVI smoothing iterations per EM step. The built-in
+        Gaussian readout requires no refinement, so 0 is sufficient for it.
     tol : float, default=0.05
         Convergence tolerance on the readout-parameter change.
     min_iter : int, default=2
@@ -200,7 +201,7 @@ class CVHM:
     lr: float = 1.0
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 200
-    cvi_iter: int = 5
+    cvi_iter: int = 20
     tol: float = 0.05
     min_iter: int = 2
     convergence_patience: int = 2

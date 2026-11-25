@@ -139,7 +139,7 @@ def test_benchmark_frozen_readout():
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
         observation="Poisson",
-        estimator="FrozenEstimator", max_iter=50, cvi_iter=5,
+        estimator="FrozenEstimator", max_iter=50,
     )
     model.params = true_params
     model.fit(y, random_state=42)
@@ -156,7 +156,7 @@ def test_benchmark_estimated_readout():
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
-        observation="Poisson", max_iter=50, cvi_iter=5,
+        observation="Poisson", max_iter=50,
     )
     model.fit(y, random_state=42)
 
@@ -181,7 +181,7 @@ def test_benchmark_variable_length():
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
-        observation="Poisson", max_iter=50, cvi_iter=5,
+        observation="Poisson", max_iter=50,
     )
     model.fit(y_padded, valid_y=valid_y, random_state=42)
 

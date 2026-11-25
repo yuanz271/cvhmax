@@ -104,7 +104,7 @@ A representative manifest is:
     "dt": 1.0,
     "lr": 1.0,
     "max_iter": 200,
-    "cvi_iter": 5,
+    "cvi_iter": 20,
     "tol": 0.05,
     "min_iter": 2,
     "convergence_patience": 2,

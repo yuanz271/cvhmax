@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Raised the default number of inner CVI iterations from 5 to 20. Poisson
+  inference may be more accurate at additional computational cost; set
+  `cvi_iter` explicitly to choose a different count.
+
 ## 0.5.1
 
 ### Fixed

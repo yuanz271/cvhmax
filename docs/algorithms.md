@@ -22,6 +22,12 @@ The `CVHM.fit` method alternates between:
 3) CVI iterations: lift → bifilter → project → `update_pseudo` (repeated)
 4) Readout update: `Estimator.estimate` in latent space
 
+The inner CVI loop runs a fixed `cvi_iter` count (default 20), not a
+convergence test. Increasing it can improve Poisson inference at additional
+computational cost, but does not guarantee convergence. For the built-in
+Gaussian readout, the observation information is already exact and does not
+change during these iterations, so `cvi_iter=0` gives the same posterior.
+
 ```
 CVHM loop:
     j, J = CVI.initialize_info(params, y, valid_y)              # latent (per-time-step)

@@ -83,8 +83,10 @@ Use `model.fit_transform(...)` when you only need the posterior means. The
 readout uses its fitted loading matrix directly; the fixed GP kernel amplitudes
 set the latent prior scale. `valid_y` can mask individual features and broadcast
 to the shape of `y`; time-step masks shaped `(sequences, time)` are also supported.
-Gaussian observation noise is diagonal. For smoother latent
-trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
+Gaussian observation noise is diagonal. The inner CVI loop runs 20 iterations by
+default; `cvi_iter` adjusts the accuracy–compute tradeoff for Poisson. For the
+built-in Gaussian readout, `cvi_iter=0` gives the same posterior. For smoother
+latent trajectories, use higher-order kernels (e.g. `order=2` for Matern-5/2).
 
 `estimator` chooses how the loadings are fitted. The default `"RidgeEstimator"`
 uses a fixed precision. With a Gaussian readout, `"ARDEstimator"` fits one

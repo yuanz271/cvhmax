@@ -19,7 +19,8 @@ Public exports live in `src/cvhmax/__init__.py`:
 ## CVHM
 
 - `CVHM.fit(y, valid_y=None, random_state=None)`
-  - mandatory convergence controls: `tol` (default `0.05`), `min_iter`
+  - `cvi_iter` sets the fixed number of inner CVI iterations (default `20`)
+  - mandatory outer convergence controls: `tol` (default `0.05`), `min_iter`
     (default `2`), and `convergence_patience` (default `2`)
   - post-fit diagnostics: `converged_`, `n_iter_`
 - `CVHM.fit_transform(y, valid_y)`

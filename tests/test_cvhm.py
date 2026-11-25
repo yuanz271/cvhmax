@@ -183,6 +183,56 @@ def test_project_matches_sde2gp():
     np.testing.assert_allclose(np.asarray(V1), np.asarray(V2), atol=ATOL_MED)
 
 
+def test_default_poisson_cvi_refines_posterior():
+    """The default resolves a nonlinear Poisson posterior better than five steps."""
+    rng = np.random.default_rng(7)
+    n_time, n_features, n_latents, dt = 80, 8, 2, 0.2
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
+    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * dt
+    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + 1e-5 * np.eye(n_time)
+    latent = np.linalg.cholesky(prior) @ rng.standard_normal((n_time, n_latents))
+    C = 0.9 * rng.standard_normal((n_features, n_latents))
+    d = np.full(n_features, 1.5)
+    y = jnp.asarray(rng.poisson(np.exp(latent @ C.T + d)).astype(float)[None])
+    mask = jnp.ones(y.shape, dtype=bool)
+    params = Params(C=jnp.asarray(C), d=jnp.asarray(d), R=jnp.asarray(0.0))
+
+    def model(**kwargs):
+        return CVHM(
+            n_components=n_latents, dt=dt, kernels=[kernel] * n_latents,
+            observation="Poisson", **kwargs,
+        )
+
+    default = model()
+    assert default.cvi_iter == 20
+    context = default._inference_context(1)
+    means = [
+        np.asarray(m._infer_state(params, y, mask, context)[2])
+        for m in (model(cvi_iter=5), default, model(cvi_iter=80))
+    ]
+    reference = means[-1]
+    old_error, default_error = [
+        np.linalg.norm(mean - reference) / np.linalg.norm(reference)
+        for mean in means[:2]
+    ]
+    assert old_error > 0.1
+    assert default_error < 0.05
+
+
+def test_gaussian_inference_does_not_require_cvi_iterations():
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1)
+    y = jnp.asarray(np.random.default_rng(4).normal(size=(1, 20, 2)))
+    mask = jnp.ones(y.shape, dtype=bool)
+    params = Params(C=jnp.asarray([[0.4], [-0.7]]), d=jnp.zeros(2), R=jnp.eye(2))
+    default = CVHM(n_components=1, dt=0.2, kernels=[kernel])
+    no_iterations = CVHM(n_components=1, dt=0.2, kernels=[kernel], cvi_iter=0)
+    context = default._inference_context(1)
+    default_moments = default._infer_state(params, y, mask, context)[2:]
+    direct_moments = no_iterations._infer_state(params, y, mask, context)[2:]
+    for actual, expected in zip(default_moments, direct_moments):
+        np.testing.assert_allclose(actual, expected, rtol=ATOL_TIGHT, atol=ATOL_TIGHT)
+
+
 def test_CVHM(capsys):
     np.random.seed(1234)
     T = 2000
