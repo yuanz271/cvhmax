@@ -20,7 +20,7 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import Params
+from cvhmax.readout import Params
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences, unpad_sequences
 

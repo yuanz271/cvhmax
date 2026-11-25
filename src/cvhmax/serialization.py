@@ -14,7 +14,7 @@ import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 
-from .utils import Params
+from .readout import Params
 
 FORMAT = "cvhmax.CVHM"
 VERSION = 3
@@ -43,10 +43,10 @@ def _params_manifest(params: Params | None) -> dict[str, Any]:
     if params is None:
         return {"present": False}
     if not isinstance(params, Params):
-        raise TypeError("Only cvhmax.utils.Params can be serialized")
+        raise TypeError("Only cvhmax.readout.Params can be serialized")
     return {
         "present": True,
-        "type": "cvhmax.utils.Params",
+        "type": "cvhmax.readout.Params",
         "arrays": {
             "C": _array_metadata(params.C),
             "d": _array_metadata(params.d),
@@ -263,7 +263,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         if set(params) != {"present"}:
             raise ValueError("Unfitted params metadata has unexpected fields")
         return
-    if params.get("type") != "cvhmax.utils.Params":
+    if params.get("type") != "cvhmax.readout.Params":
         raise ValueError(f"Unsupported parameter type: {params.get('type')!r}")
     arrays = params.get("arrays")
     required = {"C", "d", "R"}

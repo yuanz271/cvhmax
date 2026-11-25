@@ -11,7 +11,8 @@
   the conditional loading distribution depends on the data term; `Gaussian` and
   `Poisson` implement the three loading kinds, and `CVI.supported_loadings`
   declares which are available.
-- Moved `Params` to `cvhmax.utils`; `cvhmax.cvi.Params` no longer exists.
+- Moved `Params` and `LoadingTerms` to `cvhmax.readout`, next to the code that fills
+  them; neither is exported from `cvhmax.utils` or `cvhmax.cvi` any more.
 - Bumped the archive format version to 3. Manifests record `loading` and
   `loading_config` in place of `estimator` and `estimator_config`.
 

@@ -9,7 +9,7 @@ import numpy as np
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.utils import Params
+from cvhmax.readout import Params
 from cvhmax.hm import HidaMatern
 
 

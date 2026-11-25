@@ -11,8 +11,7 @@ from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
 from .cvi import CVI, Gaussian
-from .utils import Params
-from .readout import loading_settings, penalty, portable_config
+from .readout import Params, loading_settings, penalty, portable_config
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
 from .utils import cho_inv, real_repr, symm, training_progress

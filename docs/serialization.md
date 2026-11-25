@@ -125,7 +125,7 @@ A representative manifest is:
   },
   "params": {
     "present": true,
-    "type": "cvhmax.cvi.Params",
+    "type": "cvhmax.readout.Params",
     "arrays": {
       "C": {"shape": [2, 1], "dtype": "float64"},
       "d": {"shape": [2], "dtype": "float64"},
@@ -239,7 +239,7 @@ The initial implementation supports:
   base `HidaMatern` instances;
 - the stateless `Gaussian` and `Poisson` `CVI` algorithms;
 - the loading kinds `ridge`, `ard`, and `fixed`; and
-- the Equinox `cvhmax.utils.Params` parameter container.
+- the Equinox `cvhmax.readout.Params` parameter container.
 
 User-defined readouts are not part of the initial format. User-defined kernel
 subclasses are supported only under the HidaMatern-subclass restriction above.

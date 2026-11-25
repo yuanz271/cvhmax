@@ -7,13 +7,15 @@ from sklearn.decomposition import FactorAnalysis
 from jax import Array, numpy as jnp, vmap
 from jax.numpy.linalg import multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
-from .readout import ard_fit_conjugate, ard_fit_laplace, flattened, ridge_fit
-from .utils import (
+from .readout import (
     LoadingTerms,
     Params,
-    sequence_info_repr,
-    lbfgs_solve,
+    ard_fit_conjugate,
+    ard_fit_laplace,
+    flattened,
+    ridge_fit,
 )
+from .utils import lbfgs_solve, sequence_info_repr
 
 
 TAU = 1e-6
@@ -301,7 +303,7 @@ def _gaussian_loading_moments(
 ) -> LoadingTerms:
     """Conjugate loading representation of the Gaussian readout.
 
-    See :class:`~cvhmax.utils.LoadingTerms`. The bias is index 0.
+    See :class:`~cvhmax.readout.LoadingTerms`. The bias is index 0.
     """
     n_time = m.shape[0]
     design = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)

@@ -442,7 +442,8 @@ def test_poisson_cvi_step_parity():
     J_obs_ref_np = J_obs_ref.detach().numpy()
 
     # --- cvhmax: run Poisson.initialize_info ---
-    from cvhmax.cvi import Params, Poisson
+    from cvhmax.readout import Params
+    from cvhmax.cvi import Poisson
     from jax import vmap
 
     # Both implementations use the same loading C.

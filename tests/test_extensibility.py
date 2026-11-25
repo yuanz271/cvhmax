@@ -16,7 +16,7 @@ from cvhmax import CVHM
 from cvhmax.cvi import CVI
 from cvhmax.hm import HidaMatern
 from cvhmax.readout import ard_fit_laplace, loading_settings
-from cvhmax.utils import Params
+from cvhmax.readout import Params
 
 
 def _binomial_nll(eta, y):

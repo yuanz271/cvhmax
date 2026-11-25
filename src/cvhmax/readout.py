@@ -9,13 +9,14 @@ All functions expect leading sequence and time axes already collapsed by
 """
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
+import equinox as eqx
 import jax
 import numpy as np
 from jax import Array, numpy as jnp
 
-from .utils import LoadingTerms, Params, lbfgs_solve
+from .utils import lbfgs_solve
 
 if TYPE_CHECKING:
     # Import-cycle guard: ``cvi`` imports this module at runtime, so the readout
@@ -43,6 +44,63 @@ DEFAULTS: dict[str, dict[str, Any]] = {
     "ard": {"alpha": 1.0, "alpha_shape": 1.0 + 1e-6, "alpha_rate": 1e-6, "iterations": 50},
     "fixed": {"alpha": 0.1},
 }
+
+
+class Params(eqx.Module):
+    """Container of readout parameters.
+
+    Shared by the built-in Gaussian and Poisson readouts. CVHM's convergence
+    metric compares ``C``, ``d``, and ``R``; ARD also compares the loading
+    basis and ``alpha``.
+
+    Attributes
+    ----------
+    C : Array
+        Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
+    d : Array
+        Bias vector with shape ``(obs_dim (N),)``.
+    R : Array
+        Diagonal Gaussian observation covariance with shape ``(N, N)``.
+        For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
+    alpha : Array or None
+        Loading precisions with shape ``(latent_dim (K),)`` when supplied by
+        the loading kind, otherwise ``None``. For ARD, a large value
+        indicates stronger shrinkage of a loading column; the precision ranking
+        can help assess effective dimensionality but does not guarantee the
+        true rank.
+    """
+
+    C: Array
+    d: Array
+    R: Array
+    alpha: Array | None = None
+
+
+class LoadingTerms(NamedTuple):
+    """Conjugate representation of a readout's dependence on ``(d, C)``.
+
+    The expected readout log-likelihood is ``-0.5 beta' precision beta
+    + beta' linear`` up to terms independent of ``beta = [d, C]``, which is what
+    makes a Gaussian loading prior conjugate and lets a fit integrate
+    the loadings out rather than profile them. The bias is index 0.
+
+    Attributes
+    ----------
+    precision : Array
+        Shape ``(features (N), K + 1, K + 1)``.
+    linear : Array
+        Shape ``(N, K + 1)``.
+    counts : Array
+        Observed count per feature, shape ``(N,)``.
+    squared : Array
+        Sum of squared observations per feature, shape ``(N,)``, needed for the
+        data-dependent Gaussian normalisation.
+    """
+
+    precision: Array
+    linear: Array
+    counts: Array
+    squared: Array
 
 
 def portable_json(value: Any, name: str) -> Any:

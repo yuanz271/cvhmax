@@ -6,7 +6,8 @@ from jax import numpy as jnp
 from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
 from cvhmax.cvi import CVI, MAX_LOGRATE, Gaussian, Poisson
 from cvhmax.hm import HidaMatern, sample_matern
-from cvhmax.utils import Params, real_repr
+from cvhmax.readout import Params
+from cvhmax.utils import real_repr
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6

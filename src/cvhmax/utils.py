@@ -1,7 +1,5 @@
 from functools import partial
-from typing import NamedTuple
 
-import equinox as eqx
 import jax
 import optax
 import optax.tree_utils as otu
@@ -73,33 +71,6 @@ def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
 # rather than diverging as a precision vanishes, so a floor keeps the
 # optimisation well posed.
 ARD_LOG_ALPHA_FLOOR = -12.0
-
-
-class LoadingTerms(NamedTuple):
-    """Conjugate representation of a readout's dependence on ``(d, C)``.
-
-    The expected readout log-likelihood is ``-0.5 beta' precision beta
-    + beta' linear`` up to terms independent of ``beta = [d, C]``, which is what
-    makes a Gaussian loading prior conjugate and lets a fit integrate
-    the loadings out rather than profile them. The bias is index 0.
-
-    Attributes
-    ----------
-    precision : Array
-        Shape ``(features (N), K + 1, K + 1)``.
-    linear : Array
-        Shape ``(N, K + 1)``.
-    counts : Array
-        Observed count per feature, shape ``(N,)``.
-    squared : Array
-        Sum of squared observations per feature, shape ``(N,)``, needed for the
-        data-dependent Gaussian normalisation.
-    """
-
-    precision: Array
-    linear: Array
-    counts: Array
-    squared: Array
 
 
 def symm(x):
@@ -453,33 +424,3 @@ def unpad_sequences(arrays, sequence_lengths):
 
 def to_device(arrays, sharding=None) -> tuple[Array, ...]:
     return tuple(jax.device_put(arr, sharding) for arr in arrays)
-
-
-class Params(eqx.Module):
-    """Container of readout parameters.
-
-    Shared by the built-in Gaussian and Poisson readouts. CVHM's convergence
-    metric compares ``C``, ``d``, and ``R``; ARD also compares the loading
-    basis and ``alpha``.
-
-    Attributes
-    ----------
-    C : Array
-        Loading matrix with shape ``(obs_dim (N), latent_dim (K))``.
-    d : Array
-        Bias vector with shape ``(obs_dim (N),)``.
-    R : Array
-        Diagonal Gaussian observation covariance with shape ``(N, N)``.
-        For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
-    alpha : Array or None
-        Loading precisions with shape ``(latent_dim (K),)`` when supplied by
-        the loading kind, otherwise ``None``. For ARD, a large value
-        indicates stronger shrinkage of a loading column; the precision ranking
-        can help assess effective dimensionality but does not guarantee the
-        true rank.
-    """
-
-    C: Array
-    d: Array
-    R: Array
-    alpha: Array | None = None
