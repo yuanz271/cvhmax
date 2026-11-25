@@ -10,9 +10,9 @@ from jax.scipy.linalg import cho_factor, cho_solve
 from equinox import Module
 
 from .utils import (
+    LoadingTerms,
     sequence_info_repr,
     lbfgs_solve,
-    ridge_estimate,
 )
 
 
@@ -61,8 +61,8 @@ class Params(Module):
     """Container of CVI readout parameters.
 
     This container is used by the built-in Gaussian and Poisson readouts.
-    CVHM's convergence metric compares the readout fields ``C``, ``d``, and
-    ``R``.
+    CVHM's convergence metric compares ``C``, ``d``, and ``R``; for ARD it
+    also compares the loading basis and ``alpha``.
 
     Attributes
     ----------
@@ -73,11 +73,17 @@ class Params(Module):
     R : Array
         Diagonal Gaussian observation covariance with shape ``(N, N)``.
         For Poisson readouts, the scalar sentinel ``jnp.asarray(0.0)``.
+    alpha : Array or None
+        Loading precisions with shape ``(latent_dim (K),)`` when supplied by
+        the estimator, otherwise ``None``. For ARD, a large value marks a latent
+        column whose loadings have been driven to numerical zero; ranking the
+        columns by ``alpha`` is how effective dimensionality is read off.
     """
 
     C: Array
     d: Array
     R: Array
+    alpha: Array | None = None
 
 
 class CVI:
@@ -94,14 +100,19 @@ class CVI:
         CVI.registry[cls.__name__] = cls
 
     @classmethod
-    @abstractmethod
-    def update_readout(cls, *args, **kwargs) -> tuple[Params, float]:
-        """Update readout parameters given latent statistics.
+    def loading_terms(
+        cls, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> LoadingTerms | None:
+        """Conjugate loading representation, if the readout has one.
+
+        A readout that exposes this makes its dependence on the loadings
+        quadratic, which is what lets an estimator integrate them out instead
+        of profiling them. Returning ``None`` means the readout offers only
+        :meth:`readout_objective`, so an estimator that needs conjugacy cannot
+        be used with it.
 
         Parameters
         ----------
-        params : Params
-            Current readout parameter state.
         y : Array
             Observations shaped `(sequences, time, obs_dim (N))`.
         valid_y : Array
@@ -113,9 +124,44 @@ class CVI:
 
         Returns
         -------
-        tuple[Params, float]
-            Updated parameter state and an objective value.
+        LoadingTerms or None
+            Conjugate representation, or ``None``.
         """
+        return None
+
+    @classmethod
+    def readout_objective(
+        cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
+    ):
+        """Scalar readout objective including the loading penalty.
+
+        The readout owns its own averaging, so the penalty it receives is in
+        the same units as its data term. The penalty has one entry per
+        coefficient of ``[d, C]``, with index 0 the bias.
+
+        Parameters
+        ----------
+        params : tuple[Array, Array]
+            Loading matrix and bias vector `(C, d)`.
+        y : Array
+            Observations shaped `(sequences, time, obs_dim (N))`.
+        valid_y : Array
+            Observation mask aligned with `y`.
+        m : Array
+            Posterior means shaped `(sequences, time, latent_dim (K))`.
+        V : Array
+            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
+        penalty : Array
+            Diagonal loading penalty shaped `(latent_dim (K) + 1,)`.
+
+        Returns
+        -------
+        Array
+            Scalar objective.
+        """
+        raise NotImplementedError(
+            f"{cls.__name__} exposes neither loading_terms nor a readout objective"
+        )
 
     @classmethod
     @abstractmethod
@@ -194,13 +240,16 @@ class CVI:
         n_factors: int,
         *,
         random_state: int,
+        penalty: Array | None = None,
         params=None,
     ):
         """Create the initial readout parameter state.
 
-        When ``params`` is provided, return it directly and skip
-        initialisation.  This allows callers to supply pre-set
-        parameters (e.g. the true readout in a simulation).
+        The data-driven start belongs to the observation model; the estimator
+        calls this and supplies the loading penalty. When ``params`` is
+        provided, return it directly and skip initialisation. This allows
+        callers to supply pre-set parameters (e.g. the true readout in a
+        simulation).
 
         CVHM's convergence metric compares the returned state's ``C``, ``d``,
         and ``R`` fields.
@@ -215,6 +264,10 @@ class CVI:
             Number of latent factors to initialize.
         random_state : int
             Seed for any stochastic initialisation.
+        penalty : Array, optional
+            Diagonal loading penalty shaped ``(latent_dim (K) + 1,)``, with index
+            0 the bias, for readouts whose start is refined against their
+            objective.
         params : optional
             If provided, returned as-is (skipping initialisation).
 
@@ -223,6 +276,26 @@ class CVI:
         params
             Initial readout parameter state.
         """
+
+
+def _gaussian_loading_moments(
+    y: Array, valid_y: Array, m: Array, V: Array
+) -> LoadingTerms:
+    """Conjugate loading representation of the Gaussian readout.
+
+    See :class:`~cvhmax.utils.LoadingTerms`. The bias is index 0.
+    """
+    n_time = m.shape[0]
+    design = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
+    outer = design[:, :, None] * design[:, None, :]
+    outer = outer.at[:, 1:, 1:].add(V)
+    observed = valid_y.astype(m.dtype)
+    return LoadingTerms(
+        precision=jnp.einsum("tn,tij->nij", observed, outer),
+        linear=jnp.einsum("tn,ti->ni", jnp.where(valid_y, y, 0.0), design),
+        counts=jnp.sum(observed, axis=0),
+        squared=jnp.sum(jnp.where(valid_y, y**2, 0.0), axis=0),
+    )
 
 
 class Gaussian(CVI):
@@ -283,35 +356,15 @@ class Gaussian(CVI):
 
     @classmethod
     @override
-    def update_readout(
-        cls, params: Params, y: Array, valid_y: Array, m: Array, P: Array
-    ) -> tuple[Params, float]:
-        """Perform a ridge regression update of the Gaussian readout.
-
-        Parameters
-        ----------
-        params : Params
-            Current readout parameter state.
-        y : Array
-            Observation tensor shaped `(sequences, time, obs_dim (N))`.
-        valid_y : Array
-            Observation mask aligned with `y`.
-        m : Array
-            Posterior means shaped `(sequences, time, latent_dim (K))`.
-        P : Array
-            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
-
-        Returns
-        -------
-        tuple[Params, float]
-            Updated parameters and the (unused) negative log-likelihood proxy.
-        """
+    def loading_terms(
+        cls, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> LoadingTerms:
+        """Conjugate Gaussian loading representation."""
         y = y.reshape(-1, y.shape[-1])
         valid_y = valid_y.reshape(y.shape)
         m = m.reshape(-1, m.shape[-1])
-        P = P.reshape(-1, *P.shape[-2:])
-        C, d, R = ridge_estimate(y, valid_y, m, P, params.R)
-        return Params(C=C, d=d, R=R), jnp.nan
+        V = V.reshape(-1, *V.shape[-2:])
+        return _gaussian_loading_moments(y, valid_y, m, V)
 
     @classmethod
     @override
@@ -322,6 +375,7 @@ class Gaussian(CVI):
         n_factors: int,
         *,
         random_state: int,
+        penalty: Array | None = None,
         params: Params | None = None,
     ) -> Params:
         """Initialise Gaussian readout via FA.
@@ -336,6 +390,10 @@ class Gaussian(CVI):
             Number of latent factors.
         random_state : int
             Seed used for factor analysis.
+        penalty : Array, optional
+            Loading penalty supplied by the estimator. Unused here: the
+            Gaussian start is data-driven and is refined by the calling
+            estimator.
         params : Params or None, optional
             If provided, returned as-is (skipping initialisation).
 
@@ -358,8 +416,8 @@ def poisson_readout_objective(
     valid_y: Array,
     m: Array,
     V: Array,
-    gamma: float = 1.5,
-) -> float:
+    penalty: Array,
+) -> float | Array:
     """Average negative expected Poisson log-likelihood per observed time step.
 
     With ``eta = C m + d`` and ``q = diag(C V C^T)``, the Gaussian expectation
@@ -380,10 +438,9 @@ def poisson_readout_objective(
         Posterior means with shape `(samples, latent_dim)`.
     V : Array
         Posterior covariances with shape `(samples, latent_dim, latent_dim)`.
-    gamma : float, default=1.5
-        Strength of the squared L2 penalty on the loading matrix. This default
-        matches the effective strength of the previous norm penalty, whose
-        gradient magnitude was `gamma` rather than `2 * gamma * ||C||`.
+    penalty : Array
+        Diagonal loading precision shaped ``(latent_dim (K) + 1,)``, with
+        index 0 the bias. The Gaussian prior contributes ``0.5 * alpha * C²``.
 
     Returns
     -------
@@ -391,6 +448,10 @@ def poisson_readout_objective(
         Readout objective averaged over observed time steps.
     """
     C, d = params
+    y = y.reshape(-1, y.shape[-1])
+    valid_y = valid_y.reshape(y.shape)
+    m = m.reshape(-1, m.shape[-1])
+    V = V.reshape(-1, *V.shape[-2:])
     n_valid_steps = jnp.sum(jnp.any(valid_y, axis=-1))
 
     def step_objective(y_t, mask_t, m_t, V_t):
@@ -401,7 +462,9 @@ def poisson_readout_objective(
         return jnp.sum(jnp.where(mask_t, jnp.exp(log_rate) - lin * observed_y, 0.0))
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
-    return (jnp.sum(step_objectives) + gamma * jnp.sum(C**2)) / n_valid_steps
+    # One precision per latent column, broadcast across features.
+    total = jnp.sum(step_objectives) + 0.5 * jnp.sum(penalty[1:][None, :] * C**2)
+    return total / n_valid_steps
 
 
 def poisson_cvi_step_stats(
@@ -509,6 +572,14 @@ class Poisson(CVI):
     """CVI readout for Poisson observations with exponential link."""
 
     @classmethod
+    @override
+    def readout_objective(
+        cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
+    ) -> float | Array:
+        """Average Poisson readout objective per observed time step."""
+        return poisson_readout_objective(params, y, valid_y, m, V, penalty)
+
+    @classmethod
     def initialize_info(
         cls,
         params: Params,
@@ -552,50 +623,6 @@ class Poisson(CVI):
             valid_y,
         )
         return j, J
-
-    @classmethod
-    def update_readout(
-        cls,
-        params: Params,
-        y: Array,
-        valid_y: Array,
-        m: Array,
-        V: Array,
-    ) -> tuple[Params, float]:
-        """Optimise Poisson readout parameters via LBFGS.
-
-        Parameters
-        ----------
-        params : Params
-            Current readout parameter state.
-        y : Array
-            Observation tensor shaped `(sequences, time, obs_dim (N))`.
-        valid_y : Array
-            Observation mask aligned with `y`.
-        m : Array
-            Posterior means shaped `(sequences, time, latent_dim (K))`.
-        V : Array
-            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
-
-        Returns
-        -------
-        tuple[Params, float]
-            Updated parameters and the unregularized readout objective.
-        """
-        C = params.C
-        d = params.d
-
-        y = y.reshape(-1, y.shape[-1])
-        valid_y = valid_y.reshape(y.shape)
-        m = m.reshape(-1, m.shape[-1])
-        V = V.reshape(-1, *V.shape[-2:])
-
-        C, d = lbfgs_solve(
-            (C, d), partial(poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V)
-        )
-
-        nell = poisson_readout_objective((C, d), y=y, valid_y=valid_y, m=m, V=V, gamma=0.0)
-        return Params(C=C, d=d, R=jnp.asarray(0.0)), nell
 
     @classmethod
     def update_pseudo(
@@ -657,6 +684,7 @@ class Poisson(CVI):
         n_factors: int,
         *,
         random_state: int,
+        penalty: Array | None = None,
         params: Params | None = None,
     ) -> Params:
         """Initialise Poisson readout via FA followed by LBFGS optimisation.
@@ -664,13 +692,17 @@ class Poisson(CVI):
         Parameters
         ----------
         y : Array
-            Flattened observation tensor shaped ``(sequences * time, obs_dim)``.
+            Observation tensor shaped ``(sequences, time, obs_dim)``; leading
+            axes are flattened.
         valid_y : Array
             Observation mask aligned with ``y``.
         n_factors : int
             Number of latent factors.
         random_state : int
             Seed used for factor analysis.
+        penalty : Array, optional
+            Diagonal loading penalty shaped ``(latent_dim (K) + 1,)``, with index
+            0 the bias. Defaults to no penalty.
         params : Params or None, optional
             If provided, returned as-is (skipping initialisation).
 
@@ -690,8 +722,14 @@ class Poisson(CVI):
         C = C / mean_rate[:, None]
         d = jnp.log(mean_rate)
         V = jnp.zeros((y.shape[0], n_factors, n_factors))
+        if penalty is None:
+            penalty = jnp.zeros(n_factors + 1)
         C, d = lbfgs_solve(
-            (C, d), partial(poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V)
+            (C, d),
+            partial(
+                poisson_readout_objective, y=y, valid_y=valid_y, m=m, V=V,
+                penalty=penalty,
+            ),
         )
 
         return Params(C=C, d=d, R=jnp.asarray(0.0))

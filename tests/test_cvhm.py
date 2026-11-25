@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 from jax import numpy as jnp
 
-from cvhmax.cvhm import CVHM, lift, project, sde2gp
+from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
+from cvhmax.cvi import Params
 from cvhmax.hm import HidaMatern, sample_matern
 from cvhmax.utils import real_repr
 
@@ -216,6 +217,175 @@ def test_CVHM(capsys):
     assert V.shape == (T, n_factors, n_factors)
 
 
+def test_readout_change_is_invariant_to_glm_rotation():
+    C = jnp.asarray([[1.0, 0.0], [0.0, 2.0], [1.0, -1.0]])
+    theta = 0.37
+    rotation = jnp.asarray(
+        [[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]]
+    )
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C @ rotation, d=old.d, R=old.R)
+    assert float(readout_change(new, old)) < 1e-6
+
+
+def test_readout_change_detects_loading_gain():
+    C = jnp.asarray([[0.2], [2.0]])
+    old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2))
+    new = Params(C=2 * C, d=old.d, R=old.R)
+    np.testing.assert_allclose(readout_change(new, old), 1.0, atol=1e-6)
+
+
+def test_readout_change_detects_small_loading_change():
+    old = Params(C=jnp.array([[0.1]]), d=jnp.zeros(1), R=jnp.eye(1))
+    new = Params(C=jnp.array([[0.2]]), d=old.d, R=old.R)
+    np.testing.assert_allclose(readout_change(new, old), 0.1, atol=1e-10)
+
+
+def test_readout_change_reduced_gram_matches_explicit():
+    rng = np.random.default_rng(84)
+    for n, k in ((5, 2), (2, 5), (50, 3)):
+        old_C, new_C = rng.normal(size=(2, n, k))
+        old = Params(C=jnp.asarray(old_C), d=jnp.zeros(n), R=jnp.eye(n))
+        new = Params(C=jnp.asarray(new_C), d=old.d, R=old.R)
+        expected = np.linalg.norm(new_C @ new_C.T - old_C @ old_C.T) / (
+            (np.linalg.norm(new_C) + np.linalg.norm(old_C)) * max(1, np.linalg.norm(old_C))
+        )
+        np.testing.assert_allclose(readout_change(new, old), expected, rtol=1e-10)
+
+
+def test_ard_change_detects_rotation_and_precision():
+    C = jnp.array([[1., 0.], [0., 2.]])
+    old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2), alpha=jnp.array([1., 2.]))
+    rotated = Params(C=C @ jnp.array([[0., -1.], [1., 0.]]), d=old.d, R=old.R, alpha=old.alpha)
+    assert float(readout_change(rotated, old)) < 1e-10
+    assert float(readout_change(rotated, old, ard=True)) > 0.05
+    changed_alpha = Params(C=C, d=old.d, R=old.R, alpha=old.alpha * 2)
+    np.testing.assert_allclose(readout_change(changed_alpha, old, ard=True), np.log(2))
+
+
+def test_readout_change_detects_a_change_across_features():
+    """Only latent rotations are gauge; re-weighting features is a real change."""
+    C = jnp.asarray([[1.0, 0.0], [0.0, 1.0], [0.0, 0.0]])
+    old = Params(C=C, d=jnp.zeros(3), R=jnp.eye(3))
+    new = Params(C=C[jnp.asarray([2, 1, 0])], d=old.d, R=old.R)
+    assert float(readout_change(new, old)) > 0.3
+
+
+def test_ard_fit_does_not_converge_while_precisions_change(monkeypatch):
+    from cvhmax.estimator import ARDEstimator
+
+    def changing_precision(self, likelihood, params, y, valid_y, m, V):
+        return Params(C=params.C, d=params.d, R=params.R, alpha=2 * params.alpha), jnp.array(0.0)
+
+    monkeypatch.setattr(ARDEstimator, "estimate", changing_precision)
+    params = Params(C=jnp.array([[0.2], [0.4]]), d=jnp.zeros(2),
+                    R=jnp.eye(2), alpha=jnp.ones(1))
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    model = CVHM(1, 1.0, [kernel], params=params, estimator="ARDEstimator",
+                 max_iter=4, min_iter=1, convergence_patience=1, cvi_iter=0)
+    model.fit(jnp.asarray(np.random.default_rng(8).normal(size=(8, 2))), random_state=0)
+    assert model.n_iter_ == 4
+    assert not model.converged_
+    np.testing.assert_allclose(model.params.alpha, [16.0])
+
+
+def test_convergence_stops_a_fit_and_reports_diagnostics():
+    model = CVHM(
+        n_components=1,
+        dt=0.5,
+        kernels=[HidaMatern(sigma=1.2, rho=2.0, omega=0.3, order=1, s=1e-5)],
+        lr=0.2,
+        max_iter=10,
+        cvi_iter=1,
+        tol=1.0,
+    ).fit(jnp.asarray(np.random.default_rng(0).normal(size=(1, 16, 2))), random_state=0)
+    assert model.converged_ is True
+    assert model.min_iter <= model.n_iter_ < model.max_iter
+
+
+def test_ard_recovers_latent_dimensionality_in_the_full_fit():
+    """Inside the EM loop, ARD zeroes surplus latents that fixed ridge only shrinks."""
+    rng = np.random.default_rng(0)
+    n_time, n_features, n_true, n_fit = 160, 16, 2, 4
+    kernel = HidaMatern(sigma=1.0, rho=8.0, omega=0.0, order=1)
+    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
+    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
+    chol = np.linalg.cholesky(prior)
+    C = rng.normal(scale=0.8, size=(n_features, n_true))
+    latents = np.stack([chol @ rng.standard_normal((n_time, n_true)) for _ in range(2)])
+    y = latents @ C.T + rng.normal(scale=0.3, size=(2, n_time, n_features))
+
+    def loading_norms(estimator):
+        model = CVHM(
+            n_components=n_fit,
+            dt=1.0,
+            kernels=[kernel] * n_fit,
+            observation="Gaussian",
+            estimator=estimator,
+            max_iter=200,
+            tol=1e-4,
+            min_iter=5,
+            convergence_patience=3,
+        ).fit(jnp.asarray(y), random_state=0)
+        norms = np.sort(np.linalg.norm(np.asarray(model.params.C), axis=0))[::-1]
+        return norms, np.sort(np.asarray(model.params.alpha))
+
+    ard_norms, ard_alpha = loading_norms("ARDEstimator")
+    ridge_norms, _ = loading_norms("RidgeEstimator")
+
+    # ARD: surplus columns are pruned to numerical zero and carry far larger precision.
+    assert ard_norms[n_true:].max() < 1e-6 * ard_norms[n_true - 1]
+    assert ard_alpha[n_true] > 100 * ard_alpha[n_true - 1]
+    # Ridge only shrinks them, leaving nonzero loadings.
+    assert ridge_norms[n_true:].min() > 1e-3 * ridge_norms[n_true - 1]
+
+
+def test_frozen_estimator_leaves_the_supplied_readout_untouched():
+    """A frozen fit infers latents under the given readout and never refits it."""
+    rng = np.random.default_rng(0)
+    kernels = [HidaMatern(1.0, 8.0, 0.0, 1)]
+    start = Params(
+        C=jnp.asarray(rng.normal(size=(4, 1))),
+        d=jnp.asarray(rng.normal(size=4)),
+        R=jnp.diag(jnp.asarray([0.5, 0.6, 0.7, 0.8])),
+    )
+    y = jnp.asarray(rng.normal(size=(1, 40, 4)))
+
+    model = CVHM(
+        n_components=1, dt=1.0, kernels=kernels, observation="Gaussian",
+        estimator="FrozenEstimator", params=start, max_iter=5,
+    ).fit(y, random_state=0)
+
+    for name in ("C", "d", "R"):
+        np.testing.assert_array_equal(
+            np.asarray(getattr(model.params, name)), np.asarray(getattr(start, name))
+        )
+    assert np.isfinite(np.asarray(model.posterior[0])).all()
+
+
+def test_ard_estimator_rejects_a_non_conjugate_readout():
+    """ARD needs a conjugate loading block, which Poisson does not provide."""
+    kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
+    with pytest.raises(ValueError, match="conjugate loading"):
+        CVHM(
+            n_components=1,
+            dt=1.0,
+            kernels=kernels,
+            observation="Poisson",
+            estimator="ARDEstimator",
+        )
+
+
+def test_estimators_are_exported_at_top_level():
+    """The documented estimator classes are importable from the package root."""
+    import cvhmax
+    from cvhmax import estimator as estimator_module
+
+    for name in ("Estimator", "RidgeEstimator", "ARDEstimator", "FrozenEstimator"):
+        assert name in cvhmax.__all__
+        assert getattr(cvhmax, name) is getattr(estimator_module, name)
+
+
 def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     class FakeProgress:
         def __init__(self):
@@ -240,26 +410,26 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     fake_pbar = FakeProgress()
 
     import cvhmax.cvhm as cvhm_mod
-    from cvhmax.cvi import Params, Poisson
+    from cvhmax.cvi import Params
+    from cvhmax.estimator import Estimator
 
     monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
 
-    def fake_initialize_params(
-        cls, y, valid_y, n_factors, *, random_state, params=None
-    ) -> Params:
-        obs_dim = y.shape[-1]
-        C = jnp.zeros((obs_dim, n_factors), dtype=y.dtype)
-        d = jnp.zeros(obs_dim, dtype=y.dtype)
-        R = jnp.zeros((obs_dim, obs_dim), dtype=y.dtype)
-        return Params(C=C, d=d, R=R)
+    class StaticEstimator(Estimator):
+        """Fixed readout parameters and no objective, to exercise progress."""
 
-    def fake_update_readout(cls, params, y, valid_y, m, V) -> tuple[Params, float]:
-        return params, jnp.nan
+        def initialize_params(
+            self, likelihood, y, valid_y, n_factors, *, random_state, params=None
+        ) -> Params:
+            obs_dim = y.shape[-1]
+            return Params(
+                C=jnp.zeros((obs_dim, n_factors), dtype=y.dtype),
+                d=jnp.zeros(obs_dim, dtype=y.dtype),
+                R=jnp.zeros((obs_dim, obs_dim), dtype=y.dtype),
+            )
 
-    monkeypatch.setattr(
-        Poisson, "initialize_params", classmethod(fake_initialize_params)
-    )
-    monkeypatch.setattr(Poisson, "update_readout", classmethod(fake_update_readout))
+        def estimate(self, likelihood, params, y, valid_y, m, V):
+            return params, jnp.nan
 
     recorded = []
     import jax.debug as jdebug
@@ -294,6 +464,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
         dt=1.0,
         kernels=kernels,
         observation="Poisson",
+        estimator="StaticEstimator",
         max_iter=3,
     )
 

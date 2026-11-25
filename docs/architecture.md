@@ -51,7 +51,7 @@ observations ──→ initialize_info ──→ j_latent, J_latent
                                          (repeat)
                                            │
                                            ▼
-                              m, V ──→ update_readout ──→ params
+                              m, V ──→ Estimator.estimate ──→ params
 ```
 
 ## Spaces and Dimensions
@@ -100,27 +100,36 @@ posterior.
 
 ## Observation Model Interface
 
-CVI subclasses implement four stateless class methods, all operating in
-latent space:
+CVI subclasses describe an observation model through stateless class methods,
+all operating in latent space:
 
 | Method | Input | Output |
 |--------|-------|--------|
-| `initialize_params` | observations | readout params |
+| `initialize_params` | observations, loading penalty | data-driven starting readout params |
 | `initialize_info` | params, observations | `(j, J)` in latent space |
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
-| `update_readout` | params, observations, posterior `(m, V)` | updated params |
+| `loading_terms` | observations, posterior `(m, V)` | conjugate loading statistics, or `None` |
+| `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
+
+How the readout parameters are fitted is a separate axis. An `Estimator`
+(`RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`) owns the M-step
+`estimate` and decides the loading prior. It asks the observation model for
+`initialize_params` (supplying the penalty), and for `loading_terms` or
+`readout_objective`.
 
 ### Readout params
 
 Readout algorithms receive their parameter state explicitly. The built-in
 `Gaussian` and `Poisson` readouts use the Equinox `Params` container with
-fields `C`, `d`, and `R`; CVHM's convergence metric compares those fields.
+fields `C`, `d`, `R`, and `alpha` (the loading precisions); CVHM's convergence
+metric compares `C`, `d`, and `R`.
 
 ## Benefits
 
 1. **Clean separation**: CVI knows nothing about state space; filtering
    knows nothing about observations; CVHM bridges the two.
-2. **Easy to extend**: new observation models only need to implement four
-   stateless methods in latent space.
+2. **Easy to extend**: new observation models implement the stateless
+   methods above in latent space; new loading priors are a separate
+   `Estimator`.
 3. **Smaller arrays in CVI**: latent dimension `K ≤ L`, less computation.
 4. **Testable**: each CVI method is a pure function of its inputs.

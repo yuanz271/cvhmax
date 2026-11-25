@@ -1,4 +1,5 @@
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import optax
@@ -65,6 +66,39 @@ def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
     )
 
     return final_params
+
+
+# Lower bound on an ARD loading precision, as a log. The evidence flattens
+# rather than diverging as a precision vanishes, so a floor keeps the
+# optimisation well posed.
+ARD_LOG_ALPHA_FLOOR = -12.0
+
+
+class LoadingTerms(NamedTuple):
+    """Conjugate representation of a readout's dependence on ``(d, C)``.
+
+    The expected readout log-likelihood is ``-0.5 beta' precision beta
+    + beta' linear`` up to terms independent of ``beta = [d, C]``, which is what
+    makes a Gaussian loading prior conjugate and lets an estimator integrate
+    the loadings out rather than profile them. The bias is index 0.
+
+    Attributes
+    ----------
+    precision : Array
+        Shape ``(features (N), K + 1, K + 1)``.
+    linear : Array
+        Shape ``(N, K + 1)``.
+    counts : Array
+        Observed count per feature, shape ``(N,)``.
+    squared : Array
+        Sum of squared observations per feature, shape ``(N,)``, needed for the
+        data-dependent Gaussian normalisation.
+    """
+
+    precision: Array
+    linear: Array
+    counts: Array
+    squared: Array
 
 
 def symm(x):
@@ -317,31 +351,6 @@ def training_progress():
         "Negative ELL",
         TextColumn("{task.fields[nell_display]}"),
     )
-
-
-def ridge_estimate(y, valid_y, m, V, R, lam=0.1):
-    """Update Gaussian loadings and diagonal noise from masked moments.
-
-    Conditional on the current noise variances, solve the expected ridge
-    objective for each feature. Then update its noise variance from expected
-    residual squares, including latent posterior uncertainty.
-    """
-    n_time, n_latents = m.shape
-    augmented = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
-    second = augmented[:, :, None] * augmented[:, None, :]
-    second = second.at[:, 1:, 1:].add(V)
-    observed = valid_y.astype(m.dtype)
-    y = jnp.where(valid_y, y, 0.0)
-    A = jnp.einsum("tn,tij->nij", observed, second)
-    b = jnp.einsum("tn,ti->ni", y, augmented)
-    regularizer = lam * jnp.diag(R)[:, None, None] * jnp.eye(n_latents + 1)
-    beta = jnp.linalg.solve(A + regularizer, b[..., None])[..., 0]
-    d, C = beta[:, 0], beta[:, 1:]
-    residual = jnp.where(valid_y, y - (m @ C.T + d), 0.0)
-    uncertainty = jnp.einsum("nk,tkl,nl->tn", C, V, C)
-    variance = jnp.sum(jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0)
-    variance = variance / jnp.sum(observed, axis=0)
-    return C, d, jnp.diag(variance)
 
 
 def filter_array(arr: Array, mask: Array) -> Array:

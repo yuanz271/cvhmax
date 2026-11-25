@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Added
+
+- Added `examples/demo_ard.py`, a standalone demo of `ARDEstimator`: two Van der
+  Pol latents, five fitted latents, ridge and ARD on the same data.
+- Added a loading-estimator axis, selected by `CVHM(estimator=...)`, separating
+  how the readout loadings are fitted from the observation model. `RidgeEstimator`
+  is the default, `FrozenEstimator` holds supplied parameters fixed, and
+  `ARDEstimator` fits one loading precision per latent against the evidence by a
+  closed-form fixed point. Fitted precisions are reported as `Params.alpha`.
+- Added automatic relevance determination for the Gaussian loading matrix
+  (`ARDEstimator`, with `ard_evidence` for the marginal log-evidence),
+  conditional on the latent moments. The expected readout log-likelihood is
+  quadratic in the loadings, so
+  the evidence is closed form and no Laplace approximation is needed. Precisions
+  and observation variances are fitted jointly against the evidence: the
+  observation variance comes from expected residuals with no prior, and the
+  loading precisions take a weak Gamma prior that keeps their updater away from
+  a `0 / 0` limit. It reports per-latent precisions
+  whose separation indicates an effective latent dimensionality. Surplus
+  columns' loadings are driven to numerical zero but the columns are not removed
+  from `C`, and any threshold on the precisions is left to the caller.
+
+### Changed
+
+- Changed the convergence check to compare the loading Gram `C C^T`, which is
+  invariant to latent rotation, in place of a Procrustes-aligned `C`. It applies
+  to every estimator, so ARD, whose per-column precisions slowly rotate the
+  loadings without changing predictions, no longer tracks that rotation. A
+  relative change in `C` appears as about twice that in `C C^T`, so a given `tol`
+  is roughly twice as strict as before.
+- Bumped the archive format version from 1 to 2: manifests now record `estimator`
+  and `estimator_config`, and the parameter tree has an optional `alpha` leaf.
+  Archives from earlier releases are rejected with an unsupported-version error.
+- Raised the default CVI step size `lr` from 0.1 to 1.0. The damped update has the
+  same fixed point at any `lr`, so this only affects how fast the inner loop
+  reaches it. At the old default with `cvi_iter=5`, Poisson inference stopped
+  far from its fixed point (R² 0.50 against the exact MAP on a 256-step problem);
+  at `lr=1.0` it matches the MAP to R² 1.0000 in 10 steps.
+- Stopped penalising the Gaussian readout bias. The ridge penalty now applies to
+  the loadings only, matching the Poisson readout and the flat-bias prior the
+  loading regularisers are defined against.
+
 ## 0.4.0
 
 ### Changed

@@ -10,9 +10,11 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
+from cvhmax.estimator import ARDEstimator, RidgeEstimator
 from cvhmax.cvi import (
     MAX_LOGRATE,
     Gaussian,
+    Poisson,
     Params,
     poisson_cvi_step_stats_latent,
     poisson_readout_objective,
@@ -77,6 +79,7 @@ def test_masked_poisson_information_and_objective():
     means = jnp.array([[0.2, -0.1], [-0.3, 0.4]])
     covariances = jnp.broadcast_to(jnp.array([[0.4, 0.1], [0.1, 0.5]]), (2, 2, 2))
     gamma = 0.3
+    penalty = jnp.concatenate((jnp.zeros(1), jnp.full(2, gamma)))
 
     def reference(params):
         C, d = params
@@ -87,10 +90,10 @@ def test_masked_poisson_information_and_objective():
             quad = jnp.einsum("ni,ij,nj->n", Ct, covariances[t], Ct)
             log_rate = jnp.minimum(linear + 0.5 * quad, MAX_LOGRATE)
             total += jnp.sum(jnp.exp(log_rate) - yt * linear)
-        return (total + gamma * jnp.sum(C**2)) / 2
+        return (total + 0.5 * gamma * jnp.sum(C**2)) / 2
 
     def objective(params):
-        return poisson_readout_objective(params, y, mask, means, covariances, gamma)
+        return poisson_readout_objective(params, y, mask, means, covariances, penalty)
 
     npt.assert_allclose(objective((C, d)), reference((C, d)), rtol=1e-10, atol=1e-10)
     actual_grad = jax.grad(objective)((C, d))
@@ -110,6 +113,31 @@ def test_masked_poisson_information_and_objective():
     npt.assert_allclose(J, expected_J, rtol=1e-10, atol=1e-10)
 
 
+def test_poisson_objective_penalises_each_latent_column_by_its_own_precision():
+    """Unequal precisions weight columns, not features.
+
+    Square ``C`` makes a transposed broadcast silently wrong rather than a shape
+    error, so equal-precision tests cannot see it.
+    """
+    rng = np.random.default_rng(3)
+    n_features = n_latents = 3
+    C = jnp.asarray(rng.normal(size=(n_features, n_latents)))
+    d = jnp.zeros(n_features)
+    y = jnp.asarray(rng.poisson(2.0, size=(5, n_features)).astype(float))
+    valid = jnp.ones_like(y, dtype=bool)
+    m = jnp.asarray(rng.normal(size=(5, n_latents)))
+    V = jnp.zeros((5, n_latents, n_latents))
+    precisions = jnp.asarray([0.2, 1.1, 3.0])
+
+    penalised = poisson_readout_objective(
+        (C, d), y, valid, m, V, jnp.concatenate((jnp.zeros(1), precisions))
+    )
+    plain = poisson_readout_objective((C, d), y, valid, m, V, jnp.zeros(n_latents + 1))
+
+    expected = 0.5 * jnp.sum(precisions * jnp.sum(C**2, axis=0)) / len(y)
+    npt.assert_allclose(penalised - plain, expected, rtol=1e-10)
+
+
 def test_all_observed_poisson_objective_preserves_step_scaling():
     C = jnp.array([[0.2], [0.7]])
     d = jnp.array([0.1, -0.2])
@@ -118,9 +146,36 @@ def test_all_observed_poisson_objective_preserves_step_scaling():
     V = jnp.array([[[0.3]], [[0.4]]])
     linear = m @ C.T + d
     log_rate = jnp.minimum(linear + 0.5 * V[:, 0, 0, None] * C[:, 0] ** 2, MAX_LOGRATE)
-    expected = (jnp.sum(jnp.exp(log_rate) - y * linear) + 0.3 * jnp.sum(C**2)) / len(y)
-    actual = poisson_readout_objective((C, d), y, jnp.ones_like(y, dtype=bool), m, V, gamma=0.3)
+    expected = (jnp.sum(jnp.exp(log_rate) - y * linear) + 0.15 * jnp.sum(C**2)) / len(y)
+    actual = poisson_readout_objective(
+        (C, d), y, jnp.ones_like(y, dtype=bool), m, V,
+        jnp.concatenate((jnp.zeros(1), jnp.full(1, 0.3))),
+    )
     npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+
+
+def test_poisson_ridge_reports_precision_and_unpenalized_objective():
+    y = jnp.array([[1., 2.], [3., 1.], [2., 4.], [1., 1.]])
+    valid = jnp.ones_like(y, dtype=bool)
+    m = jnp.array([[-1.], [0.], [1.], [0.5]])
+    V = jnp.full((4, 1, 1), 0.2)
+    start = Params(C=jnp.array([[0.2], [0.3]]), d=jnp.zeros(2),
+                   R=jnp.asarray(0.), alpha=jnp.array([9.]))
+    updated, objective = RidgeEstimator(alpha=0.7).estimate(Poisson, start, y, valid, m, V)
+    expected = poisson_readout_objective((updated.C, updated.d), y, valid, m, V, jnp.zeros(2))
+    npt.assert_allclose(updated.alpha, [0.7])
+    npt.assert_allclose(objective, expected)
+    assert np.isfinite(objective)
+
+
+def test_ridge_fit_replaces_stale_precision_before_em():
+    y = jnp.asarray(np.random.default_rng(42).normal(size=(8, 2)))
+    params = Params(C=jnp.array([[0.2], [0.3]]), d=jnp.zeros(2),
+                    R=jnp.eye(2), alpha=jnp.asarray(9.0))
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    model = CVHM(1, 1.0, [kernel], params=params, estimator_config={"alpha": 0.7},
+                 max_iter=1, min_iter=1, cvi_iter=0).fit(y, random_state=0)
+    npt.assert_allclose(model.params.alpha, [0.7])
 
 
 def test_masked_gaussian_m_step_matches_conditional_objective():
@@ -129,9 +184,9 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
     means = np.array([[0.3, -0.1], [0.5, 0.2], [-0.2, 0.4], [0.1, -0.3]])
     V = np.broadcast_to(np.array([[0.4, 0.05], [0.05, 0.3]]), (len(y), 2, 2))
     variances = np.array([0.6, 0.9])
-    params = Params(C=jnp.zeros((2, 2)), d=jnp.zeros(2), R=jnp.diag(jnp.asarray(variances)))
-    updated, _ = Gaussian.update_readout(
-        params, jnp.asarray(y[None]), jnp.asarray(mask[None]),
+    params = Params(C=jnp.zeros((2, 2)), d=jnp.zeros(2), R=jnp.diag(jnp.asarray(variances)), alpha=jnp.array([9., 9.]))
+    updated, _ = RidgeEstimator().estimate(
+        Gaussian, params, jnp.asarray(y[None]), jnp.asarray(mask[None]),
         jnp.asarray(means[None]), jnp.asarray(V[None]),
     )
 
@@ -142,7 +197,8 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
         A = X[selected].T @ X[selected]
         A[1:, 1:] += V[selected].sum(axis=0)
         b = X[selected].T @ y[selected, n]
-        beta = np.linalg.solve(A + 0.1 * variances[n] * np.eye(3), b)
+        penalised = np.array([0.0, 1.0, 1.0])  # flat bias, penalised loadings
+        beta = np.linalg.solve(A + 0.1 * variances[n] * np.diag(penalised), b)
         residual = y[selected, n] - X[selected] @ beta
         variance = np.mean(residual**2 + np.einsum("i,tij,j->t", beta[1:], V[selected], beta[1:]))
         expected_beta.append(beta)
@@ -151,13 +207,14 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
     npt.assert_allclose(updated.d, expected_beta[:, 0], rtol=1e-10, atol=1e-10)
     npt.assert_allclose(updated.C, expected_beta[:, 1:], rtol=1e-10, atol=1e-10)
     npt.assert_allclose(updated.R, np.diag(expected_var), rtol=1e-10, atol=1e-10)
+    npt.assert_allclose(updated.alpha, [0.1, 0.1])
 
     def objective(readout):
         C, d, r = map(np.asarray, (readout.C, readout.d, np.diag(readout.R)))
         residual = y - (means @ C.T + d)
         uncertainty = np.einsum("ni,tij,nj->tn", C, V, C)
         likelihood = 0.5 * np.sum(np.where(mask, np.log(r) + (residual**2 + uncertainty) / r, 0))
-        return likelihood + 0.05 * (np.sum(C**2) + np.sum(d**2))
+        return likelihood + 0.05 * np.sum(C**2)
 
     assert objective(updated) <= objective(params) + 1e-10
 
@@ -263,6 +320,86 @@ def test_fit_requires_each_feature_to_be_observed():
         model.fit(y, mask)
 
 
+def _ard_model(**kwargs):
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=0)
+    kwargs.setdefault("min_iter", 1)
+    return CVHM(
+        n_components=2,
+        dt=1.0,
+        kernels=[kernel, kernel],
+        observation="Gaussian",
+        estimator="ARDEstimator",
+        **kwargs,
+    )
+
+
+def test_ard_fit_rejects_sparse_feature_counts():
+    """ARD needs more than ``n_components + 1`` observed time steps per feature."""
+    n_time, n_features = 6, 2
+    rng = np.random.default_rng(0)
+    y = jnp.asarray(rng.standard_normal((1, n_time, n_features)))
+    mask = jnp.ones((1, n_time, n_features), dtype=bool)
+    # Feature 0 has exactly n_components + 1 = 3 observations.
+    mask = mask.at[0, :, 0].set(False)
+    mask = mask.at[0, :3, 0].set(True)
+    model = _ard_model(max_iter=1, cvi_iter=0)
+    with pytest.raises(ValueError, match="more than"):
+        model.fit(y, mask, random_state=0)
+
+
+def test_ard_fit_accepts_sufficient_feature_counts():
+    """A feature with more than ``n_components + 1`` observations is accepted."""
+    n_time, n_features = 8, 2
+    rng = np.random.default_rng(0)
+    y = jnp.asarray(rng.standard_normal((1, n_time, n_features)))
+    mask = jnp.ones((1, n_time, n_features), dtype=bool)
+    model = _ard_model(max_iter=1, cvi_iter=0)
+    model.fit(y, mask, random_state=0)
+    assert np.isfinite(np.asarray(model.params.alpha)).all()
+
+
+def test_fit_rejects_invalid_params_alpha():
+    """A caller-supplied ``params.alpha`` must be finite and strictly positive."""
+    n_time, n_features = 8, 2
+    rng = np.random.default_rng(0)
+    y = jnp.asarray(rng.standard_normal((1, n_time, n_features)))
+    params = Params(
+        C=jnp.zeros((n_features, 2)),
+        d=jnp.zeros(n_features),
+        R=jnp.eye(n_features),
+        alpha=jnp.array([-1.0, 1.0]),
+    )
+    model = _ard_model(params=params, max_iter=1, cvi_iter=0)
+    with pytest.raises(ValueError, match="params.alpha"):
+        model.fit(y, random_state=0)
+
+
+@pytest.mark.parametrize("alpha, evidence", [(-1.0, 0.0), (1.0, jnp.nan)])
+def test_ard_fit_rejects_invalid_alpha_or_evidence(monkeypatch, alpha, evidence):
+    """A fit stops loudly when ARD precisions or evidence become invalid."""
+    n_time, n_features = 8, 2
+    rng = np.random.default_rng(0)
+    y = jnp.asarray(rng.standard_normal((1, n_time, n_features)))
+    model = _ard_model(max_iter=1, cvi_iter=0)
+    original = ARDEstimator.estimate
+
+    def invalid_estimate(self, likelihood, params, y, valid_y, m, V):
+        updated, _ = original(self, likelihood, params, y, valid_y, m, V)
+        return (
+            Params(
+                C=updated.C,
+                d=updated.d,
+                R=updated.R,
+                alpha=jnp.full_like(updated.alpha, alpha),
+            ),
+            evidence,
+        )
+
+    monkeypatch.setattr(ARDEstimator, "estimate", invalid_estimate)
+    with pytest.raises(FloatingPointError, match="non-positive|non-finite"):
+        model.fit(y, random_state=0)
+
+
 @pytest.mark.parametrize("observation", ["Gaussian", "Poisson"])
 def test_joint_sequences_share_latent_coordinates(observation):
     """Two partially observed sequences recover a common synthetic trajectory."""
@@ -290,7 +427,7 @@ def test_joint_sequences_share_latent_coordinates(observation):
         n_components=n_latents, dt=1.0, kernels=[kernel, kernel],
         observation=observation,
         max_iter=100, tol=1e-4, min_iter=2, convergence_patience=2,
-        cvi_iter=5, lr=1.0,
+        cvi_iter=5,
     )
     model.fit(jnp.asarray(y), jnp.asarray(training_mask), random_state=42)
     means, covariances = map(np.asarray, model.posterior)

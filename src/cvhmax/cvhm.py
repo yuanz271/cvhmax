@@ -11,6 +11,7 @@ from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
 from .cvi import CVI, Gaussian, Params
+from .estimator import Estimator, _portable_estimator_config
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
 from .utils import cho_inv, real_repr, symm, training_progress
@@ -83,14 +84,45 @@ def _relative_change(value_new: Array, value_old: Array) -> Array:
     return jnp.linalg.norm(value_new - value_old) / denom
 
 
-def readout_change(params_new: Params, params_old: Params) -> Array:
-    """Return the GLM parameter change modulo latent rotation."""
-    C_new, C_old = params_new.C, params_old.C
-    left, _, right = jnp.linalg.svd(C_new.T @ C_old, full_matrices=False)
-    delta_C = _relative_change(C_new @ (left @ right), C_old)
-    delta_d = _relative_change(params_new.d, params_old.d)
-    delta_R = _relative_change(params_new.R, params_old.R)
-    return jnp.maximum(jnp.maximum(delta_C, delta_d), delta_R)
+def readout_change(params_new: Params, params_old: Params, *, ard: bool = False) -> Array:
+    """Return the largest normalized readout change.
+
+    Ridge compares the loading Gram matrices modulo rotations, using a reduced
+    QR decomposition instead of feature-by-feature matrices. ARD also compares
+    the loadings in their current basis and log precisions: rotations change
+    the column-wise prior and hence relevance, even when the Gram is unchanged.
+
+    Parameters
+    ----------
+    params_new, params_old : Params
+        Successive readout parameters.
+    ard : bool, default=False
+        Include basis-sensitive loading and precision changes.
+
+    Returns
+    -------
+    Array
+        Largest readout or relevance change.
+    """
+    new, old = params_new.C, params_old.C
+    k = old.shape[1]
+    _, r = jnp.linalg.qr(jnp.concatenate((new - old, new + old), axis=1), mode="reduced")
+    diff, total = r[:, :k], r[:, k:]
+    gram_delta = 0.5 * (diff @ total.T + total @ diff.T)
+    scale = (jnp.linalg.norm(new) + jnp.linalg.norm(old)) * jnp.maximum(
+        1.0, jnp.linalg.norm(old)
+    )
+    delta_C = jnp.linalg.norm(gram_delta) / jnp.where(scale > 0, scale, 1.0)
+    change = jnp.maximum(
+        jnp.maximum(delta_C, _relative_change(params_new.d, params_old.d)),
+        _relative_change(params_new.R, params_old.R),
+    )
+    if ard:
+        change = jnp.maximum(change, _relative_change(new, old))
+        change = jnp.maximum(
+            change, jnp.max(jnp.abs(jnp.log(params_new.alpha) - jnp.log(params_old.alpha)))
+        )
+    return change
 
 
 def _validated_integer(value: Any, name: str, *, minimum: int) -> int:
@@ -121,8 +153,17 @@ class CVHM:
         Initial CVI parameter state. Defaults to ``None``.
     observation : str, default="Gaussian"
         Name of the CVI observation model registered in `CVI.registry`.
-    lr : float, default=0.1
-        Learning rate for pseudo-observation updates.
+    estimator : str, default="RidgeEstimator"
+        Name of the loading estimator registered in `Estimator.registry`. It
+        owns the readout M-step and the loading prior. ``"ARDEstimator"``
+        requires an observation model with a conjugate loading representation
+        and is rejected at construction otherwise.
+    estimator_config : dict or None, default=None
+        Keyword arguments for the estimator's constructor, for example
+        ``{"alpha": 0.5}``.
+    lr : float, default=1.0
+        Step size of the CVI update of the pseudo-observations. The fixed point
+        does not depend on it; it only sets how fast the inner loop gets there.
     max_iter : int, default=200
         Maximum number of outer EM iterations.
     cvi_iter : int, default=5
@@ -140,6 +181,13 @@ class CVHM:
         Posterior mean and covariance. Shapes are
         `(sequences, time, latent_dim (K))` and `(sequences, time, latent_dim (K), latent_dim (K))`
         after calling :meth:`fit`.
+
+    Raises
+    ------
+    ValueError
+        If the estimator needs a conjugate loading representation that the
+        observation does not provide, a fit setting is invalid, or the
+        estimator configuration contains invalid precision or prior parameters.
     """
 
     n_components: int
@@ -147,7 +195,9 @@ class CVHM:
     kernels: Sequence[Any]
     params: Any = None
     observation: str = "Gaussian"
-    lr: float = 0.1
+    estimator: str = "RidgeEstimator"
+    estimator_config: dict | None = None
+    lr: float = 1.0
     cvi: type[CVI] = field(init=False, default=Gaussian)
     max_iter: int = 200
     cvi_iter: int = 5
@@ -159,6 +209,16 @@ class CVHM:
     def __post_init__(self):
         """Resolve the selected CVI subclass and validate fit settings."""
         self.cvi = CVI.registry[self.observation]
+        self.estimator_impl = Estimator.registry[self.estimator](
+            **(self.estimator_config or {})
+        )
+        if self.estimator_impl.requires_conjugate_terms and (
+            self.cvi.loading_terms.__func__ is CVI.loading_terms.__func__
+        ):
+            raise ValueError(
+                f"estimator {self.estimator!r} needs a conjugate loading "
+                f"representation, which {self.observation!r} does not provide"
+            )
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
             raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")
@@ -339,6 +399,17 @@ class CVHM:
         CVHM
             Fitted instance for chaining.
 
+        Raises
+        ------
+        ValueError
+            If a feature is never observed, if the ARD estimator is selected
+            and a feature has ``n_components + 1`` or fewer observed time
+            steps, or if ARD's ``params.alpha`` is not finite and strictly
+            positive.
+        FloatingPointError
+            If Gaussian variances or ARD precisions become non-positive or
+            non-finite, or ARD evidence becomes non-finite.
+
         Examples
         --------
         >>> import jax.numpy as jnp
@@ -353,13 +424,33 @@ class CVHM:
         y, valid_y = _prepare_observations(y, valid_y)
         if not bool(jnp.all(jnp.any(valid_y, axis=(0, 1)))):
             raise ValueError("Every feature must be observed at least once during fitting")
+        if self.estimator_impl.fits_ard_precisions:
+            counts = jnp.sum(valid_y, axis=(0, 1))
+            minimum = self.n_components + 1
+            if not bool(jnp.all(counts > minimum)):
+                raise ValueError(
+                    "ARDEstimator requires every feature to be observed at more "
+                    f"than n_components + 1 = {minimum} time steps; "
+                    f"minimum observed count is {int(jnp.min(counts))}"
+                )
         if random_state is None:
             random_state = secrets.randbits(32)
         if issubclass(self.cvi, Gaussian) and self.params is not None:
             _validate_gaussian_noise(self.params, y.shape[-1])
-        params = self.cvi.initialize_params(
-            y, valid_y, self.n_components, random_state=random_state, params=self.params
+        params = self.estimator_impl.initialize_params(
+            self.cvi,
+            y,
+            valid_y,
+            self.n_components,
+            random_state=random_state,
+            params=self.params,
         )
+        if self.estimator_impl.fits_ard_precisions and params.alpha is not None:
+            alpha = jnp.asarray(params.alpha)
+            if alpha.shape != (self.n_components,):
+                raise ValueError("params.alpha must have shape (n_components,)")
+            if not bool(jnp.all(jnp.isfinite(alpha) & (alpha > 0))):
+                raise ValueError("params.alpha must be finite and strictly positive")
         context = self._inference_context(y.shape[0])
         gaussian = issubclass(self.cvi, Gaussian)
 
@@ -375,9 +466,15 @@ class CVHM:
 
             def body(state):
                 _, _, m, V = self._infer_state(state.params, y, valid_y, context)
-                updated, nell = self.cvi.update_readout(state.params, y, valid_y, m, V)
+                updated, nell = self.estimator_impl.estimate(
+                    self.cvi, state.params, y, valid_y, m, V
+                )
                 metric = jnp.where(
-                    state.iteration > 0, readout_change(updated, state.params), jnp.inf
+                    state.iteration > 0,
+                    readout_change(
+                        updated, state.params, ard=self.estimator_impl.fits_ard_precisions
+                    ),
+                    jnp.inf,
                 )
                 iteration = state.iteration + 1
                 passing = (
@@ -385,11 +482,19 @@ class CVHM:
                 )
                 patience = jnp.where(passing, state.patience + 1, 0)
                 converged = passing & (patience >= self.convergence_patience)
+                failed = jnp.asarray(False)
                 if gaussian:
                     variance = jnp.diag(updated.R)
-                    failed = jnp.any(~jnp.isfinite(variance) | (variance <= 0))
-                else:
-                    failed = False
+                    failed = failed | jnp.any(
+                        ~jnp.isfinite(variance) | (variance <= 0)
+                    )
+                if self.estimator_impl.fits_ard_precisions:
+                    alpha = updated.alpha
+                    if alpha is not None:
+                        failed = failed | jnp.any(
+                            ~jnp.isfinite(alpha) | (alpha <= 0)
+                        )
+                    failed = failed | ~jnp.isfinite(nell)
                 jax.debug.callback(
                     lambda step_i, x: pbar.update(
                         task_id,
@@ -408,7 +513,21 @@ class CVHM:
             result = jax.lax.while_loop(cond, body, initial)
 
         if bool(result.failed):
-            raise FloatingPointError("Gaussian observation variance became non-positive or non-finite")
+            if gaussian:
+                variance = jnp.diag(result.params.R)
+                if not bool(jnp.all(jnp.isfinite(variance) & (variance > 0))):
+                    raise FloatingPointError(
+                        "Gaussian observation variance became non-positive or non-finite"
+                    )
+            if self.estimator_impl.fits_ard_precisions:
+                alpha = result.params.alpha
+                if alpha is not None and not bool(
+                    jnp.all(jnp.isfinite(alpha) & (alpha > 0))
+                ):
+                    raise FloatingPointError(
+                        "ARD loading precisions became non-positive or non-finite"
+                    )
+            raise FloatingPointError("ARD evidence became non-finite")
         if gaussian:
             _validate_gaussian_noise(result.params, y.shape[-1])
         z, Z, m, V = self._infer_state(result.params, y, valid_y, context)
@@ -427,8 +546,10 @@ class CVHM:
         dict
             Configuration with keys ``n_components``, ``dt``, ``lr``, ``max_iter``,
             ``cvi_iter``, ``tol``, ``min_iter``, ``convergence_patience``,
-            ``observation``, and ``kernels`` (each kernel via
-            its ``get_config()``).
+            ``observation``, ``estimator``, ``estimator_config``, and ``kernels``
+            (each kernel via its ``get_config()``). ``estimator_config`` is
+            emitted as finite JSON primitives, so a numpy or JAX ``alpha`` array
+            becomes a list while keeping its logical shape.
         """
         return {
             "n_components": int(self.n_components),
@@ -440,6 +561,8 @@ class CVHM:
             "min_iter": int(self.min_iter),
             "convergence_patience": int(self.convergence_patience),
             "observation": str(self.observation),
+            "estimator": str(self.estimator),
+            "estimator_config": _portable_estimator_config(self.estimator_config),
             "kernels": [k.get_config() for k in self.kernels],
         }
 
@@ -470,7 +593,7 @@ class CVHM:
         required = (
             "n_components", "dt", "lr", "max_iter", "cvi_iter",
             "tol", "min_iter", "convergence_patience",
-            "observation", "kernels",
+            "observation", "estimator", "estimator_config", "kernels",
         )
         for key in required:
             if key not in config:
@@ -481,6 +604,8 @@ class CVHM:
             dt=config["dt"],
             kernels=kernels,
             observation=config["observation"],
+            estimator=config["estimator"],
+            estimator_config=config["estimator_config"],
             lr=config["lr"],
             max_iter=config["max_iter"],
             cvi_iter=config["cvi_iter"],

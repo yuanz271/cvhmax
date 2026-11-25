@@ -1,6 +1,7 @@
 from ._version import __version__, __version_tuple__  # noqa: F401
 from .cvhm import CVHM, lift, project
 from .cvi import CVI, Gaussian, Poisson, Params
+from .estimator import ARDEstimator, Estimator, FrozenEstimator, RidgeEstimator
 from .hm import HidaMatern, Ks, make_Ks
 from .utils import pad_sequences, unpad_sequences
 
@@ -10,6 +11,10 @@ __all__ = [
     "Gaussian",
     "Poisson",
     "Params",
+    "Estimator",
+    "RidgeEstimator",
+    "ARDEstimator",
+    "FrozenEstimator",
     "HidaMatern",
     "Ks",
     "make_Ks",

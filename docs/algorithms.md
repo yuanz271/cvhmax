@@ -20,7 +20,7 @@ The `CVHM.fit` method alternates between:
 1) CVI pseudo-observation refresh: `initialize_info` in latent space
 2) Forward-filter warm-up: lift → forward filter → project predictions → `update_pseudo`
 3) CVI iterations: lift → bifilter → project → `update_pseudo` (repeated)
-4) Readout update: `update_readout` in latent space
+4) Readout update: `Estimator.estimate` in latent space
 
 ```
 CVHM loop:
@@ -34,7 +34,7 @@ CVHM loop:
         z, Z = bifilter(j_s, J_s, ...)                          # state
         m, V = project(z, Z, M)                                  # state → latent
         j, J = CVI.update_pseudo(params, y, valid_y, m, V, ...) # latent
-    params = CVI.update_readout(params, y, valid_y, m, V)        # latent
+    params = Estimator.estimate(CVI, params, y, valid_y, m, V)   # latent
 ```
 
 ### Convergence detection
@@ -45,24 +45,21 @@ configured criteria are met or when it reaches the hard `max_iter` cap. Set
 Stopping uses training-fit state only; held-out likelihood or predictive
 metrics are not used.
 
-After each outer iteration, the implementation compares three readout
-parameter quantities:
+After each outer iteration, the implementation compares the loading Gram
+matrix `C C^T`, the bias `d`, and the noise covariance `R`. Poisson uses a
+scalar zero sentinel for `R`. The Gram comparison is invariant to orthogonal
+rotations and is computed with a reduced QR decomposition of the loading
+matrices, avoiding feature-by-feature products. Its difference is divided by
+`(||C_new|| + ||C_old||) * max(1, ||C_old||)`, so small loadings are not
+suppressed quadratically. Bias and covariance differences are divided by
+`max(1, ||reference||)`.
 
-- Procrustes-aligned loading matrix change (`C`), accounting for the GLM
-  latent sign/permutation/orthogonal rotation gauge;
-- readout bias change (`d`); and
-- observation-noise covariance change (`R`); `R` is always a JAX-compatible
-  array/scalar, with Poisson using a preserved scalar zero sentinel so this
-  metric is exactly zero.
+ARD also checks the normalized change in `C` itself and the largest absolute
+change in log precision. Its column-wise prior breaks rotation symmetry, so a
+stable Gram matrix alone does not imply stable relevance. The detector does
+not compare full latent posterior arrays or map them into observation space.
 
-The latent GP prior, kernels, time step, and data are fixed during `fit`. Thus,
-identical readout parameters deterministically imply the same posterior up to
-numerical error. The loading comparison aligns successive `C` matrices with
-orthogonal Procrustes; the detector does not compare full latent posterior
-arrays or map them into observation space.
-
-Each change is normalized by `max(1, ||reference||)`. Convergence requires the
-maximum of these three changes to be at most `tol` for
+Convergence requires the maximum of these changes to be at most `tol` for
 `convergence_patience` consecutive iterations after at least `min_iter`
 iterations. The first iteration is always unconditional because no previous
 posterior exists for comparison. Non-finite metrics never pass. If the cap is
@@ -88,18 +85,162 @@ matrix. After the last readout update, `fit()` performs a final inference pass:
 Gaussian observation noise is diagonal. For observed feature mask `w` and
 variance vector `r = diag(R)`, Gaussian information increments are
 `J = C.T @ diag(w / r) @ C` and `j = C.T @ (w * (y - d) / r)`. The readout
-update uses posterior second moments `V + m m.T` and updates each feature's
-loading, bias, and variance from its observed entries. Poisson CVI and the
-existing readout objective likewise sum only observed feature contributions.
+update, under the default `RidgeEstimator`, solves a ridge objective per
+feature from the masked first and second moments, then refreshes that feature's
+noise variance from its expected residual squares. The penalty is `alpha_k` on
+each loading and **zero on the bias**: the prior is
+`C[:, k] ~ N(0, alpha_k^-1)` with a flat bias, so the fit does not shrink the
+baseline rate. Poisson CVI and the Poisson readout objective likewise sum only
+observed feature contributions.
 Initialization fills missing entries with per-feature observed means for Factor
 Analysis only; subsequent updates use the actual observation mask. For Poisson,
 FA count-space loadings are scaled to log-rate space, with a half-count per
-feature used only to initialize a finite baseline rate. The retained Poisson
+feature used only to initialize a finite baseline rate. The Poisson
 readout objective is the exact negative expected log-likelihood,
 `exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
 the rate carries the variance correction. Masking does not change it. It
-adds a squared L2 penalty on the loading matrix, averaged with the data term,
-and clamps the log rate at `MAX_LOGRATE` to bound the rate.
+adds the same Gaussian-prior penalty `0.5 * sum_k alpha_k * ||C[:, k]||²`,
+averaged with the data term, and clamps the log rate at `MAX_LOGRATE` to bound
+the rate. The training progress reports the unpenalized negative expected
+log-likelihood. Ridge reports its configured precision in `Params.alpha`.
+
+## Gaussian ARD Loadings
+
+`ARDEstimator` fits Gaussian loadings under a per-latent automatic relevance
+determination prior. It is a conditional analysis: the latent moments
+are held fixed, and it answers which latent columns the readout needs, not which
+latents the latent prior supports.
+
+The construction uses the fact that the expected readout log-likelihood is
+quadratic in `beta = [d, C]`. With `q(z) = N(m, V)`,
+
+```
+E_q[log p(y | z, C, d)] = -0.5 sum_t [log(2 pi R) + (y - C m - d)^2 / R + C V C / R]
+```
+
+so `exp(E_q[log p])` is a Gaussian kernel in `beta` and the integral against
+`C[:, k] ~ N(0, alpha_k^-1 I)` is available in closed form. The prior on the
+bias is flat. The evidence is therefore
+
+```
+log p(y | alpha) = sum_n [ -0.5 N_n log(2 pi R_n) - 0.5 sum_t y^2 / R_n
+                           - 0.5 log|Prec_n / R_n + diag(0, alpha)|
+                           + 0.5 c_n' (Prec_n / R_n + diag(0, alpha))^-1 c_n ]
+                   + 0.5 N (sum_k log(alpha_k / 2 pi) + (K + 1) log 2 pi)
+```
+
+where `Prec_n` and `c_n` are the sufficient statistics built from `y`, `m`, and
+`V`, and `R_n` is the diagonal observation variance. Because `E_q[log p]` is a
+Jensen *lower* bound on `log E_q[p]`, the value is a lower bound on the evidence
+at the supplied moments.
+
+Precisions and observation variances are both maximised against the evidence,
+jointly, mirroring the evidence-based noise update used in the ARD literature.
+The maximisers are reached by the fixed-point iteration described under
+*Loading Estimators*, so no optimiser runs inside the EM loop.
+
+Sparsity is *not* exact. A fitted precision plateaus at a large but finite
+value and the column is shrunk towards zero rather than deleted, because the
+evidence tends to the reduced model's evidence as a precision grows, and with
+fitted latent moments a small non-zero loading can beat removal. Exact zeros
+require an explicit selection step; this package reports the precisions and
+leaves that choice to the caller. The reference ARD implementation behaves the
+same way: with pruning disabled its precisions plateau, and its exact zeros
+come from a hard precision threshold rather than from divergence.
+
+ARD and ridge regularise the same block of loadings, so choosing between them is
+the choice of `estimator`, not a second update step.
+
+With `V = 0` the Jensen bound is tight: `E_q[log p]` becomes the ordinary
+Gaussian log-likelihood at the latent means, so the evidence is the exact
+marginal likelihood of an ARD linear regression on that design and the fit
+matches a standard ARD regression. With `V > 0` the estimator maximises a lower
+bound instead, because the latents are uncertain.
+
+The bias is a parameter of this model, integrated under a flat prior, so the
+fitted observation variance carries residual degrees of freedom
+`n - sum(gamma) - 1`. An implementation that centers the design away has no bias
+column in its Gram and uses `n - sum(gamma)`; the two agree as `n` grows. The
+relevance precisions are shared across features here, so the structure is
+hierarchical rather than one ARD regression per feature.
+
+The residual degrees-of-freedom denominator is `N_n - sum_k gamma_nk - 1`, where
+the `-1` is the bias's effective parameter count. Since each `gamma_nk` is at
+most 1, the denominator is at least `N_n - K - 1`. `CVHM.fit` therefore rejects
+a fit whose features have `K + 1` or fewer observed time steps. That is a
+conservative contract: it guarantees a positive denominator without relying on
+the fitted `gamma_nk` values, and it fails at the API boundary rather than
+producing a non-finite variance inside the fixed-point iteration. The fit also
+stops loudly if an ARD loading precision becomes non-positive or non-finite,
+or if the evidence becomes non-finite.
+
+## Loading Estimators
+
+The observation model and the loading estimator are separate axes. A `CVI`
+subclass is an observation model: it supplies the E-step, a conjugate loading
+representation when one exists, and a readout objective. An `Estimator` owns the
+readout M-step and the loading prior. Ridge and ARD share one prior,
+`C[:, k] ~ N(0, alpha_k^-1 I)` with a flat bias, and differ in whether `alpha` is
+fitted -- so choosing an estimator chooses a prior as well as an algorithm.
+
+An estimator uses the closed form when the likelihood exposes conjugate loading
+terms and a generic gradient solve otherwise. `Gaussian` exposes them; `Poisson`
+does not, because `exp(eta)` breaks conjugacy in the loadings, so
+`ARDEstimator` is rejected with Poisson at construction.
+
+`RidgeEstimator` solves the penalised conjugate objective directly. Note that
+solving each feature against its own noise variance brings an `R_nn` factor into
+the regulariser; that is the unit conversion for an absolute precision, not a
+different penalty strength.
+
+`ARDEstimator` maximises the evidence over the precisions and the observation
+variances jointly, with the loadings integrated out. Both stationary points have
+closed forms and are reached by a fixed-point iteration, so no optimiser is
+involved:
+
+```
+gamma_nk = 1 - alpha_k * Sigma_n[k, k]
+alpha_k  = (sum_n gamma_nk + 2a - 2) / (sum_n C[n, k]^2 + 2b)
+R_n      = RSS_n / (N_n - 1 - sum_k gamma_nk)
+```
+
+with `Sigma_n = (Prec_n / R_n + diag(0, alpha))^-1` and `RSS_n` the expected
+residual sum of squares including latent uncertainty. The observation variance
+is estimated from expected residuals alone, with the effective parameter count
+removed; it needs no prior, and its denominator is bounded away from zero
+whenever a feature has more observed time steps than parameters. The iteration
+warm starts from the previous `Params.alpha` when it is available, falling back
+to the configured initial precision otherwise. This lets a fit continue across
+EM steps from the previous precisions instead of resetting them on every
+update.
+
+The loading precisions do need one. `gamma_k` and `||C[:, k]||^2` vanish
+together as a column is pruned, so the bare rule is a `0 / 0` limit; measured
+over a grid of problems it diverges or reaches precisions of order `1e17` in a
+majority of cases. `(a, b)` is a weak Gamma prior -- the reference ARD
+regression's defaults -- that removes the corner. The fixed-point update requires
+`a > 1` and `b > 0` to maintain positive precisions. It is a guard on the updater
+rather than a modelling claim, which is why the shape and rate are not meant to
+be tuned: the fit is insensitive to them across many orders of magnitude, and
+their only visible effect is how large an inactive column's precision
+plateaus. Precisions are shared across features, because a latent is one shared object here, so this is a
+hierarchical ARD rather than one ARD regression per feature.
+
+An irrelevant column's loadings are driven to numerical zero -- as small as
+`1e-130` in a full fit -- but the column is not deleted from `C`, and its precision
+plateaus at a large finite value that the guard prior's constants set, not the
+data, because the evidence tends to the reduced model's evidence as a precision
+grows. The precisions are reported on `Params.alpha` and any threshold is left
+to the caller. What makes a threshold workable is the size of the gap, from one
+to several orders of magnitude; the absolute value is gauge dependent, so a
+fixed threshold does not transfer between fits. Without the ARD estimator, fixed
+ridge only shrinks surplus latents to a small nonzero norm.
+
+At `V = 0` the Jensen bound is tight, so the evidence is the exact marginal
+likelihood of an ARD linear regression on the latent means and the fit matches a
+standard ARD regression up to one residual degree of freedom: the bias is a
+parameter of this model and costs one, whereas an implementation that centers
+the design away uses one fewer.
 
 ## Gaussian Parameterizations
 
@@ -144,7 +285,7 @@ Z_post = Z_pred + J
 Where it appears:
 
 - `sde2gp` output — converts information form to `(m, V)` for downstream use
-- Readout/observation model updates (`update_readout`)
+- Readout updates (`Estimator.estimate`)
 - Poisson readout objective (`poisson_readout_objective`)
 
 ### Observation information increments `(j, J)`
