@@ -410,6 +410,23 @@ class Gaussian(CVI):
         return Params(C=C, d=d, R=jnp.eye(y.shape[-1]))
 
 
+def _capped_exp(x: Array) -> Array:
+    """``exp(x)`` up to ``MAX_LOGRATE``, then its tangent line there.
+
+    Bounds the rate without making the readout objective unbounded below. A
+    flat clip would leave ``-y * lin`` free to fall without limit once an
+    optimiser step crosses the cap, so the objective would have no minimum and
+    the readout would run away. The tangent keeps the objective convex and
+    rising beyond the cap, and equals ``exp`` wherever the cap is inactive.
+    """
+    cap = jnp.exp(MAX_LOGRATE)
+    return jnp.where(
+        x <= MAX_LOGRATE,
+        jnp.exp(jnp.minimum(x, MAX_LOGRATE)),
+        cap * (1.0 + x - MAX_LOGRATE),
+    )
+
+
 def poisson_readout_objective(
     params: tuple[Array, Array],
     y: Array,
@@ -424,7 +441,8 @@ def poisson_readout_objective(
     of ``y * log(rate) - rate`` is ``y * eta - exp(eta + q / 2)``; only the rate
     carries the variance correction. Moving it into the ``y`` term as well
     adds ``y q / 2``, which rewards inflating ``C`` and makes ``C`` drift along
-    the latent-scale gauge without converging.
+    the latent-scale gauge without converging. The rate is capped at
+    ``MAX_LOGRATE`` by its tangent line, see :func:`_capped_exp`.
 
     Parameters
     ----------
@@ -457,9 +475,9 @@ def poisson_readout_objective(
     def step_objective(y_t, mask_t, m_t, V_t):
         lin = C @ m_t + d
         quad = jnp.einsum("ni,in->n", C, V_t @ C.T)
-        log_rate = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
+        rate = _capped_exp(lin + 0.5 * quad)
         observed_y = jnp.where(mask_t, y_t, 0.0)
-        return jnp.sum(jnp.where(mask_t, jnp.exp(log_rate) - lin * observed_y, 0.0))
+        return jnp.sum(jnp.where(mask_t, rate - lin * observed_y, 0.0))
 
     step_objectives = vmap(step_objective)(y, valid_y, m, V)
     # One precision per latent column, broadcast across features.

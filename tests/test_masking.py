@@ -138,6 +138,24 @@ def test_poisson_objective_penalises_each_latent_column_by_its_own_precision():
     npt.assert_allclose(penalised - plain, expected, rtol=1e-10)
 
 
+def test_poisson_objective_rises_beyond_the_rate_cap():
+    """Past MAX_LOGRATE the objective increases with the log rate.
+
+    A flat clip on the rate alone leaves ``-y * lin`` free to fall without limit,
+    so an optimiser that overshoots the cap runs away to infinity.
+    """
+    y = jnp.asarray([[3.0]])
+    valid = jnp.ones_like(y, dtype=bool)
+    m, V, C = jnp.zeros((1, 1)), jnp.zeros((1, 1, 1)), jnp.zeros((1, 1))
+    penalty = jnp.zeros(2)
+    log_rates = MAX_LOGRATE + jnp.asarray([0.0, 1.0, 10.0, 100.0])
+    values = jnp.stack([
+        poisson_readout_objective((C, jnp.asarray([x])), y, valid, m, V, penalty)
+        for x in log_rates
+    ])
+    assert bool(jnp.all(jnp.diff(values) > 0)), values
+
+
 def test_all_observed_poisson_objective_preserves_step_scaling():
     C = jnp.array([[0.2], [0.7]])
     d = jnp.array([0.1, -0.2])

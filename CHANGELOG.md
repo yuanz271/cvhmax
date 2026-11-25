@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixed
+
+- Fixed a runaway in the Poisson readout fit. Since 0.4.0 the objective clipped the
+  rate at `MAX_LOGRATE` but not the `y * lin` term, so once an optimiser step
+  crossed the cap the objective fell without limit. On a 2-sequence, 20-feature
+  test problem, initialization returned a bias of order `1e34`. The rate now
+  continues along its tangent beyond the cap, which leaves the objective
+  unchanged wherever the cap is inactive.
+
 ## 0.5.0
 
 ### Breaking changes

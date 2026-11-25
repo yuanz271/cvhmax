@@ -100,8 +100,10 @@ readout objective is the exact negative expected log-likelihood,
 `exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
 the rate carries the variance correction. Masking does not change it. It
 adds the same Gaussian-prior penalty `0.5 * sum_k alpha_k * ||C[:, k]||²`,
-averaged with the data term, and clamps the log rate at `MAX_LOGRATE` to bound
-the rate. The training progress reports the unpenalized negative expected
+averaged with the data term. The rate is exact up to `MAX_LOGRATE` and continues
+along its tangent line beyond it, so the objective stays convex and bounded
+below; a flat clip would let `-y * eta` fall without limit once an optimiser step
+crossed the cap. The training progress reports the unpenalized negative expected
 log-likelihood. Ridge reports its configured precision in `Params.alpha`.
 
 ## Gaussian ARD Loadings
