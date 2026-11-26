@@ -36,10 +36,7 @@ from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
-
-# The oscillator belongs to the demo that introduced it. Run this file as a script
-# so the examples directory is on the import path.
-from demo_vdp import simulate_vdp, standardize
+from vdp import simulate_vdp, standardize
 
 config.update("jax_enable_x64", True)
 
