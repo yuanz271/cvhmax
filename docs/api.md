@@ -73,7 +73,8 @@ archive format and compatibility policy.
   - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
   - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
   - `loading_terms(y, valid_y, m, V)` — conjugate loading statistics
-    (`LoadingTerms`), or `None` when the likelihood has no conjugate form
+    (`LoadingTerms`); call it only when `has_conjugate_loadings` is declared
+  - `has_conjugate_loadings` — whether the readout exposes the conjugate form
   - `readout_objective(params, y, valid_y, m, V, penalty)` — penalised negative
     expected log-likelihood, averaged per observed time step
   - `solve_readout(loading, settings, params, y, valid_y, m, V)` — readout M-step

@@ -108,7 +108,8 @@ all operating in latent space:
 | `initialize_params` | observations, loading penalty | data-driven starting readout params |
 | `initialize_info` | params, observations | `(j, J)` in latent space |
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
-| `loading_terms` | observations, posterior `(m, V)` | conjugate loading statistics, or `None` |
+| `loading_terms` | observations, posterior `(m, V)` | conjugate loading statistics |
+| `has_conjugate_loadings` | — | whether `loading_terms` is implemented |
 | `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
 | `solve_readout` | loading kind, settings, params, observations, posterior | updated params and a score |
 | `check_readout_fit` | loading kind, observations | raises when the data cannot support the kind |

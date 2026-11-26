@@ -278,8 +278,8 @@ def ridge_fit(
 ) -> tuple[Params, Array]:
     """Fit loadings at a fixed precision, using a closed form where one exists."""
     penalty_diagonal = penalty(alpha, m.shape[-1])
-    terms = likelihood.loading_terms(y, valid_y, m, V)
-    if terms is not None:
+    if likelihood.has_conjugate_loadings:
+        terms = likelihood.loading_terms(y, valid_y, m, V)
         return conjugate_solve(terms, penalty_diagonal, params, y, valid_y, m, V), jnp.nan
     C, d = lbfgs_solve(
         (params.C, params.d),

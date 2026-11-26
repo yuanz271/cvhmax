@@ -71,6 +71,11 @@ class CVI:
     #: generic; a readout adds ``"ard"`` only when it implements the evidence.
     supported_loadings: ClassVar[frozenset[str]] = frozenset({"ridge", "fixed"})
 
+    #: Whether :meth:`loading_terms` is implemented. Declared rather than
+    #: inferred so a conjugate readout is named in one place, and ``None`` never
+    #: has to travel as a sentinel for "not supported".
+    has_conjugate_loadings: ClassVar[bool] = False
+
     registry: ClassVar[dict] = dict()
 
     def __init_subclass__(cls, *args, **kwargs):
@@ -81,14 +86,14 @@ class CVI:
     @classmethod
     def loading_terms(
         cls, y: Array, valid_y: Array, m: Array, V: Array
-    ) -> LoadingTerms | None:
-        """Conjugate loading representation, if the readout has one.
+    ) -> LoadingTerms:
+        """Conjugate loading representation; requires :attr:`has_conjugate_loadings`.
 
         A readout that exposes this makes its dependence on the loadings
-        quadratic, which is what lets a fit integrate them out instead
-        of profiling them. Returning ``None`` means the readout offers only
-        :meth:`readout_objective`, so a fit that needs conjugacy cannot
-        be used with it.
+        quadratic, which is what lets a fit integrate them out instead of
+        profiling them. It is called only when the readout declares
+        :attr:`has_conjugate_loadings`, so a readout that does not implement it
+        never reaches here.
 
         Parameters
         ----------
@@ -103,10 +108,12 @@ class CVI:
 
         Returns
         -------
-        LoadingTerms or None
-            Conjugate representation, or ``None``.
+        LoadingTerms
+            Conjugate representation.
         """
-        return None
+        raise NotImplementedError(
+            f"{cls.__name__} declares no conjugate loading representation"
+        )
 
     @classmethod
     def readout_objective(
@@ -387,6 +394,7 @@ class Gaussian(CVI):
         return _gaussian_loading_moments(y, valid_y, m, V)
 
     supported_loadings = frozenset({"ridge", "ard", "fixed"})
+    has_conjugate_loadings = True
 
     @classmethod
     @override

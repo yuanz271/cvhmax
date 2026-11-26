@@ -220,8 +220,8 @@ untouched.
 
 The readout M-step belongs to the observation model, because the conditional
 distribution of the loadings depends on the data term. `CVI.solve_readout`
-handles `"ridge"` and `"fixed"` generically from `loading_terms` or
-`readout_objective`; `Gaussian` and `Poisson` override it for `"ard"`. A new
+handles `"ridge"` and `"fixed"` generically, through the closed form when the
+readout declares `has_conjugate_loadings` and `readout_objective` otherwise; `Gaussian` and `Poisson` override it for `"ard"`. A new
 observation model therefore gets ridge and fixed for free, and adds ARD only if
 it implements the conditional evidence. `CVI.supported_loadings` declares what a
 readout accepts, and `CVHM` rejects any other kind at construction.
