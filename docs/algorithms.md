@@ -216,7 +216,8 @@ predictions rather than assuming a fixed precision threshold recovers rank.
 The loading kind is a choice of prior and fit, not of observation model. Ridge
 and ARD share one prior, `C[:, k] ~ N(0, alpha_k^-1 I)` with a flat bias, and
 differ in whether `alpha` is fitted. `"fixed"` leaves the initialized readout
-untouched.
+untouched, including a supplied `alpha`; ridge always takes `alpha` from
+`loading_config`, and ARD warm starts from a supplied one.
 
 The readout M-step belongs to the observation model, because the conditional
 distribution of the loadings depends on the data term. `CVI.solve_readout`

@@ -8,10 +8,15 @@ from jax import Array, numpy as jnp, vmap
 from jax.numpy.linalg import multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from .readout import (
+    NONFINITE_EVIDENCE,
+    NONFINITE_PRECISION,
+    NONFINITE_VARIANCE,
+    READOUT_OK,
     LoadingTerms,
     Params,
     ard_fit_conjugate,
     ard_fit_laplace,
+    fitted_alpha,
     flattened,
     ridge_fit,
 )
@@ -161,6 +166,12 @@ class CVI:
         ``"ridge"`` and ``"fixed"`` are handled here for every readout. ``"ard"``
         dispatches to :meth:`solve_ard`, so a readout that declares it overrides
         that hook and nothing else.
+
+        The second return value is a display diagnostic whose meaning depends on
+        the kind and readout: NaN when none exists, the unpenalised negative
+        expected log-likelihood (lower is better) for a gradient ridge fit, and
+        the conditional evidence (higher is better) for ARD. Validity is judged
+        by :meth:`readout_failure`, never by comparing scores.
         """
         if loading == "fixed":
             return params, jnp.nan
@@ -189,6 +200,30 @@ class CVI:
     @classmethod
     def check_ard_fit(cls, y: Array, valid_y: Array, n_components: int) -> None:
         """Constraint ARD imposes on the data; none by default."""
+
+    @classmethod
+    def readout_failure(
+        cls, loading: str, params: Params, score: float | Array
+    ) -> Array:
+        """Failure code for a freshly fitted readout; ``READOUT_OK`` when healthy.
+
+        Called inside the traced EM loop, so it must be array-valued. The base
+        checks what every ARD fit shares, the precisions and the evidence; a
+        readout with fitted noise adds its own checks on top.
+        """
+        if loading != "ard":
+            return jnp.asarray(READOUT_OK)
+        alpha = fitted_alpha(params)
+        bad_precision = jnp.any(~jnp.isfinite(alpha) | (alpha <= 0))
+        return jnp.where(
+            bad_precision,
+            NONFINITE_PRECISION,
+            jnp.where(~jnp.isfinite(score), NONFINITE_EVIDENCE, READOUT_OK),
+        )
+
+    @classmethod
+    def check_params(cls, params: Params, n_features: int) -> None:
+        """Validate caller-supplied readout parameters; none by default."""
 
     @classmethod
     @abstractmethod
@@ -406,11 +441,38 @@ class Gaussian(CVI):
         terms = cls.loading_terms(y, valid_y, m, V)
         return ard_fit_conjugate(
             terms, params, y, valid_y, m, V,
-            alpha=params.alpha if params.alpha is not None else settings["alpha"],
+            alpha=fitted_alpha(params),
             alpha_shape=settings["alpha_shape"],
             alpha_rate=settings["alpha_rate"],
             iterations=settings["iterations"],
         )
+
+    @classmethod
+    @override
+    def readout_failure(
+        cls, loading: str, params: Params, score: float | Array
+    ) -> Array:
+        """Add the check on the fitted observation variances."""
+        variance = jnp.diag(params.R)
+        bad_variance = jnp.any(~jnp.isfinite(variance) | (variance <= 0))
+        return jnp.where(
+            bad_variance,
+            NONFINITE_VARIANCE,
+            super().readout_failure(loading, params, score),
+        )
+
+    @classmethod
+    @override
+    def check_params(cls, params: Params, n_features: int) -> None:
+        """Validate a caller-supplied diagonal observation covariance."""
+        R = jnp.asarray(params.R)
+        if R.shape != (n_features, n_features):
+            raise ValueError("Gaussian R must have shape (features, features)")
+        diagonal = jnp.diag(R)
+        if not bool(jnp.all(jnp.isfinite(diagonal) & (diagonal > 0))) or not bool(
+            jnp.all(R == jnp.diag(diagonal))
+        ):
+            raise ValueError("Gaussian R must be a positive diagonal covariance")
 
     @classmethod
     @override
@@ -768,7 +830,6 @@ class Poisson(CVI):
         y, valid_y, m, V = flattened(y, valid_y, m, V)
         return ard_fit_laplace(
             cls, params, y, valid_y, m, V,
-            initial_alpha=settings["alpha"],
             alpha_shape=settings["alpha_shape"],
             alpha_rate=settings["alpha_rate"],
             iterations=settings["iterations"],

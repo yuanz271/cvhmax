@@ -6,7 +6,13 @@ from jax import numpy as jnp
 from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
 from cvhmax.cvi import CVI, MAX_LOGRATE, Gaussian, Poisson
 from cvhmax.hm import HidaMatern, sample_matern
-from cvhmax.readout import Params
+from cvhmax.readout import (
+    NONFINITE_EVIDENCE,
+    NONFINITE_PRECISION,
+    NONFINITE_VARIANCE,
+    READOUT_OK,
+    Params,
+)
 from cvhmax.utils import real_repr
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
@@ -387,6 +393,65 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     assert ard_alpha[n_true] > 100 * ard_alpha[n_true - 1]
     # Ridge only shrinks them, leaving nonzero loadings.
     assert ridge_norms[n_true:].min() > 1e-3 * ridge_norms[n_true - 1]
+
+
+def test_fixed_loading_keeps_a_supplied_precision():
+    """``fixed`` leaves the whole supplied readout alone, including ``alpha``."""
+    start = Params(
+        C=jnp.asarray([[0.5], [0.2], [0.3], [0.1]]),
+        d=jnp.zeros(4),
+        R=jnp.eye(4),
+        alpha=jnp.asarray([7.0]),
+    )
+    y = jnp.asarray(np.random.default_rng(0).normal(size=(1, 30, 4)))
+    model = CVHM(
+        1, 1.0, [HidaMatern(order=0)], params=start, loading="fixed", max_iter=2, min_iter=1
+    ).fit(y, random_state=0)
+    np.testing.assert_array_equal(np.asarray(model.params.alpha), [7.0])
+
+
+def test_loading_configuration_is_read_when_fitting_not_when_constructing():
+    """Changing ``loading_config`` or ``loading`` on a built model takes effect."""
+    y = jnp.asarray(np.random.default_rng(1).normal(size=(1, 30, 4)))
+    model = CVHM(
+        1, 1.0, [HidaMatern(order=0)], loading_config={"alpha": 0.5}, max_iter=2, min_iter=1
+    )
+    model.loading_config = {"alpha": 9.0}
+    np.testing.assert_allclose(model.fit(y, random_state=0).params.alpha, [9.0])
+
+    model.loading, model.loading_config = "ard", None
+    fitted = model.fit(y, random_state=0)
+    assert np.isfinite(np.asarray(fitted.params.alpha)).all()
+
+
+def test_invalid_loading_configuration_fails_at_construction():
+    with pytest.raises(ValueError, match="alpha"):
+        CVHM(1, 1.0, [HidaMatern(order=0)], loading_config={"alpha": [-1.0]})
+
+
+@pytest.mark.parametrize(
+    "loading, variance, alpha, score, expected",
+    [
+        ("ridge", 1.0, 1.0, 0.0, READOUT_OK),
+        ("ard", 1.0, 1.0, 5.0, READOUT_OK),
+        ("ard", 1.0, 1.0, jnp.nan, NONFINITE_EVIDENCE),
+        ("ard", 1.0, -1.0, 5.0, NONFINITE_PRECISION),
+        ("ridge", 0.0, 1.0, 0.0, NONFINITE_VARIANCE),
+        ("ard", jnp.nan, -1.0, jnp.nan, NONFINITE_VARIANCE),  # reported first
+    ],
+)
+def test_gaussian_readout_failure_codes(loading, variance, alpha, score, expected):
+    params = Params(
+        C=jnp.ones((2, 1)), d=jnp.zeros(2), R=variance * jnp.eye(2), alpha=jnp.asarray([alpha])
+    )
+    assert int(Gaussian.readout_failure(loading, params, score)) == expected
+
+
+def test_poisson_ridge_cannot_fail_on_a_missing_score():
+    """A NaN score is only a failure for ARD, where it is the evidence."""
+    params = Params(C=jnp.ones((2, 1)), d=jnp.zeros(2), R=jnp.asarray(0.0), alpha=jnp.ones(1))
+    assert int(Poisson.readout_failure("ridge", params, jnp.nan)) == READOUT_OK
+    assert int(Poisson.readout_failure("ard", params, jnp.nan)) == NONFINITE_EVIDENCE
 
 
 def test_fixed_loading_leaves_the_supplied_readout_untouched():

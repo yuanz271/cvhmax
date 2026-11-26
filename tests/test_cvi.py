@@ -16,7 +16,7 @@ from cvhmax.cvi import (
     Poisson,
     Gaussian,
 )
-from cvhmax.readout import ard_evidence, loading_settings
+from cvhmax.readout import ard_evidence, loading_settings, resolve_alpha
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 
@@ -265,30 +265,29 @@ def test_ard_estimate_warm_starts_from_params_alpha():
     assert not np.allclose(np.asarray(low.alpha), np.asarray(high.alpha))
 
 
-def test_ard_estimate_falls_back_to_configured_alpha():
-    """A missing ``params.alpha`` uses the configured initial precision."""
-    T, N, K = 20, 2, 2
-    rng = np.random.default_rng(1)
-    m = jnp.asarray(rng.standard_normal((T, K)))
-    V = jnp.zeros((T, K, K))
-    y = jnp.asarray(rng.standard_normal((T, N)))
-    valid = jnp.ones((T, N), dtype=bool)
-    base = Params(C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N))
-    settings = loading_settings("ard", {"alpha": 0.5, "iterations": 1})
+def test_resolve_alpha_applies_one_rule_per_loading_kind():
+    """Ridge is a hyperparameter; ARD warm starts and fixed keeps what was supplied."""
+    settings = {"alpha": 0.5}
+    supplied = jnp.asarray([7.0, 8.0])
 
-    absent = Gaussian.solve_readout(
-        "ard", settings, Params(C=base.C, d=base.d, R=base.R, alpha=None), y, valid, m, V
-    )[0]
-    present = Gaussian.solve_readout(
-        "ard",
-        settings,
-        Params(C=base.C, d=base.d, R=base.R, alpha=jnp.full(K, 0.5)),
-        y,
-        valid,
-        m,
-        V,
-    )[0]
-    npt.assert_allclose(np.asarray(absent.alpha), np.asarray(present.alpha))
+    npt.assert_allclose(resolve_alpha("ridge", settings, supplied, 2), [0.5, 0.5])
+    npt.assert_allclose(resolve_alpha("ard", settings, supplied, 2), [7.0, 8.0])
+    npt.assert_allclose(resolve_alpha("fixed", settings, supplied, 2), [7.0, 8.0])
+    for kind in ("ridge", "ard", "fixed"):
+        npt.assert_allclose(resolve_alpha(kind, settings, None, 2), [0.5, 0.5])
+    with pytest.raises(ValueError, match="params.alpha"):
+        resolve_alpha("ard", settings, jnp.asarray([1.0, -1.0]), 2)
+
+
+def test_ard_solver_requires_the_precision_that_fit_supplies():
+    """There is no silent fallback inside the solver; ``fit`` owns the warm start."""
+    start = Params(C=jnp.zeros((2, 2)), d=jnp.zeros(2), R=jnp.eye(2))
+    y = jnp.ones((4, 2))
+    with pytest.raises(ValueError, match="Params.alpha"):
+        Gaussian.solve_readout(
+            "ard", loading_settings("ard", None), start, y,
+            jnp.ones_like(y, dtype=bool), jnp.zeros((4, 2)), jnp.zeros((4, 2, 2)),
+        )
 
 
 def test_ard_warm_start_continues_across_em_steps():
@@ -336,6 +335,12 @@ def test_ard_settings_reject_invalid_iterations(iterations):
     """The fixed-point iteration count must be at least one."""
     with pytest.raises(ValueError, match="iterations"):
         loading_settings("ard", {"iterations": iterations})
+
+
+def test_loading_settings_reject_an_unknown_kind():
+    """A kind with no defaults is a named error, not a bare KeyError."""
+    with pytest.raises(ValueError, match="unknown loading kind"):
+        loading_settings("lasso", None)
 
 
 def test_loading_settings_reject_unknown_keys():

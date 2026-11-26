@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -11,10 +12,11 @@ from typing import Any
 import zipfile
 
 import equinox as eqx
+import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .readout import Params
+from .readout import DEFAULTS, Params
 
 FORMAT = "cvhmax.CVHM"
 VERSION = 3
@@ -23,8 +25,47 @@ _PARAMS = "params.eqx"
 _MAX_MANIFEST_BYTES = 1 << 20
 _MAX_PARAMS_BYTES = 1 << 30
 _SUPPORTED_OBSERVATIONS = {"Gaussian", "Poisson"}
-# Loading kinds the built-in observation models implement.
-_SUPPORTED_LOADINGS = {"ridge", "ard", "fixed"}
+# The loading kinds are defined once, by the per-kind defaults.
+_SUPPORTED_LOADINGS = frozenset(DEFAULTS)
+
+
+def portable_json(value: Any, name: str) -> Any:
+    """Convert one loading-configuration value to finite JSON primitives."""
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    if isinstance(value, (float, np.floating)):
+        scalar = float(value)
+        if not math.isfinite(scalar):
+            raise ValueError(f"{name} must be finite")
+        return scalar
+    if isinstance(value, (np.ndarray, jax.Array)):
+        array = np.asarray(value)
+        if array.dtype.hasobject:
+            raise ValueError(f"{name} must not contain object arrays")
+        if not np.all(np.isfinite(array)):
+            raise ValueError(f"{name} must be finite")
+        return array.tolist()
+    if isinstance(value, (list, tuple)):
+        return [portable_json(item, name) for item in value]
+    if isinstance(value, dict):
+        if not all(isinstance(key, str) for key in value):
+            raise ValueError(f"{name} keys must be strings")
+        return {key: portable_json(item, f"{name}.{key}") for key, item in value.items()}
+    raise ValueError(
+        f"{name} has unsupported type {type(value).__name__}; "
+        "use JSON-compatible scalars, lists, or arrays"
+    )
+
+
+def portable_config(config: dict | None) -> dict | None:
+    """Return loading-configuration keywords as finite JSON primitives."""
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        raise ValueError("loading_config must be a dict or None")
+    return portable_json(config, "loading_config")
 
 
 def _array_metadata(array: Any) -> dict[str, Any]:

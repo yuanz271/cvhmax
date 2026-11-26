@@ -37,6 +37,17 @@ NEWTON_STEPS_PER_UPDATE = 3
 EVIDENCE_SETTLE_STEPS = 9
 BACKTRACKING_STEPS = 15
 
+# Failure codes reported by ``CVI.readout_failure``; ``READOUT_OK`` is healthy.
+READOUT_OK = 0
+NONFINITE_VARIANCE = 1
+NONFINITE_PRECISION = 2
+NONFINITE_EVIDENCE = 3
+FAILURE_MESSAGES = {
+    NONFINITE_VARIANCE: "Gaussian observation variance became non-positive or non-finite",
+    NONFINITE_PRECISION: "ARD loading precisions became non-positive or non-finite",
+    NONFINITE_EVIDENCE: "ARD evidence became non-finite",
+}
+
 # Per-kind defaults. ``alpha`` is held fixed for ridge and fixed readouts and is
 # only a starting point for ARD, so the two kinds keep their own default.
 DEFAULTS: dict[str, dict[str, Any]] = {
@@ -103,45 +114,6 @@ class LoadingTerms(NamedTuple):
     squared: Array
 
 
-def portable_json(value: Any, name: str) -> Any:
-    """Convert one loading-configuration value to finite JSON primitives."""
-    if value is None or isinstance(value, (bool, str)):
-        return value
-    if isinstance(value, (int, np.integer)):
-        return int(value)
-    if isinstance(value, (float, np.floating)):
-        scalar = float(value)
-        if not math.isfinite(scalar):
-            raise ValueError(f"{name} must be finite")
-        return scalar
-    if isinstance(value, (np.ndarray, jax.Array)):
-        array = np.asarray(value)
-        if array.dtype.hasobject:
-            raise ValueError(f"{name} must not contain object arrays")
-        if not np.all(np.isfinite(array)):
-            raise ValueError(f"{name} must be finite")
-        return array.tolist()
-    if isinstance(value, (list, tuple)):
-        return [portable_json(item, name) for item in value]
-    if isinstance(value, dict):
-        if not all(isinstance(key, str) for key in value):
-            raise ValueError(f"{name} keys must be strings")
-        return {key: portable_json(item, f"{name}.{key}") for key, item in value.items()}
-    raise ValueError(
-        f"{name} has unsupported type {type(value).__name__}; "
-        "use JSON-compatible scalars, lists, or arrays"
-    )
-
-
-def portable_config(config: dict | None) -> dict | None:
-    """Return loading-configuration keywords as finite JSON primitives."""
-    if config is None:
-        return None
-    if not isinstance(config, dict):
-        raise ValueError("loading_config must be a dict or None")
-    return portable_json(config, "loading_config")
-
-
 def flattened(
     y: Array, valid_y: Array, m: Array, V: Array
 ) -> tuple[Array, Array, Array, Array]:
@@ -167,6 +139,10 @@ def loading_settings(
     n_latents : int, optional
         When given, a per-column ``alpha`` must have exactly this length.
     """
+    if loading not in DEFAULTS:
+        raise ValueError(
+            f"unknown loading kind {loading!r}; expected one of {sorted(DEFAULTS)}"
+        )
     defaults = DEFAULTS[loading]
     settings = {**defaults, **(config or {})}
     unknown = set(settings) - set(defaults)
@@ -201,6 +177,31 @@ def loading_settings(
             raise ValueError(f"iterations must be an integer >= 1, got {iterations!r}")
         settings = {**settings, "iterations": int(iterations)}
     return settings
+
+
+def resolve_alpha(
+    loading: str, settings: dict[str, Any], supplied: Array | None, n_latents: int
+) -> Array:
+    """Per-column loading precision a fit starts from.
+
+    ``"ridge"`` always uses the configured hyperparameter. ``"ard"`` warm starts
+    from a supplied precision, and ``"fixed"`` keeps one, so neither discards a
+    precision the caller fitted earlier.
+    """
+    if loading == "ridge" or supplied is None:
+        alpha = jnp.broadcast_to(jnp.asarray(settings["alpha"]), (n_latents,))
+    else:
+        alpha = jnp.broadcast_to(jnp.asarray(supplied), (n_latents,))
+    if loading == "ard" and not bool(jnp.all(jnp.isfinite(alpha) & (alpha > 0))):
+        raise ValueError("params.alpha must be finite and strictly positive")
+    return alpha
+
+
+def fitted_alpha(params: Params) -> Array:
+    """The loading precision of a readout that has been through ``fit``."""
+    if params.alpha is None:
+        raise ValueError("ARD needs Params.alpha; CVHM.fit fills it before the M-step")
+    return params.alpha
 
 
 def penalty(alpha: Array, n_latents: int) -> Array:
@@ -360,7 +361,6 @@ def ard_fit_laplace(
     m: Array,
     V: Array,
     *,
-    initial_alpha: Array,
     alpha_shape: float,
     alpha_rate: float,
     iterations: int,
@@ -368,13 +368,13 @@ def ard_fit_laplace(
     """Fit loadings and shared precisions using a local Laplace approximation.
 
     Each feature has its own bias and loading MAP, while the loading precisions
-    are shared across features. The fixed-point update treats the MAP Hessian as
-    locally constant; its full derivative through the MAP is not included.
+    are shared across features and warm start from ``params.alpha``. The
+    fixed-point update treats the MAP Hessian as locally constant; its full
+    derivative through the MAP is not included.
     """
     n_latents = m.shape[-1]
     beta = stack_readout(params)
-    alpha = params.alpha if params.alpha is not None else initial_alpha
-    alpha = jnp.broadcast_to(alpha, (n_latents,))
+    alpha = fitted_alpha(params)
 
     def objective(beta_n, alpha_, y_n, mask_n):
         penalty_diagonal = jnp.concatenate((jnp.zeros(1), alpha_))

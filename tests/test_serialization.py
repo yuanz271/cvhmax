@@ -9,6 +9,7 @@ import numpy as np
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
+from cvhmax.readout import loading_settings
 from cvhmax.readout import Params
 from cvhmax.hm import HidaMatern
 
@@ -96,8 +97,9 @@ def test_ard_loading_and_precisions_round_trip(tmp_path):
 
     assert restored.loading == "ard"
     assert restored.loading_config == {"alpha_rate": 1e-3, "iterations": 20}
-    assert restored.loading_settings["alpha_rate"] == 1e-3
-    assert restored.loading_settings["iterations"] == 20
+    settings = loading_settings(restored.loading, restored.loading_config, 1)
+    assert settings["alpha_rate"] == 1e-3
+    assert settings["iterations"] == 20
     np.testing.assert_array_equal(np.asarray(restored.params.alpha), np.asarray(model.params.alpha))
     np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
 
@@ -241,5 +243,5 @@ def test_numpy_and_jax_alpha_config_round_trip(tmp_path):
         restored = CVHM.load(path)
         assert restored.loading_config == {"alpha": portable}
         np.testing.assert_allclose(
-            np.asarray(restored.loading_settings["alpha"]), stored
+            np.asarray(loading_settings("ridge", restored.loading_config, 2)["alpha"]), stored
         )

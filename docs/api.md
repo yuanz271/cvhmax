@@ -81,6 +81,9 @@ archive format and compatibility policy.
     for one loading kind; returns `(Params, score)`
   - `check_readout_fit(loading, y, valid_y, n_components)` — rejects data the
     kind cannot be fitted to
+  - `readout_failure(loading, params, score)` — failure code for a fitted readout,
+    evaluated inside the EM loop; `check_params(params, n_features)` validates a
+    caller-supplied readout
   - `supported_loadings` — the loading kinds the readout implements
 - `Gaussian`, `Poisson`: built-in observation models
 - `Params`: container of `C`, `d`, `R`, and the fitted loading precisions

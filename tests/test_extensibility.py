@@ -123,7 +123,6 @@ class Bernoulli(CVI):
         )
         return ard_fit_laplace(
             cls, params, y, valid_y, m, V,
-            initial_alpha=settings["alpha"],
             alpha_shape=settings["alpha_shape"],
             alpha_rate=settings["alpha_rate"],
             iterations=settings["iterations"],

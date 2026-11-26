@@ -11,7 +11,15 @@ from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
 from .cvi import CVI, Gaussian
-from .readout import Params, loading_settings, penalty, portable_config
+from .readout import (
+    FAILURE_MESSAGES,
+    READOUT_OK,
+    Params,
+    loading_settings,
+    penalty,
+    resolve_alpha,
+)
+from .serialization import portable_config
 from .filtering import bifilter, information_filter
 from .hm import _dynamics_from_covariances
 from .utils import cho_inv, real_repr, symm, training_progress
@@ -44,7 +52,7 @@ class _FitState(NamedTuple):
     params: Any
     patience: int | Array
     converged: bool
-    failed: bool | Array
+    failure: int | Array
 
 
 def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array]:
@@ -60,18 +68,6 @@ def _prepare_observations(y: Array, valid_y: Array | None) -> tuple[Array, Array
     if y.ndim == 2:
         y, valid_y = y[None, ...], valid_y[None, ...]
     return jnp.where(valid_y, y, 0.0), valid_y
-
-
-def _validate_gaussian_noise(params: Params, n_observations: int) -> None:
-    """Validate a caller-supplied diagonal observation covariance."""
-    R = jnp.asarray(params.R)
-    if R.shape != (n_observations, n_observations):
-        raise ValueError("Gaussian R must have shape (features, features)")
-    diagonal = jnp.diag(R)
-    if not bool(jnp.all(jnp.isfinite(diagonal) & (diagonal > 0))) or not bool(
-        jnp.all(R == jnp.diag(diagonal))
-    ):
-        raise ValueError("Gaussian R must be a positive diagonal covariance")
 
 
 def _relative_change(value_new: Array, value_old: Array) -> Array:
@@ -210,7 +206,6 @@ class CVHM:
     tol: float = 0.05
     min_iter: int = 2
     convergence_patience: int = 2
-    loading_settings: dict = field(init=False, repr=False)
     posterior: tuple[Array, Array] = field(init=False)
 
     def __post_init__(self):
@@ -221,9 +216,7 @@ class CVHM:
                 f"loading {self.loading!r} is not supported by observation "
                 f"model {self.observation!r}"
             )
-        self.loading_settings = loading_settings(
-            self.loading, self.loading_config, self.n_components
-        )
+        self._loading_settings()  # fail at construction, not at the first fit
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
             raise ValueError(f"tol must be finite and strictly positive, got {self.tol!r}")
@@ -238,8 +231,12 @@ class CVHM:
             raise ValueError(
                 f"min_iter ({self.min_iter}) must not exceed max_iter ({self.max_iter})"
             )
-        if self.params is not None and issubclass(self.cvi, Gaussian):
-            _validate_gaussian_noise(self.params, self.params.C.shape[0])
+        if self.params is not None:
+            self.cvi.check_params(self.params, self.params.C.shape[0])
+
+    def _loading_settings(self) -> dict:
+        """Settings of the current loading kind, read from the live configuration."""
+        return loading_settings(self.loading, self.loading_config, self.n_components)
 
     def _scaled_kernel_dynamics(self, tau):
         """Return correlation-scaled, Cholesky-stabilized dynamics."""
@@ -430,48 +427,41 @@ class CVHM:
             raise ValueError("Every feature must be observed at least once during fitting")
         self.cvi.check_readout_fit(self.loading, y, valid_y, self.n_components)
         fits_ard = self.loading == "ard"
+        settings = self._loading_settings()
         if random_state is None:
             random_state = secrets.randbits(32)
-        if issubclass(self.cvi, Gaussian) and self.params is not None:
-            _validate_gaussian_noise(self.params, y.shape[-1])
+        if self.params is not None:
+            self.cvi.check_params(self.params, y.shape[-1])
         params = self.cvi.initialize_params(
             y,
             valid_y,
             self.n_components,
             random_state=random_state,
-            penalty=penalty(jnp.asarray(self.loading_settings["alpha"]), self.n_components),
+            penalty=penalty(jnp.asarray(settings["alpha"]), self.n_components),
             params=self.params,
         )
-        configured = jnp.broadcast_to(
-            jnp.asarray(self.loading_settings["alpha"]), (self.n_components,)
-        )
-        # Ridge and fixed readouts hold a hyperparameter precision, so it always
-        # comes from the configuration. ARD keeps a supplied precision as its
-        # warm start.
-        if fits_ard and params.alpha is not None:
-            configured = jnp.broadcast_to(jnp.asarray(params.alpha), (self.n_components,))
-        if fits_ard and not bool(
-            jnp.all(jnp.isfinite(configured) & (configured > 0))
-        ):
-            raise ValueError("params.alpha must be finite and strictly positive")
-        params = Params(C=params.C, d=params.d, R=params.R, alpha=configured)
+        alpha = resolve_alpha(self.loading, settings, params.alpha, self.n_components)
+        params = Params(C=params.C, d=params.d, R=params.R, alpha=alpha)
         context = self._inference_context(y.shape[0])
-        gaussian = issubclass(self.cvi, Gaussian)
 
         with training_progress() as pbar:
             task_id = pbar.add_task(
                 "Training", total=self.max_iter, nell=jnp.nan, nell_display="n/a"
             )
 
-            initial = _FitState(0, params, 0, False, False)
+            initial = _FitState(0, params, 0, False, jnp.asarray(READOUT_OK, dtype=jnp.int32))
 
             def cond(state):
-                return (state.iteration < self.max_iter) & ~state.converged & ~state.failed
+                return (
+                    (state.iteration < self.max_iter)
+                    & ~state.converged
+                    & (state.failure == READOUT_OK)
+                )
 
             def body(state):
                 _, _, m, V = self._infer_state(state.params, y, valid_y, context)
                 updated, nell = self.cvi.solve_readout(
-                    self.loading, self.loading_settings, state.params, y, valid_y, m, V
+                    self.loading, settings, state.params, y, valid_y, m, V
                 )
                 metric = jnp.where(
                     state.iteration > 0,
@@ -486,19 +476,9 @@ class CVHM:
                 )
                 patience = jnp.where(passing, state.patience + 1, 0)
                 converged = passing & (patience >= self.convergence_patience)
-                failed = jnp.asarray(False)
-                if gaussian:
-                    variance = jnp.diag(updated.R)
-                    failed = failed | jnp.any(
-                        ~jnp.isfinite(variance) | (variance <= 0)
-                    )
-                if fits_ard:
-                    alpha = updated.alpha
-                    if alpha is not None:
-                        failed = failed | jnp.any(
-                            ~jnp.isfinite(alpha) | (alpha <= 0)
-                        )
-                    failed = failed | ~jnp.isfinite(nell)
+                failure = self.cvi.readout_failure(self.loading, updated, nell).astype(
+                    jnp.int32
+                )
                 jax.debug.callback(
                     lambda step_i, x: pbar.update(
                         task_id,
@@ -512,28 +492,12 @@ class CVHM:
                     nell,
                     ordered=True,
                 )
-                return _FitState(iteration, updated, patience, converged, failed)
+                return _FitState(iteration, updated, patience, converged, failure)
 
             result = jax.lax.while_loop(cond, body, initial)
 
-        if bool(result.failed):
-            if gaussian:
-                variance = jnp.diag(result.params.R)
-                if not bool(jnp.all(jnp.isfinite(variance) & (variance > 0))):
-                    raise FloatingPointError(
-                        "Gaussian observation variance became non-positive or non-finite"
-                    )
-            if fits_ard:
-                alpha = result.params.alpha
-                if alpha is not None and not bool(
-                    jnp.all(jnp.isfinite(alpha) & (alpha > 0))
-                ):
-                    raise FloatingPointError(
-                        "ARD loading precisions became non-positive or non-finite"
-                    )
-            raise FloatingPointError("ARD evidence became non-finite")
-        if gaussian:
-            _validate_gaussian_noise(result.params, y.shape[-1])
+        if int(result.failure) != READOUT_OK:
+            raise FloatingPointError(FAILURE_MESSAGES[int(result.failure)])
         z, Z, m, V = self._infer_state(result.params, y, valid_y, context)
         self.params = result.params
         self.latent = (z, Z)
@@ -660,8 +624,7 @@ class CVHM:
         if self.params is None:
             raise RuntimeError("Cannot infer with an unfitted model")
         y, valid_y = _prepare_observations(y, valid_y)
-        if issubclass(self.cvi, Gaussian):
-            _validate_gaussian_noise(self.params, y.shape[-1])
+        self.cvi.check_params(self.params, y.shape[-1])
         context = self._inference_context(y.shape[0])
         _, _, m, V = self._infer_state(self.params, y, valid_y, context)
         return m, V

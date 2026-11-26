@@ -113,6 +113,8 @@ all operating in latent space:
 | `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
 | `solve_readout` | loading kind, settings, params, observations, posterior | updated params and a score |
 | `check_readout_fit` | loading kind, observations | raises when the data cannot support the kind |
+| `readout_failure` | loading kind, fitted params, score | integer failure code; 0 is healthy |
+| `check_params` | caller-supplied params, feature count | raises on an invalid readout |
 
 The readout M-step belongs to the observation model, because the conditional
 distribution of the loadings depends on the data term. `CVI.solve_readout`
