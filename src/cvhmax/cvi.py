@@ -16,9 +16,11 @@ from .readout import (
     Params,
     ard_fit_conjugate,
     ard_fit_laplace,
+    conjugate_solve,
     fitted_alpha,
     flattened,
-    ridge_fit,
+    gradient_ridge_fit,
+    penalty,
 )
 from .utils import lbfgs_solve, sequence_info_repr
 
@@ -70,16 +72,16 @@ class CVI:
     Subclasses register by name in `CVI.registry` for lookup via `observation`.
     A readout supplies the latent E-step and its own readout M-step, so the
     loading kind it accepts and the way it is fitted live together here.
+
+    The readout hooks (``readout_objective``, ``solve_ridge``, ``solve_ard``)
+    receive the posterior and data flattened over sequences and time by
+    :meth:`solve_readout`: ``y`` and ``valid_y`` are ``(samples, features)``,
+    ``m`` is ``(samples, K)`` and ``V`` is ``(samples, K, K)``.
     """
 
     #: Loading kinds this readout can fit. ``"ridge"`` and ``"fixed"`` are
     #: generic; a readout adds ``"ard"`` only when it implements the evidence.
     supported_loadings: ClassVar[frozenset[str]] = frozenset({"ridge", "fixed"})
-
-    #: Whether :meth:`loading_terms` is implemented. Declared rather than
-    #: inferred so a conjugate readout is named in one place, and ``None`` never
-    #: has to travel as a sentinel for "not supported".
-    has_conjugate_loadings: ClassVar[bool] = False
 
     registry: ClassVar[dict] = dict()
 
@@ -89,44 +91,13 @@ class CVI:
         CVI.registry[cls.__name__] = cls
 
     @classmethod
-    def loading_terms(
-        cls, y: Array, valid_y: Array, m: Array, V: Array
-    ) -> LoadingTerms:
-        """Conjugate loading representation; requires :attr:`has_conjugate_loadings`.
-
-        A readout that exposes this makes its dependence on the loadings
-        quadratic, which is what lets a fit integrate them out instead of
-        profiling them. It is called only when the readout declares
-        :attr:`has_conjugate_loadings`, so a readout that does not implement it
-        never reaches here.
-
-        Parameters
-        ----------
-        y : Array
-            Observations shaped `(sequences, time, obs_dim (N))`.
-        valid_y : Array
-            Observation mask aligned with `y`.
-        m : Array
-            Posterior means shaped `(sequences, time, latent_dim (K))`.
-        V : Array
-            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
-
-        Returns
-        -------
-        LoadingTerms
-            Conjugate representation.
-        """
-        raise NotImplementedError(
-            f"{cls.__name__} declares no conjugate loading representation"
-        )
-
-    @classmethod
     def readout_objective(
         cls, params, y: Array, valid_y: Array, m: Array, V: Array, penalty: Array
     ):
         """Scalar readout objective including the loading penalty.
 
-        Average over **observed time steps**, not over entries. ARD undoes this
+        Used by the generic ridge fit and by readouts that fit ARD through a
+        Laplace approximation. Average over **observed time steps**, not over entries. ARD undoes this
         averaging to recover a per-feature curvature, so a different convention
         silently rescales its Hessian and evidence. The penalty the readout
         receives is in the same units as its data term, with one entry per
@@ -137,13 +108,13 @@ class CVI:
         params : tuple[Array, Array]
             Loading matrix and bias vector `(C, d)`.
         y : Array
-            Observations shaped `(sequences, time, obs_dim (N))`.
+            Observations shaped `(samples, obs_dim (N))`.
         valid_y : Array
             Observation mask aligned with `y`.
         m : Array
-            Posterior means shaped `(sequences, time, latent_dim (K))`.
+            Posterior means shaped `(samples, latent_dim (K))`.
         V : Array
-            Posterior covariances shaped `(sequences, time, latent_dim (K), latent_dim (K))`.
+            Posterior covariances shaped `(samples, latent_dim (K), latent_dim (K))`.
         penalty : Array
             Diagonal loading penalty shaped `(latent_dim (K) + 1,)`.
 
@@ -153,7 +124,7 @@ class CVI:
             Scalar objective.
         """
         raise NotImplementedError(
-            f"{cls.__name__} exposes neither loading_terms nor a readout objective"
+            f"{cls.__name__} must implement readout_objective for the generic ridge fit"
         )
 
     @classmethod
@@ -163,22 +134,34 @@ class CVI:
     ) -> tuple[Params, float | Array]:
         """Fit the readout at the given loading kind.
 
-        ``"ridge"`` and ``"fixed"`` are handled here for every readout. ``"ard"``
-        dispatches to :meth:`solve_ard`, so a readout that declares it overrides
-        that hook and nothing else.
+        Flattens the posterior over sequences and time once, then dispatches:
+        ``"fixed"`` keeps ``params``, ``"ridge"`` calls :meth:`solve_ridge`, and
+        ``"ard"`` calls :meth:`solve_ard`.
 
         The second return value is a display diagnostic whose meaning depends on
         the kind and readout: NaN when none exists, the unpenalised negative
         expected log-likelihood (lower is better) for a gradient ridge fit, and
-        the conditional evidence (higher is better) for ARD. Validity is judged
-        by :meth:`readout_failure`, never by comparing scores.
+        the conditional evidence (higher is better) for ARD. Only
+        :meth:`readout_failure` decides whether a fit is valid.
         """
         if loading == "fixed":
             return params, jnp.nan
+        y, valid_y, m, V = flattened(y, valid_y, m, V)
         if loading == "ridge":
-            y, valid_y, m, V = flattened(y, valid_y, m, V)
-            return ridge_fit(cls, params, y, valid_y, m, V, settings["alpha"])
+            return cls.solve_ridge(settings, params, y, valid_y, m, V)
         return cls.solve_ard(settings, params, y, valid_y, m, V)
+
+    @classmethod
+    def solve_ridge(
+        cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> tuple[Params, float | Array]:
+        """Ridge readout M-step; L-BFGS on :meth:`readout_objective` by default.
+
+        A readout with a closed form overrides this, as :class:`Gaussian` does.
+        """
+        return gradient_ridge_fit(
+            cls.readout_objective, params, y, valid_y, m, V, settings["alpha"]
+        )
 
     @classmethod
     def solve_ard(
@@ -188,14 +171,6 @@ class CVI:
         raise NotImplementedError(
             f"{cls.__name__} declares ARD but does not implement solve_ard"
         )
-
-    @classmethod
-    def check_readout_fit(
-        cls, loading: str, y: Array, valid_y: Array, n_components: int
-    ) -> None:
-        """Validate that this readout and loading kind can be fitted to the data."""
-        if loading == "ard":
-            cls.check_ard_fit(y, valid_y, n_components)
 
     @classmethod
     def check_ard_fit(cls, y: Array, valid_y: Array, n_components: int) -> None:
@@ -340,26 +315,6 @@ class CVI:
         """
 
 
-def _gaussian_loading_moments(
-    y: Array, valid_y: Array, m: Array, V: Array
-) -> LoadingTerms:
-    """Conjugate loading representation of the Gaussian readout.
-
-    See :class:`~cvhmax.readout.LoadingTerms`. The bias is index 0.
-    """
-    n_time = m.shape[0]
-    design = jnp.concatenate((jnp.ones((n_time, 1), dtype=m.dtype), m), axis=1)
-    outer = design[:, :, None] * design[:, None, :]
-    outer = outer.at[:, 1:, 1:].add(V)
-    observed = valid_y.astype(m.dtype)
-    return LoadingTerms(
-        precision=jnp.einsum("tn,tij->nij", observed, outer),
-        linear=jnp.einsum("tn,ti->ni", jnp.where(valid_y, y, 0.0), design),
-        counts=jnp.sum(observed, axis=0),
-        squared=jnp.sum(jnp.where(valid_y, y**2, 0.0), axis=0),
-    )
-
-
 class Gaussian(CVI):
     """Linear-Gaussian readout with closed-form updates."""
 
@@ -416,20 +371,36 @@ class Gaussian(CVI):
         R = params.R
         return sequence_info_repr(y, valid_y, C, d, R)
 
+    supported_loadings = frozenset({"ridge", "ard", "fixed"})
+
     @classmethod
-    @override
     def loading_terms(
         cls, y: Array, valid_y: Array, m: Array, V: Array
     ) -> LoadingTerms:
-        """Conjugate Gaussian loading representation."""
-        y = y.reshape(-1, y.shape[-1])
-        valid_y = valid_y.reshape(y.shape)
-        m = m.reshape(-1, m.shape[-1])
-        V = V.reshape(-1, *V.shape[-2:])
-        return _gaussian_loading_moments(y, valid_y, m, V)
+        """Conjugate representation of the Gaussian readout; see :class:`LoadingTerms`.
 
-    supported_loadings = frozenset({"ridge", "ard", "fixed"})
-    has_conjugate_loadings = True
+        Arguments are flattened over sequences and time. The bias is index 0.
+        """
+        design = jnp.concatenate((jnp.ones((m.shape[0], 1), dtype=m.dtype), m), axis=1)
+        outer = design[:, :, None] * design[:, None, :]
+        outer = outer.at[:, 1:, 1:].add(V)
+        observed = valid_y.astype(m.dtype)
+        return LoadingTerms(
+            precision=jnp.einsum("tn,tij->nij", observed, outer),
+            linear=jnp.einsum("tn,ti->ni", jnp.where(valid_y, y, 0.0), design),
+            counts=jnp.sum(observed, axis=0),
+            squared=jnp.sum(jnp.where(valid_y, y**2, 0.0), axis=0),
+        )
+
+    @classmethod
+    @override
+    def solve_ridge(
+        cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
+    ) -> tuple[Params, float | Array]:
+        """Closed-form ridge solve; the loadings are conjugate to the Gaussian."""
+        terms = cls.loading_terms(y, valid_y, m, V)
+        penalty_diagonal = penalty(settings["alpha"], m.shape[-1])
+        return conjugate_solve(terms, penalty_diagonal, params, y, valid_y, m, V), jnp.nan
 
     @classmethod
     @override
@@ -437,7 +408,6 @@ class Gaussian(CVI):
         cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
     ) -> tuple[Params, float | Array]:
         """Fit Gaussian loadings against the exact conditional evidence."""
-        y, valid_y, m, V = flattened(y, valid_y, m, V)
         terms = cls.loading_terms(y, valid_y, m, V)
         return ard_fit_conjugate(
             terms, params, y, valid_y, m, V,
@@ -591,10 +561,6 @@ def poisson_readout_objective(
         Readout objective averaged over observed time steps.
     """
     C, d = params
-    y = y.reshape(-1, y.shape[-1])
-    valid_y = valid_y.reshape(y.shape)
-    m = m.reshape(-1, m.shape[-1])
-    V = V.reshape(-1, *V.shape[-2:])
     n_valid_steps = jnp.sum(jnp.any(valid_y, axis=-1))
 
     def step_objective(y_t, mask_t, m_t, V_t):
@@ -827,9 +793,8 @@ class Poisson(CVI):
         cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
     ) -> tuple[Params, float | Array]:
         """Fit Poisson loadings against a Laplace approximation of the evidence."""
-        y, valid_y, m, V = flattened(y, valid_y, m, V)
         return ard_fit_laplace(
-            cls, params, y, valid_y, m, V,
+            cls.readout_objective, params, y, valid_y, m, V,
             alpha_shape=settings["alpha_shape"],
             alpha_rate=settings["alpha_rate"],
             iterations=settings["iterations"],

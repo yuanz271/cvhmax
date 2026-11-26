@@ -11,7 +11,6 @@ from sklearn.linear_model import ARDRegression, LinearRegression
 from cvhmax.cvi import (
     MAX_LOGRATE,
     Params,
-    _gaussian_loading_moments,
     poisson_cvi_step_stats,
     poisson_cvi_step_stats_latent,
     _capped_exp,
@@ -138,7 +137,7 @@ def test_gaussian_ard_evidence_matches_quadrature():
     log_alpha = jnp.log(jnp.array([0.7]))
     log_R = jnp.log(jnp.array([0.9, 1.3]))
 
-    terms = _gaussian_loading_moments(y, valid, m, V)
+    terms = Gaussian.loading_terms(y, valid, m, V)
     actual = float(ard_evidence(terms, log_alpha, log_R))
 
     # Brute force: exp(E_q[log p]) times the loading prior, integrated over the

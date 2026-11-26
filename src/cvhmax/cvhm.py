@@ -405,7 +405,7 @@ class CVHM:
         ------
         ValueError
             If a feature is never observed, if the observation model rejects the
-            loading kind for this data through `CVI.check_readout_fit`, or if
+            loading kind for this data through `CVI.check_ard_fit`, or if
             ARD's ``params.alpha`` is not finite and strictly positive.
         FloatingPointError
             If Gaussian variances or ARD precisions become non-positive or
@@ -425,8 +425,9 @@ class CVHM:
         y, valid_y = _prepare_observations(y, valid_y)
         if not bool(jnp.all(jnp.any(valid_y, axis=(0, 1)))):
             raise ValueError("Every feature must be observed at least once during fitting")
-        self.cvi.check_readout_fit(self.loading, y, valid_y, self.n_components)
         fits_ard = self.loading == "ard"
+        if fits_ard:
+            self.cvi.check_ard_fit(y, valid_y, self.n_components)
         settings = self._loading_settings()
         if random_state is None:
             random_state = secrets.randbits(32)

@@ -72,15 +72,15 @@ archive format and compatibility policy.
     — data-driven starting readout, called during `fit`
   - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
   - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
-  - `loading_terms(y, valid_y, m, V)` — conjugate loading statistics
-    (`LoadingTerms`); call it only when `has_conjugate_loadings` is declared
-  - `has_conjugate_loadings` — whether the readout exposes the conjugate form
   - `readout_objective(params, y, valid_y, m, V, penalty)` — penalised negative
-    expected log-likelihood, averaged per observed time step
+    expected log-likelihood, averaged per observed time step, on data flattened
+    over sequences and time
   - `solve_readout(loading, settings, params, y, valid_y, m, V)` — readout M-step
-    for one loading kind; returns `(Params, score)`
-  - `check_readout_fit(loading, y, valid_y, n_components)` — rejects data the
-    kind cannot be fitted to
+    for one loading kind; flattens once, then dispatches to `solve_ridge`
+    (L-BFGS on `readout_objective` unless overridden) or `solve_ard`; returns
+    `(Params, score)`
+  - `check_ard_fit(y, valid_y, n_components)` — rejects data ARD cannot be
+    fitted to
   - `readout_failure(loading, params, score)` — failure code for a fitted readout,
     evaluated inside the EM loop; `check_params(params, n_features)` validates a
     caller-supplied readout

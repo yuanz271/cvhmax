@@ -522,7 +522,8 @@ def test_overlapping_features_vdp_example(tmp_path):
     script = """
 import sys
 import numpy as np
-from examples.demo_vdp import run_overlapping_features_case
+sys.path.insert(0, "examples")  # the demos import their shared helper as a sibling
+from demo_vdp import run_overlapping_features_case
 model, scores = run_overlapping_features_case(T=100, max_iter=3, out_path=sys.argv[1])
 assert model.posterior[0].shape == (2, 100, 2)
 assert model.params.C.shape == (60, 2)

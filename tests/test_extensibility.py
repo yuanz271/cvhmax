@@ -47,10 +47,6 @@ class Bernoulli(CVI):
     @classmethod
     @override
     def readout_objective(cls, params, y, valid_y, m, V, penalty):
-        y = y.reshape(-1, y.shape[-1])
-        valid_y = valid_y.reshape(y.shape)
-        m = m.reshape(-1, m.shape[-1])
-        V = V.reshape(-1, *V.shape[-2:])
         steps = jax.vmap(cls._step_nll, in_axes=(None, 0, 0, 0, 0))(params, m, V, y, valid_y)
         C = params[0]
         return (jnp.sum(steps) + 0.5 * jnp.sum(penalty[1:][None, :] * C**2)) / jnp.sum(
@@ -117,14 +113,8 @@ class Bernoulli(CVI):
     @override
     def solve_ard(cls, settings, params, y, valid_y, m, V):
         """Only ARD needs readout-specific code; ridge and fixed come for free."""
-        y, valid_y, m, V = (
-            y.reshape(-1, y.shape[-1]),
-            valid_y.reshape(-1, y.shape[-1]),
-            m.reshape(-1, m.shape[-1]),
-            V.reshape(-1, *V.shape[-2:]),
-        )
         return ard_fit_laplace(
-            cls, params, y, valid_y, m, V,
+            cls.readout_objective, params, y, valid_y, m, V,
             alpha_shape=settings["alpha_shape"],
             alpha_rate=settings["alpha_rate"],
             iterations=settings["iterations"],

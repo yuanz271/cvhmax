@@ -2,14 +2,16 @@
 
 These are pure functions over a likelihood's data term. The observation model
 decides *which* fit to run, per loading kind; the mechanics live here so the
-same code serves every observation model.
+same code serves every observation model, and nothing here depends on the
+observation model's class.
 
 All functions expect leading sequence and time axes already collapsed by
 :func:`flattened`; the readout is fitted per feature across all observed steps.
 """
 
 import math
-from typing import TYPE_CHECKING, Any, NamedTuple
+from collections.abc import Callable
+from typing import Any, NamedTuple
 
 import equinox as eqx
 import jax
@@ -18,10 +20,8 @@ from jax import Array, numpy as jnp
 
 from .utils import lbfgs_solve
 
-if TYPE_CHECKING:
-    # Import-cycle guard: ``cvi`` imports this module at runtime, so the readout
-    # type is only named here for annotations.
-    from .cvi import CVI
+#: ``(params, y, valid_y, m, V, penalty) -> scalar`` as ``CVI.readout_objective``.
+ReadoutObjective = Callable[..., float | Array]
 
 # Damping on the local curvature. A feature whose likelihood is locally flat
 # (saturated probabilities, empty counts) otherwise yields a singular Hessian,
@@ -239,6 +239,15 @@ def mackay_update(
     return (jnp.sum(effective, axis=0) + 2.0 * alpha_shape - 2.0) / denominator
 
 
+def expected_squared_error(
+    y: Array, valid_y: Array, m: Array, V: Array, loadings: Array, bias: Array
+) -> Array:
+    """Per-feature sum over observed steps of ``E[(y - C z - d)^2]`` under ``q``."""
+    residual = jnp.where(valid_y, y - (m @ loadings.T + bias), 0.0)
+    uncertainty = jnp.einsum("nk,tkl,nl->tn", loadings, V, loadings)
+    return jnp.sum(jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0)
+
+
 def conjugate_solve(
     terms: LoadingTerms,
     penalty_diagonal: Array,
@@ -260,16 +269,12 @@ def conjugate_solve(
         posterior, (terms.linear / variance[:, None])[..., None]
     )[..., 0]
     C, d = split_readout(beta)
-    residual = jnp.where(valid_y, y - (m @ C.T + d), 0.0)
-    uncertainty = jnp.einsum("nk,tkl,nl->tn", C, V, C)
-    variance = jnp.sum(
-        jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0
-    ) / terms.counts
+    variance = expected_squared_error(y, valid_y, m, V, C, d) / terms.counts
     return unstack_readout(beta, jnp.diag(variance), penalty_diagonal[1:])
 
 
-def ridge_fit(
-    likelihood,
+def gradient_ridge_fit(
+    readout_objective: ReadoutObjective,
     params: Params,
     y: Array,
     valid_y: Array,
@@ -277,18 +282,18 @@ def ridge_fit(
     V: Array,
     alpha: Array,
 ) -> tuple[Params, float | Array]:
-    """Fit loadings at a fixed precision, using a closed form where one exists."""
+    """Fit loadings at a fixed precision by L-BFGS on the readout objective.
+
+    The second return value is the unpenalised objective at the solution.
+    """
     penalty_diagonal = penalty(alpha, m.shape[-1])
-    if likelihood.has_conjugate_loadings:
-        terms = likelihood.loading_terms(y, valid_y, m, V)
-        return conjugate_solve(terms, penalty_diagonal, params, y, valid_y, m, V), jnp.nan
     C, d = lbfgs_solve(
         (params.C, params.d),
-        lambda readout: likelihood.readout_objective(
+        lambda readout: readout_objective(
             readout, y, valid_y, m, V, penalty=penalty_diagonal
         ),
     )
-    objective = likelihood.readout_objective(
+    objective = readout_objective(
         (C, d), y, valid_y, m, V, penalty=jnp.zeros_like(penalty_diagonal)
     )
     return Params(C=C, d=d, R=params.R, alpha=penalty_diagonal[1:]), objective
@@ -328,9 +333,7 @@ def ard_fit_conjugate(
         _, beta, diagonal = solve(alpha_, variance_)
         loadings, bias = split_readout(beta)
         alpha_next = mackay_update(alpha_, diagonal, loadings, alpha_shape, alpha_rate)
-        residual = jnp.where(valid_y, y - (m @ loadings.T + bias), 0.0)
-        uncertainty = jnp.einsum("nk,tkl,nl->tn", loadings, V, loadings)
-        rss = jnp.sum(jnp.where(valid_y, residual**2 + uncertainty, 0.0), axis=0)
+        rss = expected_squared_error(y, valid_y, m, V, loadings, bias)
         # The residual degrees of freedom remove each loading's effective count
         # plus one for the unpenalised bias.
         effective_count = 1.0 - alpha_[None, :] * diagonal[:, 1:]
@@ -354,7 +357,7 @@ def ard_fit_conjugate(
 
 
 def ard_fit_laplace(
-    likelihood: type["CVI"],
+    readout_objective: ReadoutObjective,
     params: Params,
     y: Array,
     valid_y: Array,
@@ -380,7 +383,7 @@ def ard_fit_laplace(
         penalty_diagonal = jnp.concatenate((jnp.zeros(1), alpha_))
         # The readout objective averages over observed steps. Undo that
         # averaging before forming the per-feature posterior curvature.
-        return jnp.sum(mask_n) * likelihood.readout_objective(
+        return jnp.sum(mask_n) * readout_objective(
             split_readout(beta_n[None, :]),
             y_n[:, None], mask_n[:, None], m, V, penalty_diagonal,
         )

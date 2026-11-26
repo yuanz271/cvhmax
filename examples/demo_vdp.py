@@ -20,9 +20,6 @@ Usage::
     JAX_ENABLE_X64=1 python examples/demo_vdp.py
 """
 
-import sys
-from pathlib import Path
-
 import matplotlib.pyplot as plt
 import numpy as np
 from jax import config
@@ -32,10 +29,7 @@ from cvhmax.cvhm import CVHM
 from cvhmax.cvi import MAX_LOGRATE, Params
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences, unpad_sequences
-
-# Shared with the sibling demo, and importable both as a script and as a module.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from vdp import simulate_vdp, standardize  # noqa: E402
+from vdp import simulate_vdp, standardize
 
 config.update("jax_enable_x64", True)
 
