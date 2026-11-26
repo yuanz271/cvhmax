@@ -15,6 +15,13 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+#: Diagonal jitter that keeps a matrix we factor or solve positive definite when
+#: it is only semi-definite in exact arithmetic (a flat likelihood, a smooth
+#: kernel on a fine grid). Small against the matrices it is added to, so it
+#: does not change the quantity being computed beyond roundoff.
+TAU = 1e-6
+
+
 def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
     """Approximate bounded LBFGS solver mirroring SciPy defaults.
 

@@ -20,7 +20,7 @@ import numpy as np
 
 from cvhmax.utils import gamma
 
-from .utils import conjtrans
+from .utils import TAU, conjtrans
 
 
 def _kernel_compute_dtype() -> jnp.dtype:
@@ -770,7 +770,7 @@ def spectral_density(kernel_spec: dict, freq):
     return s
 
 
-def sample_matern(n, dt, sigma, rho, jitter=1e-6):
+def sample_matern(n, dt, sigma, rho, jitter=TAU):
     """Sample a trajectory from a Matérn-1/2 Gaussian process.
 
     Parameters
@@ -783,7 +783,7 @@ def sample_matern(n, dt, sigma, rho, jitter=1e-6):
         Kernel amplitude.
     rho : float
         Length scale parameter.
-    jitter : float, default=1e-6
+    jitter : float, default=TAU
         Diagonal regularization for numerical stability.
 
     Returns

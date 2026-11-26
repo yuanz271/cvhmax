@@ -13,7 +13,7 @@
   declares which are available.
 - Moved `Params` and `LoadingTerms` to `cvhmax.readout`, next to the code that fills
   them; neither is exported from `cvhmax.utils` or `cvhmax.cvi` any more.
-- Removed `poisson_cvi_step_stats` and `cvi.TAU`. The inference loop has used the
+- Removed `poisson_cvi_step_stats`. The inference loop has used the
   latent-space `poisson_cvi_step_stats_latent` since the move to latent space; the
   state-space variant was only reachable from tests.
 - Bumped the archive format version to 3. Manifests record `loading` and
@@ -28,6 +28,10 @@
 
 ### Changed
 
+- Moved `TAU = 1e-6` from `cvhmax.cvi` to `cvhmax.utils` as the one diagonal jitter for
+  numerical positive-definiteness. It replaces the loading-Hessian damping of
+  `1e-10` (results change by about 1e-7 or less) and is the default of
+  `sample_matern`, which already used `1e-6`.
 - Raised the default number of inner CVI iterations from 5 to 20. Poisson
   inference may be more accurate at additional computational cost; set
   `cvi_iter` explicitly to choose a different count.

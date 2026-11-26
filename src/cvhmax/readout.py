@@ -18,15 +18,10 @@ import jax
 import numpy as np
 from jax import Array, numpy as jnp
 
-from .utils import lbfgs_solve
+from .utils import TAU, lbfgs_solve
 
 #: ``(params, y, valid_y, m, V, penalty) -> scalar`` as ``CVI.readout_objective``.
 ReadoutObjective = Callable[..., float | Array]
-
-# Damping on the local curvature. A feature whose likelihood is locally flat
-# (saturated probabilities, empty counts) otherwise yields a singular Hessian,
-# which breaks both the Newton step and the evidence log-determinant.
-CURVATURE_JITTER = 1e-10
 
 # Work per Laplace precision update. Three damped Newton steps track the moving
 # loading mode closely enough that the MacKay step sees a settled curvature;
@@ -391,9 +386,14 @@ def ard_fit_laplace(
     gradient = jax.grad(objective)
 
     def curvature(beta_n, alpha_, y_n, mask_n):
-        """Local curvature, damped so a flat feature stays positive definite."""
+        """Local curvature, damped so a flat feature stays positive definite.
+
+        A feature whose likelihood is locally flat (saturated probabilities,
+        empty counts) otherwise has a singular Hessian, which breaks both the
+        Newton step and the evidence log-determinant.
+        """
         hessian = jax.hessian(objective)(beta_n, alpha_, y_n, mask_n)
-        return hessian + CURVATURE_JITTER * jnp.eye(hessian.shape[-1])
+        return hessian + TAU * jnp.eye(hessian.shape[-1])
 
     def newton_step(beta_n, alpha_, y_n, mask_n):
         grad = gradient(beta_n, alpha_, y_n, mask_n)
