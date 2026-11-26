@@ -4,7 +4,7 @@ from typing import ClassVar, override
 
 from sklearn.decomposition import FactorAnalysis
 
-from jax import Array, numpy as jnp, vmap
+from jax import Array, grad, numpy as jnp, vmap
 from jax.numpy.linalg import multi_dot
 from jax.scipy.linalg import cho_factor, cho_solve
 from .readout import (
@@ -618,7 +618,7 @@ def poisson_cvi_step_stats(
     H: Array,
     d: Array,
 ) -> tuple[Array, Array]:
-    """Poisson CVI gradients for a single time step.
+    """Poisson CVI gradients for a single time step from information form.
 
     Parameters
     ----------
@@ -643,24 +643,21 @@ def poisson_cvi_step_stats(
     Notes
     -----
     The information parameters `(z, Z)` correspond to Gaussian statistics via
-    `m = Z^{-1} z` and `V = Z^{-1}` where `Z = Σ⁻¹` and `z = Σ⁻¹ μ`.
+    `m = Z^{-1} z` and `V = Z^{-1}` where `Z = Σ⁻¹` and `z = Σ⁻¹ μ`. `Z` is
+    regularised by ``TAU`` before inversion, then the moments are handed to
+    :func:`poisson_cvi_step_stats_latent`.
     """
-    U, s, V = jnp.linalg.svd(Z)
+    U, s, _ = jnp.linalg.svd(Z)
     Z = multi_dot((U, jnp.diag(s + TAU), U.T))
-
     Zcho = cho_factor(Z)
-    m = cho_solve(Zcho, z)
-
-    lin = H @ m + d
-    quad = jnp.einsum("nl, ln -> n", H, cho_solve(Zcho, H.mT))  # CVC'
-    eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
-    lam = jnp.exp(eta)
-
-    observed_y = jnp.where(valid_y, y, 0.0)
-    observed_lam = jnp.where(valid_y, lam, 0.0)
-    grad_m = (observed_y - observed_lam) @ H
-    K = jnp.einsum("ni,n,nj->ij", H, observed_lam, H)
-    return grad_m + K @ m, K
+    return poisson_cvi_step_stats_latent(
+        cho_solve(Zcho, z),
+        cho_solve(Zcho, jnp.eye(Z.shape[0])),
+        y,
+        valid_y,
+        H,
+        d,
+    )
 
 
 def poisson_cvi_step_stats_latent(
@@ -673,9 +670,8 @@ def poisson_cvi_step_stats_latent(
 ) -> tuple[Array, Array]:
     """Poisson CVI gradients for a single time step in latent space.
 
-    Unlike :func:`poisson_cvi_step_stats` which operates in state space with
-    information-form ``(z, Z)`` and ``H = C @ M``, this function works
-    directly with latent-space moments ``(m, V)`` and loading ``C``.
+    Works directly with latent-space moments ``(m, V)`` and loading ``C``;
+    :func:`poisson_cvi_step_stats` is the information-form wrapper around it.
 
     Parameters
     ----------
@@ -701,13 +697,17 @@ def poisson_cvi_step_stats_latent(
     """
     lin = C @ m + d
     quad = jnp.einsum("nk, kl, nl -> n", C, V, C)  # diag(C V C^T)
-    eta = jnp.minimum(lin + 0.5 * quad, MAX_LOGRATE)
-    lam = jnp.exp(eta)
+    # The local expansion needs the rate's derivative, which above the cap stays
+    # at the tangent slope while the rate itself keeps growing. Taking it from
+    # ``_capped_exp`` keeps the E-step and the readout objective from drifting
+    # apart; only this derivative (never the rate) enters the gradient and the
+    # information matrix.
+    rate_deriv = vmap(grad(_capped_exp))(lin + 0.5 * quad)
 
     observed_y = jnp.where(valid_y, y, 0.0)
-    observed_lam = jnp.where(valid_y, lam, 0.0)
-    grad_m = (observed_y - observed_lam) @ C
-    K = jnp.einsum("ni,n,nj->ij", C, observed_lam, C)
+    observed_deriv = jnp.where(valid_y, rate_deriv, 0.0)
+    grad_m = (observed_y - observed_deriv) @ C
+    K = jnp.einsum("ni,n,nj->ij", C, observed_deriv, C)
     return grad_m + K @ m, K
 
 

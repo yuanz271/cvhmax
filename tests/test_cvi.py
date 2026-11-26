@@ -9,10 +9,13 @@ from scipy.integrate import trapezoid
 from sklearn.linear_model import ARDRegression, LinearRegression
 
 from cvhmax.cvi import (
+    MAX_LOGRATE,
     Params,
     _gaussian_loading_moments,
     poisson_cvi_step_stats,
     poisson_cvi_step_stats_latent,
+    _capped_exp,
+    poisson_readout_objective,
     Poisson,
     Gaussian,
 )
@@ -517,36 +520,59 @@ def test_poisson_cvi_gradient_direction(rng):
     assert not jnp.allclose(j_new, j), "CVI update produced no change"
 
 
-def test_poisson_cvi_step_stats_latent_equivalence(rng):
-    """Latent-space Poisson CVI stats match state-space version when M = I.
+def test_poisson_step_stats_track_the_objective_derivatives():
+    """The E-step's gradient and information follow the readout objective.
 
-    Temporary equivalence test for the refactor.  Remove after migration.
+    Below ``MAX_LOGRATE`` the information equals the objective's curvature.
+    Above it the rate follows a tangent line, so the objective is linear and its
+    curvature is zero, while the E-step keeps ``C^T diag(cap) C``. That
+    difference cannot move the fixed point: ``K`` appears on both sides of the
+    normal equations ``(I + J) m = j`` with ``j = grad + K m`` and ``J = K``,
+    so it cancels. Using the rate's value instead of its derivative in ``grad``
+    would move it, which is what the gradient assertion pins down.
     """
+    rng = np.random.default_rng(3)
     N, K = 5, 3
-    C = jnp.array(rng.standard_normal((N, K)) * 0.3)
-    d = jnp.array(rng.standard_normal(N))
-    y = jnp.array(rng.poisson(5.0, size=N).astype(float))
+    C = jnp.asarray(rng.standard_normal((N, K)) * 0.5)
+    m = jnp.asarray(rng.standard_normal(K))
+    V = jnp.eye(K) * 0.3
+    y = jnp.asarray(rng.poisson(3.0, size=N) + 1.0)
+    valid_y = jnp.ones(N, dtype=bool)
+    penalty = jnp.zeros(K + 1)
 
-    # Build state-space info for M = I (K = L)
-    V_latent = jnp.eye(K) * 2.0
-    Z_state = jnp.linalg.inv(V_latent)
-    m_latent = jnp.array(rng.standard_normal(K))
-    z_state = Z_state @ m_latent
+    for offset, capped in ((0.5, False), (MAX_LOGRATE + 4.0, True)):
+        d = jnp.full(N, offset)
 
-    # State-space version with H = C @ I = C
-    H = C  # since M = I
-    k_state, K_state = poisson_cvi_step_stats(z_state, Z_state, y, jnp.ones(N, dtype=bool), H, d)
+        def objective(m_):
+            return poisson_readout_objective(
+                (C, d), y[None], valid_y[None], m_[None], V[None], penalty
+            )
 
-    # Latent-space version
-    k_latent, K_latent = poisson_cvi_step_stats_latent(
-        m_latent, V_latent, y, jnp.ones(N, dtype=bool), C, d
-    )
+        grad = jax.grad(objective)(m)
+        hess = jax.hessian(objective)(m)
+        k, K_stats = poisson_cvi_step_stats_latent(m, V, y, valid_y, C, d)
+        eta = C @ m + d + 0.5 * jnp.einsum("nk,kl,nl->n", C, V, C)
+        rate_deriv = jax.vmap(jax.grad(_capped_exp))(eta)
 
-    # Tolerance is relaxed because the state-space version applies SVD
-    # regularisation (TAU) before converting to moments, introducing small
-    # numerical differences.
-    npt.assert_allclose(np.asarray(k_latent), np.asarray(k_state), atol=1e-4)
-    npt.assert_allclose(np.asarray(K_latent), np.asarray(K_state), atol=1e-4)
+        if capped:
+            assert jnp.all(eta > MAX_LOGRATE), "fixture must exercise the cap"
+            npt.assert_allclose(np.asarray(hess), 0.0, atol=1e-10)
+        else:
+            assert jnp.all(eta < MAX_LOGRATE), "fixture must stay below the cap"
+            npt.assert_allclose(np.asarray(hess), np.asarray(K_stats), rtol=1e-10, atol=1e-10)
+
+        npt.assert_allclose(
+            np.asarray(grad), np.asarray(C.T @ (rate_deriv - y)), rtol=1e-10, atol=1e-10
+        )
+        npt.assert_allclose(
+            np.asarray(K_stats),
+            np.asarray(C.T @ jnp.diag(rate_deriv) @ C),
+            rtol=1e-10,
+            atol=1e-10,
+        )
+        npt.assert_allclose(
+            np.asarray(k), np.asarray(K_stats @ m - grad), rtol=1e-10, atol=1e-10
+        )
 
 
 def test_poisson_cvi_step_stats_latent_masked(rng):
