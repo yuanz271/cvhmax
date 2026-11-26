@@ -9,11 +9,15 @@
 
 ## Numerical Instability
 
-- Enable 64-bit precision in JAX for the supported kernel path:
-  `JAX_ENABLE_X64=1`. Without it the package runs in float32; the benchmark and
-  examples reach the same accuracy, but roundoff is about `1e-7` rather than
-  `1e-16`, and `utils.TAU = 1e-6` is then only eight float32 epsilons. Prefer
-  float64 for sparse counts, near-singular kernels, or long sequences.
+- In float32, keep a non-zero `HidaMatern(s=...)`: the default `1e-5` is what
+  keeps the process noise positive definite. The dynamics form
+  `Q = K(0) - K(t) K(0)^{-1} K(t)^H`, a difference of nearly equal covariances,
+  which loses positive definiteness in float32 when `s=0` and `dt` is small
+  relative to `rho`; the fit then stops with `FloatingPointError` rather than
+  returning a bad answer. `JAX_ENABLE_X64=1` removes the constraint by computing
+  the kernel blocks in float64, and the benchmark and examples reach the same
+  accuracy in either precision, with roundoff about `1e-7` instead of `1e-16`.
+  Note that `utils.TAU = 1e-6` is only eight float32 epsilons.
 - CVHM applies correlation scaling internally; retain this transformation
   when implementing custom filtering or kernel code because it improves
   conditioning of derivative-state covariance blocks.
