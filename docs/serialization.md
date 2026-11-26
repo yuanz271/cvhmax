@@ -229,6 +229,14 @@ A loaded model must not have a posterior or latent cache merely because the
 saved model was previously fitted. `model.infer(y, valid_y=None)` recomputes a
 posterior without updating fitted readout parameters.
 
+Precision is a property of the archive, not of the loading session. Each
+parameter's stored dtype is restored as written, so a `float64` archive loads as
+`float64` and a `float32` archive as `float32`, independently of
+`JAX_ENABLE_X64`. A session without 64-bit JAX cannot represent `float64`, so
+loading such an archive there truncates the arrays to `float32`, with a single
+`UserWarning` from the restore path; the fit is still usable, at float32
+precision.
+
 ## Supported types
 
 The initial implementation supports:

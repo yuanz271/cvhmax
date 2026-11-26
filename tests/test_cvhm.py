@@ -17,10 +17,9 @@ from cvhmax.readout import (
 )
 from cvhmax.utils import real_repr
 
-from .helpers import sample_gp_latents
+from .helpers import ATOL_TIGHT, X64_ENABLED, sample_gp_latents
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
-ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+# Tighter than the shared budget: these compare two runs of identical code.
 ATOL_MED = 1e-12 if X64_ENABLED else 1e-6
 
 
@@ -70,7 +69,7 @@ def test_scaled_dynamics_stable_for_supported_orders(order):
     assert np.all(np.isfinite(Af))
     assert np.all(np.isfinite(Qf))
     assert eigvals.min() >= -1e-8
-    np.testing.assert_allclose(residual, 0.0, atol=1e-7, rtol=1e-7)
+    np.testing.assert_allclose(residual, 0.0, atol=ATOL_TIGHT, rtol=ATOL_TIGHT)
 
 
 @pytest.mark.parametrize(
@@ -309,14 +308,14 @@ def test_readout_change_reduced_gram_matches_explicit():
         expected = np.linalg.norm(new_C @ new_C.T - old_C @ old_C.T) / (
             (np.linalg.norm(new_C) + np.linalg.norm(old_C)) * max(1, np.linalg.norm(old_C))
         )
-        np.testing.assert_allclose(readout_change(new, old), expected, rtol=1e-10)
+        np.testing.assert_allclose(readout_change(new, old), expected, rtol=ATOL_TIGHT)
 
 
 def test_ard_change_detects_rotation_and_precision():
     C = jnp.array([[1., 0.], [0., 2.]])
     old = Params(C=C, d=jnp.zeros(2), R=jnp.eye(2), alpha=jnp.array([1., 2.]))
     rotated = Params(C=C @ jnp.array([[0., -1.], [1., 0.]]), d=old.d, R=old.R, alpha=old.alpha)
-    assert float(readout_change(rotated, old)) < 1e-10
+    assert float(readout_change(rotated, old)) < ATOL_TIGHT
     assert float(readout_change(rotated, old, ard=True)) > 0.05
     changed_alpha = Params(C=C, d=old.d, R=old.R, alpha=old.alpha * 2)
     np.testing.assert_allclose(readout_change(changed_alpha, old, ard=True), np.log(2))
@@ -622,7 +621,7 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     obs_dim = 3
     n_components = 1
 
-    y = jnp.zeros((sequences, T, obs_dim), dtype=jnp.float64)
+    y = jnp.zeros((sequences, T, obs_dim))
     valid_y = jnp.ones((sequences, T, 1), dtype=bool)
 
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]

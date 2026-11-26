@@ -23,7 +23,10 @@ from cvhmax.cvhm import CVHM, lift, project
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences
 
-from .helpers import sample_gp_latents
+from .helpers import ATOL_TIGHT, RTOL_TIGHT, X64_ENABLED, sample_gp_latents
+
+# Subtracting two objectives of order ten leaves float32 rounding of a few ulps.
+ATOL_DIFFERENCE = 1e-10 if X64_ENABLED else 1e-5
 
 
 def test_masked_gaussian_information_matches_observed_rows():
@@ -42,8 +45,8 @@ def test_masked_gaussian_information_matches_observed_rows():
         residual = np.asarray(y - d)[t, indices]
         expected_j = H.T @ (residual / variance)
         expected_J = H.T @ (H / variance[:, None])
-        npt.assert_allclose(state_j[t], expected_j, atol=1e-10, rtol=1e-10)
-        npt.assert_allclose(state_J[t], expected_J, atol=1e-10, rtol=1e-10)
+        npt.assert_allclose(state_j[t], expected_j, atol=ATOL_TIGHT, rtol=RTOL_TIGHT)
+        npt.assert_allclose(state_J[t], expected_J, atol=ATOL_TIGHT, rtol=RTOL_TIGHT)
 
 
 def test_masked_gaussian_smoothing_matches_dense_gp():
@@ -97,11 +100,11 @@ def test_masked_poisson_information_and_objective():
     def objective(params):
         return poisson_readout_objective(params, y, mask, means, covariances, penalty)
 
-    npt.assert_allclose(objective((C, d)), reference((C, d)), rtol=1e-10, atol=1e-10)
+    npt.assert_allclose(objective((C, d)), reference((C, d)), rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
     actual_grad = jax.grad(objective)((C, d))
     expected_grad = jax.grad(reference)((C, d))
     for actual, expected in zip(actual_grad, expected_grad):
-        npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+        npt.assert_allclose(actual, expected, rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
 
     j, J = poisson_cvi_step_stats_latent(means[0], covariances[0], y[0], mask[0], C, d)
     observed_C = np.asarray(C)[[0, 2]]
@@ -111,8 +114,8 @@ def test_masked_poisson_information_and_objective():
     rates = np.exp(observed_C @ m + observed_d + 0.5 * np.einsum("ni,ij,nj->n", observed_C, V, observed_C))
     expected_J = observed_C.T @ (rates[:, None] * observed_C)
     expected_j = (observed_y - rates) @ observed_C + expected_J @ m
-    npt.assert_allclose(j, expected_j, rtol=1e-10, atol=1e-10)
-    npt.assert_allclose(J, expected_J, rtol=1e-10, atol=1e-10)
+    npt.assert_allclose(j, expected_j, rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
+    npt.assert_allclose(J, expected_J, rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
 
 
 def test_poisson_objective_penalises_each_latent_column_by_its_own_precision():
@@ -137,7 +140,7 @@ def test_poisson_objective_penalises_each_latent_column_by_its_own_precision():
     plain = poisson_readout_objective((C, d), y, valid, m, V, jnp.zeros(n_latents + 1))
 
     expected = 0.5 * jnp.sum(precisions * jnp.sum(C**2, axis=0)) / len(y)
-    npt.assert_allclose(penalised - plain, expected, rtol=1e-10)
+    npt.assert_allclose(penalised - plain, expected, rtol=RTOL_TIGHT, atol=ATOL_DIFFERENCE)
 
 
 def test_capped_exp_is_exp_below_the_cap_and_its_tangent_above():
@@ -255,9 +258,9 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
         expected_beta.append(beta)
         expected_var.append(variance)
     expected_beta = np.asarray(expected_beta)
-    npt.assert_allclose(updated.d, expected_beta[:, 0], rtol=1e-10, atol=1e-10)
-    npt.assert_allclose(updated.C, expected_beta[:, 1:], rtol=1e-10, atol=1e-10)
-    npt.assert_allclose(updated.R, np.diag(expected_var), rtol=1e-10, atol=1e-10)
+    npt.assert_allclose(updated.d, expected_beta[:, 0], rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
+    npt.assert_allclose(updated.C, expected_beta[:, 1:], rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
+    npt.assert_allclose(updated.R, np.diag(expected_var), rtol=RTOL_TIGHT, atol=ATOL_TIGHT)
     npt.assert_allclose(updated.alpha, [0.1, 0.1])
 
     def objective(readout):

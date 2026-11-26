@@ -5,11 +5,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import jax
 
 from cvhmax.hm import HidaMatern, sample_matern  # noqa: E402
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
 
 
 # ---------------------------------------------------------------------------

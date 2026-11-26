@@ -9,8 +9,24 @@
 
 ## Numerical Instability
 
-- Enable 64-bit precision in JAX for the supported kernel path:
-  `JAX_ENABLE_X64=1`.
+- In float32, keep a non-zero `HidaMatern(s=...)`: the default `1e-5` is what
+  keeps the process noise positive definite. The dynamics form
+  `Q = K(0) - K(t) K(0)^{-1} K(t)^H`, a difference of nearly equal covariances,
+  which loses positive definiteness in float32 when `s=0` and `dt` is small
+  relative to `rho`; a Gaussian or ARD fit then stops with `FloatingPointError`,
+  which is raised when the fitted readout parameters go non-finite. The returned
+  posterior is not checked, so a Poisson fit at a fixed precision can instead
+  report `converged_ = False` with a non-finite `posterior`; treat that as a
+  failed fit. `JAX_ENABLE_X64=1` removes the constraint by computing
+  the kernel blocks in float64, and the benchmark and examples reach the same
+  accuracy in either precision, with roundoff about `1e-7` instead of `1e-16`.
+  Note that `utils.TAU = 1e-6` is only eight float32 epsilons.
+- On an accelerator, float32 matmuls default to a reduced-precision mode (TF32
+  on CUDA). The kernel dynamics are computed at full precision regardless, so
+  process noise stays positive definite, but the rest of the pipeline inherits
+  TF32 rounding (around `1e-3` relative). Set
+  `JAX_DEFAULT_MATMUL_PRECISION=highest` there if you need float32 to match the
+  float64 results within the tolerances the test suite uses, or stay in float64.
 - CVHM applies correlation scaling internally; retain this transformation
   when implementing custom filtering or kernel code because it improves
   conditioning of derivative-state covariance blocks.

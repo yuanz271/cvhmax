@@ -46,7 +46,8 @@ outputs over tests of guardrails or implementation details.
 
 ## Build / Lint / Test Commands
 
-Assume Python >= 3.12 (`pyproject.toml`). JAX tests expect 64-bit.
+Assume Python >= 3.12 (`pyproject.toml`). The suite runs in either precision:
+float64 (`JAX_ENABLE_X64=1`) or float32 (unset or `0`, the JAX default).
 
 ```bash
 # Install (dev)
@@ -191,5 +192,5 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 - Keep core computations pure (no mutation except via `.at[...]`), and avoid Python side effects in jittable code.
 - Randomness: use explicit seeds/keys; tests should be reproducible.
 - Masking: use `jnp.where` with broadcastable masks; keep masks as integer/bool arrays.
-- Be careful with dtype: tests assume 64-bit; avoid accidental `float32` constants (`1.0` is ok with x64 enabled).
+- Be careful with dtype: never hardcode `jnp.float64` in `src` — request the session's precision (`jnp.result_type(1.0)`) instead. Tests take their tolerances from `X64_ENABLED`; add a dtype-aware constant rather than a float64-sized literal.
 - Prefer `vmap` over Python loops for per-sequence/per-time computations; use `lax.scan` for recurrences.

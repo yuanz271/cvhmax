@@ -29,7 +29,11 @@ from cvhmax.readout import (
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 
-from .helpers import sample_gp_latents
+from .helpers import ATOL_TIGHT, RTOL_TIGHT, X64_ENABLED, sample_gp_latents
+
+# Stationarity of the Laplace MAP is a gradient-residual check; float32
+# cannot resolve it below the objective's rounding scale.
+ATOL_STATIONARY = 1e-5 if X64_ENABLED else 2e-2
 
 
 def _ard_fit(y, valid, m, V, **kwargs):
@@ -107,7 +111,7 @@ def test_poisson_ard_laplace_evidence_matches_quadrature(alpha_shape, alpha_rate
             (value[None, 1:], value[:1]), y, valid, m, V, penalty
         )
 
-    npt.assert_allclose(jax.grad(objective)(beta), 0.0, atol=1e-5)
+    npt.assert_allclose(jax.grad(objective)(beta), 0.0, atol=ATOL_STATIONARY)
     covariance = jnp.linalg.inv(jax.hessian(objective)(beta))
     gamma = 1.0 - alpha * covariance[1, 1]
     next_alpha = (gamma + 2 * alpha_shape - 2) / (params.C[0, 0] ** 2 + 2 * alpha_rate)
@@ -539,25 +543,36 @@ def test_poisson_step_stats_track_the_objective_derivatives():
         k, K_stats = poisson_cvi_step_stats_latent(m, V, y, valid_y, C, d)
         eta = C @ m + d + 0.5 * jnp.einsum("nk,kl,nl->n", C, V, C)
         rate_deriv = jax.vmap(jax.grad(_capped_exp))(eta)
+        # Above the cap the information entries reach 1e3, so an absolute budget
+        # has to follow the magnitude rather than sit at the rounding floor.
+        atol = ATOL_TIGHT * float(jnp.abs(K_stats).max())
 
         if capped:
             assert jnp.all(eta > MAX_LOGRATE), "fixture must exercise the cap"
             npt.assert_allclose(np.asarray(hess), 0.0, atol=1e-10)
         else:
             assert jnp.all(eta < MAX_LOGRATE), "fixture must stay below the cap"
-            npt.assert_allclose(np.asarray(hess), np.asarray(K_stats), rtol=1e-10, atol=1e-10)
+            npt.assert_allclose(
+                np.asarray(hess), np.asarray(K_stats), rtol=RTOL_TIGHT, atol=atol
+            )
 
         npt.assert_allclose(
-            np.asarray(grad), np.asarray(C.T @ (rate_deriv - y)), rtol=1e-10, atol=1e-10
+            np.asarray(grad),
+            np.asarray(C.T @ (rate_deriv - y)),
+            rtol=RTOL_TIGHT,
+            atol=atol,
         )
         npt.assert_allclose(
             np.asarray(K_stats),
             np.asarray(C.T @ jnp.diag(rate_deriv) @ C),
-            rtol=1e-10,
-            atol=1e-10,
+            rtol=RTOL_TIGHT,
+            atol=atol,
         )
         npt.assert_allclose(
-            np.asarray(k), np.asarray(K_stats @ m - grad), rtol=1e-10, atol=1e-10
+            np.asarray(k),
+            np.asarray(K_stats @ m - grad),
+            rtol=RTOL_TIGHT,
+            atol=atol,
         )
 
 
