@@ -15,9 +15,10 @@ from jax import numpy as jnp
 from cvhmax import CVHM
 from cvhmax.cvi import CVI
 from cvhmax.hm import HidaMatern
+
+from .helpers import sample_gp_latents
 from cvhmax.readout import ard_fit_laplace, loading_settings
 from cvhmax.readout import Params
-from cvhmax.simulate import sample_gp_latents
 
 
 def _binomial_nll(eta, y):

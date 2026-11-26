@@ -19,7 +19,8 @@ from cvhmax.cvi import (
 from cvhmax.readout import ard_evidence, loading_settings, resolve_alpha
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
-from cvhmax.simulate import sample_gp_latents
+
+from .helpers import sample_gp_latents
 
 
 def _ard_fit(y, valid, m, V, **kwargs):

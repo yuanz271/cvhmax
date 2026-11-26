@@ -22,9 +22,6 @@
   M-step while retaining CVI for latent inference.
 - Added `cvhmax.readout` with the shared readout fitting functions: penalty,
   conjugate solve, ridge fit, both ARD fits, and the loading evidence.
-- Added `cvhmax.simulate` with seeded synthetic-data generators
-  (`sample_gp_latents`, `simulate_vdp`, `standardize`), shared by the demos and
-  tests in place of per-file copies.
 
 ### Changed
 

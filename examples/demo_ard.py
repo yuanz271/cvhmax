@@ -36,7 +36,10 @@ from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
-from cvhmax.simulate import simulate_vdp, standardize
+
+# The oscillator belongs to the demo that introduced it. Run this file as a script
+# so the examples directory is on the import path.
+from demo_vdp import simulate_vdp, standardize
 
 config.update("jax_enable_x64", True)
 
@@ -167,7 +170,7 @@ def main():
 
     # --- Gaussian: 2 true latents, 5 fitted ---
     n_sequences, n_time, n_features = 4, 500, 30
-    truth = standardize(simulate_vdp(n_sequences, n_time, dt, rng))[0]
+    truth, _, _ = standardize(simulate_vdp(n_sequences, n_time, dt, rng=rng))
     loadings = rng.standard_normal((n_features, N_TRUE))
     loadings /= np.linalg.norm(loadings, axis=0, keepdims=True)
     y_gaussian = jnp.asarray(
@@ -177,7 +180,7 @@ def main():
 
     # --- Poisson: the same question on count data, with a smaller dataset ---
     n_sequences, n_time, n_features = 2, 200, 8
-    truth_counts = standardize(simulate_vdp(n_sequences, n_time, dt, rng))[0]
+    truth_counts, _, _ = standardize(simulate_vdp(n_sequences, n_time, dt, rng=rng))
     loadings_counts = rng.standard_normal((n_features, N_TRUE))
     loadings_counts /= np.linalg.norm(loadings_counts, axis=0, keepdims=True)
     rates = np.exp(1.5 + 0.8 * truth_counts @ loadings_counts.T)

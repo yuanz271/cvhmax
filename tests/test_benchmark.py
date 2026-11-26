@@ -22,7 +22,6 @@ from jax import numpy as jnp
 from cvhmax.cvhm import CVHM
 from cvhmax.readout import Params
 from cvhmax.hm import HidaMatern
-from cvhmax.simulate import simulate_vdp, standardize
 from cvhmax.utils import pad_sequences, unpad_sequences
 
 # ---------------------------------------------------------------------------
@@ -40,6 +39,31 @@ N_LATENTS = 2
 BASELINE_RATE = 5.0
 
 
+# This generator deliberately duplicates the one in ``examples/demo_vdp.py``. The
+# R² floor below is a regression guard, so its data must not move when someone
+# edits a demo.
+def _vdp_rhs(state, mu):
+    x, v = state
+    return np.array([v, mu * (1 - x**2) * v - x])
+
+
+def _simulate_vdp(rng, n_sequences, T, dt, mu, noise_std=0.05):
+    sqrt_dt = np.sqrt(dt)
+    out = np.empty((n_sequences, T, 2))
+    for sequence in range(n_sequences):
+        s = np.array([2.0 + rng.normal(0, 0.1), rng.normal(0, 0.1)])
+        for t in range(T):
+            out[sequence, t] = s
+            s = s + _vdp_rhs(s, mu) * dt + noise_std * sqrt_dt * rng.standard_normal(2)
+    return out
+
+
+def _standardize(x):
+    flat = x.reshape(-1, x.shape[-1])
+    mu, sigma = flat.mean(0), flat.std(0)
+    return (x - mu) / sigma
+
+
 def _r2(m, x_true):
     """Pooled R² after affine alignment."""
     K = m.shape[-1]
@@ -55,8 +79,8 @@ def _r2(m, x_true):
 
 def _make_data(rng):
     """Simulate VdP + Poisson observations (deterministic given rng)."""
-    x_raw = simulate_vdp(N_SEQUENCES, T, DT, rng, mu=MU)
-    x_std, _, _ = standardize(x_raw)
+    x_raw = _simulate_vdp(rng, N_SEQUENCES, T, DT, MU)
+    x_std = _standardize(x_raw)
 
     C_true = rng.standard_normal((N_OBS, N_LATENTS))
     C_true /= np.linalg.norm(C_true, axis=0, keepdims=True)

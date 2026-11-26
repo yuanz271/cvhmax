@@ -22,8 +22,9 @@ from cvhmax.cvi import (
 )
 from cvhmax.cvhm import CVHM, lift, project
 from cvhmax.hm import HidaMatern
-from cvhmax.simulate import sample_gp_latents
 from cvhmax.utils import pad_sequences
+
+from .helpers import sample_gp_latents
 
 
 def test_masked_gaussian_information_matches_observed_rows():
