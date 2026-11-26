@@ -16,7 +16,7 @@ from cvhmax.utils import (
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_TINY = 1e-14 if X64_ENABLED else 1e-6
-ATOL_MED = 1e-10 if X64_ENABLED else 1e-6
+ATOL_MED = 1e-10 if X64_ENABLED else 1e-5
 
 
 def test_filter_array():

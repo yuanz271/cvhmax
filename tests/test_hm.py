@@ -14,6 +14,9 @@ from cvhmax import hm
 from cvhmax.hm import HidaMatern, Ks, make_Ks, matern, spectral_density
 from cvhmax.utils import conjtrans, real_repr
 
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_TIGHT = 1e-12 if X64_ENABLED else 1e-6
+
 
 @pytest.mark.parametrize("order,expected_nple", [(0, 1), (1, 2), (2, 3)])
 def test_Ks(order, expected_nple):
@@ -68,9 +71,9 @@ def test_Ks_is_raw_and_HidaMatern_K_has_instantaneous_jitter():
     stabilized_zero = np.asarray(model.K(0.0))
     stabilized_lag = np.asarray(model.K(0.4))
     npt.assert_allclose(
-        stabilized_zero, raw_zero + 1e-3 * np.eye(model.nple), atol=1e-12
+        stabilized_zero, raw_zero + 1e-3 * np.eye(model.nple), atol=ATOL_TIGHT
     )
-    npt.assert_allclose(stabilized_lag, raw_lag, atol=1e-12)
+    npt.assert_allclose(stabilized_lag, raw_lag, atol=ATOL_TIGHT)
 
 
 def test_dynamics_jitter_is_explicit_and_effective():
@@ -81,7 +84,7 @@ def test_dynamics_jitter_is_explicit_and_effective():
     npt.assert_allclose(
         stabilized,
         np.asarray(HidaMatern(**params, s=1e-5).Qf(1e-3)),
-        atol=1e-12,
+        atol=ATOL_TIGHT,
     )
 
 
@@ -92,17 +95,17 @@ def test_dynamics_use_raw_positive_lag_covariance():
     Kt = np.asarray(hm.Ks(params, tau))
     expected = K0 - Kt @ np.linalg.solve(K0, Kt.conj().T)
     actual = np.asarray(hm.Qf(params, tau, jitter=1e-3))
-    npt.assert_allclose(actual, expected, atol=1e-12)
+    npt.assert_allclose(actual, expected, atol=ATOL_TIGHT)
 
 
 def test_zero_step_dynamics_are_identity_and_noiseless():
     params = {"sigma": 1.0, "rho": 1.0, "omega": 0.0, "order": 1}
     K0 = np.asarray(hm.Ks(params, 0.0)) + 1e-3 * np.eye(2)
-    npt.assert_allclose(hm.Af(params, 0.0, jitter=1e-3), np.eye(2), atol=1e-12)
-    npt.assert_allclose(hm.Ab(params, 0.0, jitter=1e-3), np.eye(2), atol=1e-12)
-    npt.assert_allclose(hm.Qf(params, 0.0, jitter=1e-3), 0.0, atol=1e-12)
-    npt.assert_allclose(hm.Qb(params, 0.0, jitter=1e-3), 0.0, atol=1e-12)
-    npt.assert_allclose(hm.Ks(params, 0.0), K0 - 1e-3 * np.eye(2), atol=1e-12)
+    npt.assert_allclose(hm.Af(params, 0.0, jitter=1e-3), np.eye(2), atol=ATOL_TIGHT)
+    npt.assert_allclose(hm.Ab(params, 0.0, jitter=1e-3), np.eye(2), atol=ATOL_TIGHT)
+    npt.assert_allclose(hm.Qf(params, 0.0, jitter=1e-3), 0.0, atol=ATOL_TIGHT)
+    npt.assert_allclose(hm.Qb(params, 0.0, jitter=1e-3), 0.0, atol=ATOL_TIGHT)
+    npt.assert_allclose(hm.Ks(params, 0.0), K0 - 1e-3 * np.eye(2), atol=ATOL_TIGHT)
 
 
 def test_state_covariance_rejects_unsupported_orders():

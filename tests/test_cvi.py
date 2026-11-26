@@ -31,6 +31,13 @@ from cvhmax.hm import HidaMatern
 
 from .helpers import sample_gp_latents
 
+X64_ENABLED = jax.config.read("jax_enable_x64")
+ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+RTOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+# Stationarity of the Laplace MAP is a gradient-residual check; float32
+# cannot resolve it below the objective's rounding scale.
+ATOL_STATIONARY = 1e-5 if X64_ENABLED else 2e-2
+
 
 def _ard_fit(y, valid, m, V, **kwargs):
     """Fit Gaussian ARD through the readout path; return params and precisions."""
@@ -107,7 +114,7 @@ def test_poisson_ard_laplace_evidence_matches_quadrature(alpha_shape, alpha_rate
             (value[None, 1:], value[:1]), y, valid, m, V, penalty
         )
 
-    npt.assert_allclose(jax.grad(objective)(beta), 0.0, atol=1e-5)
+    npt.assert_allclose(jax.grad(objective)(beta), 0.0, atol=ATOL_STATIONARY)
     covariance = jnp.linalg.inv(jax.hessian(objective)(beta))
     gamma = 1.0 - alpha * covariance[1, 1]
     next_alpha = (gamma + 2 * alpha_shape - 2) / (params.C[0, 0] ** 2 + 2 * alpha_rate)
@@ -545,19 +552,27 @@ def test_poisson_step_stats_track_the_objective_derivatives():
             npt.assert_allclose(np.asarray(hess), 0.0, atol=1e-10)
         else:
             assert jnp.all(eta < MAX_LOGRATE), "fixture must stay below the cap"
-            npt.assert_allclose(np.asarray(hess), np.asarray(K_stats), rtol=1e-10, atol=1e-10)
+            npt.assert_allclose(
+            np.asarray(hess), np.asarray(K_stats), rtol=RTOL_TIGHT, atol=ATOL_TIGHT
+        )
 
         npt.assert_allclose(
-            np.asarray(grad), np.asarray(C.T @ (rate_deriv - y)), rtol=1e-10, atol=1e-10
+            np.asarray(grad),
+            np.asarray(C.T @ (rate_deriv - y)),
+            rtol=RTOL_TIGHT,
+            atol=ATOL_TIGHT,
         )
         npt.assert_allclose(
             np.asarray(K_stats),
             np.asarray(C.T @ jnp.diag(rate_deriv) @ C),
-            rtol=1e-10,
-            atol=1e-10,
+            rtol=RTOL_TIGHT,
+            atol=ATOL_TIGHT,
         )
         npt.assert_allclose(
-            np.asarray(k), np.asarray(K_stats @ m - grad), rtol=1e-10, atol=1e-10
+            np.asarray(k),
+            np.asarray(K_stats @ m - grad),
+            rtol=RTOL_TIGHT,
+            atol=ATOL_TIGHT,
         )
 
 

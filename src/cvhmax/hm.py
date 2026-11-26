@@ -24,8 +24,13 @@ from .utils import TAU, conjtrans
 
 
 def _kernel_compute_dtype() -> jnp.dtype:
-    """Return the dtype used for numerically sensitive kernel computations."""
-    return jnp.float64
+    """Return the dtype used for numerically sensitive kernel computations.
+
+    The widest precision the session actually has: float64 with x64 enabled,
+    float32 otherwise. Requesting float64 unconditionally only makes JAX truncate
+    it, with a warning per call.
+    """
+    return jnp.result_type(1.0)
 
 
 def _kernel_output_dtype(*values) -> jnp.dtype:

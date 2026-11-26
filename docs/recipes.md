@@ -33,7 +33,9 @@ See `data-model.md` for the full workflow and API details.
 
 - Reduce `max_iter` and `cvi_iter` to test workflows quickly.
 - Start with fewer latent components (`K`) or shorter sequences.
-- Enable 64-bit precision in JAX if you need maximum numerical stability.
+- Enable 64-bit precision in JAX (`JAX_ENABLE_X64=1`) if you need maximum
+  numerical stability; float32 is supported and reaches the same accuracy on the
+  benchmark, at roundoff near `1e-7`.
 
 ## Performance Tips
 

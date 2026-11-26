@@ -88,7 +88,7 @@ def _make_data(rng):
 
     log_rate = np.einsum("ntl,ol->nto", x_std, C_true) + d_true[None, None, :]
     y_np = rng.poisson(np.exp(log_rate))
-    y = jnp.asarray(y_np, dtype=jnp.float64)
+    y = jnp.asarray(y_np)
 
     return y, y_np, x_std, C_true, d_true
 
@@ -175,7 +175,7 @@ def test_benchmark_variable_length():
 
     sequence_lengths_np = rng.integers(250, 501, size=N_SEQUENCES)
     y_list = [
-        jnp.asarray(y_np[i, :tl], dtype=jnp.float64)
+        jnp.asarray(y_np[i, :tl])
         for i, tl in enumerate(sequence_lengths_np)
     ]
     x_list = [x_std[i, :tl] for i, tl in enumerate(sequence_lengths_np)]

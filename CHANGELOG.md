@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- float32 support. The kernel compute dtype follows the session's precision
+  instead of requesting float64, so `JAX_ENABLE_X64=0` no longer warns on every
+  kernel call, and the test suite passes in both precisions.
+
 ## 0.6.0
 
 ### Breaking changes
