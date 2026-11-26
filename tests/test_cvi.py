@@ -29,11 +29,8 @@ from cvhmax.readout import (
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 
-from .helpers import sample_gp_latents
+from .helpers import ATOL_TIGHT, RTOL_TIGHT, X64_ENABLED, sample_gp_latents
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
-ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
-RTOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
 # Stationarity of the Laplace MAP is a gradient-residual check; float32
 # cannot resolve it below the objective's rounding scale.
 ATOL_STATIONARY = 1e-5 if X64_ENABLED else 2e-2
@@ -546,6 +543,9 @@ def test_poisson_step_stats_track_the_objective_derivatives():
         k, K_stats = poisson_cvi_step_stats_latent(m, V, y, valid_y, C, d)
         eta = C @ m + d + 0.5 * jnp.einsum("nk,kl,nl->n", C, V, C)
         rate_deriv = jax.vmap(jax.grad(_capped_exp))(eta)
+        # Above the cap the information entries reach 1e3, so an absolute budget
+        # has to follow the magnitude rather than sit at the rounding floor.
+        atol = ATOL_TIGHT * float(jnp.abs(K_stats).max())
 
         if capped:
             assert jnp.all(eta > MAX_LOGRATE), "fixture must exercise the cap"
@@ -553,26 +553,26 @@ def test_poisson_step_stats_track_the_objective_derivatives():
         else:
             assert jnp.all(eta < MAX_LOGRATE), "fixture must stay below the cap"
             npt.assert_allclose(
-            np.asarray(hess), np.asarray(K_stats), rtol=RTOL_TIGHT, atol=ATOL_TIGHT
-        )
+                np.asarray(hess), np.asarray(K_stats), rtol=RTOL_TIGHT, atol=atol
+            )
 
         npt.assert_allclose(
             np.asarray(grad),
             np.asarray(C.T @ (rate_deriv - y)),
             rtol=RTOL_TIGHT,
-            atol=ATOL_TIGHT,
+            atol=atol,
         )
         npt.assert_allclose(
             np.asarray(K_stats),
             np.asarray(C.T @ jnp.diag(rate_deriv) @ C),
             rtol=RTOL_TIGHT,
-            atol=ATOL_TIGHT,
+            atol=atol,
         )
         npt.assert_allclose(
             np.asarray(k),
             np.asarray(K_stats @ m - grad),
             rtol=RTOL_TIGHT,
-            atol=ATOL_TIGHT,
+            atol=atol,
         )
 
 

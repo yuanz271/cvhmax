@@ -233,8 +233,9 @@ Precision is a property of the archive, not of the loading session. Each
 parameter's stored dtype is restored as written, so a `float64` archive loads as
 `float64` and a `float32` archive as `float32`, independently of
 `JAX_ENABLE_X64`. A session without 64-bit JAX cannot represent `float64`, so
-loading such an archive there truncates the arrays to `float32` and JAX warns
-once per tensor; the fit is still usable, at float32 precision.
+loading such an archive there truncates the arrays to `float32`, with a single
+`UserWarning` from the restore path; the fit is still usable, at float32
+precision.
 
 ## Supported types
 

@@ -14,8 +14,8 @@ from cvhmax import hm
 from cvhmax.hm import HidaMatern, Ks, make_Ks, matern, spectral_density
 from cvhmax.utils import conjtrans, real_repr
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
-ATOL_TIGHT = 1e-12 if X64_ENABLED else 1e-6
+from .helpers import ATOL_TIGHT
+
 
 
 @pytest.mark.parametrize("order,expected_nple", [(0, 1), (1, 2), (2, 3)])
@@ -281,6 +281,34 @@ print(json.dumps(payload))
     env["KERNEL_DTYPE"] = dtype
     result = subprocess.check_output([sys.executable, "-c", script], env=env)
     return json.loads(result)
+
+
+def test_float32_session_requests_no_float64_kernel_dtype():
+    """A 32-bit session must not ask for float64 and then be truncated.
+
+    The kernel compute dtype follows the session's default float dtype; asking
+    for float64 there emitted a ``UserWarning`` on every kernel call.
+    """
+    script = """
+import warnings
+
+import jax.numpy as jnp
+
+from cvhmax.hm import HidaMatern
+
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    model = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=2, s=1e-5)
+    K0 = model.K(0.0)
+    Q = model.Qf(1e-3)
+
+assert K0.dtype == jnp.complex64, K0.dtype
+assert Q.dtype == jnp.complex64, Q.dtype
+float64_warnings = [w for w in caught if "float64" in str(w.message)]
+assert not float64_warnings, [str(w.message) for w in float64_warnings]
+"""
+    env = {**os.environ, "JAX_ENABLE_X64": "0", "JAX_PLATFORMS": "cpu"}
+    subprocess.run([sys.executable, "-c", script], env=env, check=True)
 
 
 def test_kernel_precision_parity_x64_toggle():

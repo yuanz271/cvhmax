@@ -17,10 +17,9 @@ from cvhmax.readout import (
 )
 from cvhmax.utils import real_repr
 
-from .helpers import sample_gp_latents
+from .helpers import ATOL_TIGHT, X64_ENABLED, sample_gp_latents
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
-ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+# Tighter than the shared budget: these compare two runs of identical code.
 ATOL_MED = 1e-12 if X64_ENABLED else 1e-6
 
 

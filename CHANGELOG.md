@@ -7,8 +7,11 @@
 - float32 support. The kernel compute dtype follows the session's precision
   instead of requesting float64, which JAX only truncated in a 32-bit session;
   mixed precision (float64 blocks, float32 outputs) is unchanged when x64 is
-  enabled, `JAX_ENABLE_X64=0` no longer warns on every kernel call, and the test
-  suite passes in both precisions. Run float32 with a non-zero
+  enabled and `JAX_ENABLE_X64=0` no longer warns on every kernel call. The test
+  suite passes in both precisions on CPU. Kernel dynamics are always computed at
+  full matmul precision, so process noise stays positive definite on a GPU; the
+  rest of a float32 GPU pipeline inherits TF32 rounding unless
+  `JAX_DEFAULT_MATMUL_PRECISION=highest` is set. Run float32 with a non-zero
   `HidaMatern(s=...)`: the process noise loses positive definiteness at small
   `dt` without it.
 

@@ -1,7 +1,17 @@
 """Shared scaffolding for the test suite. Not part of the package."""
 
+import jax
 import numpy as np
 from jax import numpy as jnp
+
+X64_ENABLED = jax.config.jax_enable_x64
+
+#: Tolerances for comparisons that are exact in float64. float32 roundoff is
+#: about eight orders coarser, and an accelerator's reduced-precision matmuls
+#: coarser still, which is why the float32 budget is not scaled from eps.
+ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+RTOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
+ATOL_MED = 1e-10 if X64_ENABLED else 1e-5
 
 
 def sample_gp_latents(kernel, n_time, dt, n_latents, rng, n_sequences=1, jitter=None):

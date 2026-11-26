@@ -23,11 +23,8 @@ from cvhmax.cvhm import CVHM, lift, project
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences
 
-from .helpers import sample_gp_latents
+from .helpers import ATOL_TIGHT, RTOL_TIGHT, X64_ENABLED, sample_gp_latents
 
-X64_ENABLED = jax.config.read("jax_enable_x64")
-ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
-RTOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
 # Subtracting two objectives of order ten leaves float32 rounding of a few ulps.
 ATOL_DIFFERENCE = 1e-10 if X64_ENABLED else 1e-5
 

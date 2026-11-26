@@ -24,11 +24,12 @@ from .utils import TAU, conjtrans
 
 
 def _kernel_compute_dtype() -> jnp.dtype:
-    """Return the dtype used for numerically sensitive kernel computations.
+    """Return the session's default float dtype for kernel computations.
 
-    The widest precision the session actually has: float64 with x64 enabled,
-    float32 otherwise. Requesting float64 unconditionally only makes JAX truncate
-    it, with a warning per call.
+    That is float64 with ``jax_enable_x64`` and float32 otherwise. Requesting
+    float64 unconditionally makes JAX truncate it in a 32-bit session, warning at
+    every call site. A caller who wants the blocks in a specific precision passes
+    ``compute_dtype`` explicitly.
     """
     return jnp.result_type(1.0)
 
@@ -270,15 +271,22 @@ def _adaptive_cholesky(K0, *, jitter):
 
 
 def _dynamics_from_covariances(K0, Kt, *, jitter=0.0):
-    """Derive dynamics using a Cholesky solve and conditional covariance."""
+    """Derive dynamics using a Cholesky solve and conditional covariance.
+
+    Pinned to the highest matmul precision: ``K0 - Kt K0^{-1} Kt^H`` subtracts
+    nearly equal covariances, and the reduced precision of float32 matmuls on an
+    accelerator turns the result indefinite. The blocks are a few rows wide, so
+    the pin costs nothing measurable.
+    """
     K0 = _hermitian(K0)
-    chol, K0 = _adaptive_cholesky(K0, jitter=jitter)
-    def solve_K0(rhs):
-        return jsp.linalg.cho_solve((chol, True), rhs)
-    forward = conjtrans(solve_K0(conjtrans(Kt)))
-    forward_noise = K0 - Kt @ solve_K0(conjtrans(Kt))
-    backward = conjtrans(solve_K0(Kt))
-    backward_noise = K0 - conjtrans(Kt) @ solve_K0(Kt)
+    with jax.default_matmul_precision("highest"):
+        chol, K0 = _adaptive_cholesky(K0, jitter=jitter)
+        def solve_K0(rhs):
+            return jsp.linalg.cho_solve((chol, True), rhs)
+        forward = conjtrans(solve_K0(conjtrans(Kt)))
+        forward_noise = K0 - Kt @ solve_K0(conjtrans(Kt))
+        backward = conjtrans(solve_K0(Kt))
+        backward_noise = K0 - conjtrans(Kt) @ solve_K0(Kt)
     return _Dynamics(
         forward,
         _stabilize_covariance(forward_noise),
