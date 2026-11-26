@@ -1,8 +1,12 @@
 """Automatic relevance determination: how many latents does the data need?
 
-Simulates two Van der Pol latent trajectories, observes them through a
-Gaussian readout, and fits a model with more latents than the data contains.
-The same data, kernels, and initialisation are used with two loading kinds:
+Simulates Van der Pol latent trajectories and fits more latents than the data
+contains, under two observation models:
+
+* **Gaussian**, with a moderate noise level.
+* **Poisson** counts, using the Laplace approximation ARD needs there.
+
+Each is fitted with two loading kinds on the same data:
 
 * ``"ridge"`` holds every loading precision at a fixed value, so the surplus
   latents are shrunk but keep a small nonzero loading.
@@ -15,8 +19,10 @@ effective dimensionality is read off. The absolute value of a precision depends
 on the latent scale and on the guard prior's constants, so any threshold is a
 choice made per fit.
 
-ARD needs a conjugate loading representation, so it is available for the
-Gaussian readout and not for Poisson.
+The Poisson section uses a smaller dataset and fewer fixed-point iterations
+than the Gaussian one: each Poisson M-step differentiates the objective per
+feature and time step, which costs more per iteration and makes the default
+``iterations=50`` needlessly expensive for a demonstration.
 
 Usage::
 
@@ -57,7 +63,7 @@ def simulate_vdp(n_sequences, n_time, dt, rng, mu=1.0, noise_std=0.05):
     return (x - flat.mean(axis=0)) / flat.std(axis=0)
 
 
-def fit(y, loading, dt):
+def fit(y, loading, dt, observation, *, loading_config=None, cvi_iter=20):
     """Fit an over-specified model with the given loading kind."""
     kernels = [
         HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5) for _ in range(N_FIT)
@@ -66,8 +72,10 @@ def fit(y, loading, dt):
         n_components=N_FIT,
         dt=dt,
         kernels=kernels,
-        observation="Gaussian",
+        observation=observation,
         loading=loading,
+        loading_config=loading_config,
+        cvi_iter=cvi_iter,
         max_iter=500,
         tol=1e-3,
         min_iter=5,
@@ -92,85 +100,115 @@ def latent_recovery(model, truth):
     return 1.0 - residual.var(axis=0) / target.var(axis=0), keep
 
 
-def main():
-    rng = np.random.default_rng(2024)
-    n_sequences, n_time, dt = 4, 500, 0.02
-    n_features, noise_std = 30, 0.4
-
-    truth = simulate_vdp(n_sequences, n_time, dt, rng)
-    loadings = rng.standard_normal((n_features, N_TRUE))
-    loadings /= np.linalg.norm(loadings, axis=0, keepdims=True)
-    y = truth @ loadings.T + noise_std * rng.standard_normal(
-        (n_sequences, n_time, n_features)
-    )
-    y = jnp.asarray(y)
+def run_case(y, truth, dt, observation, *, loading_config=None, cvi_iter=20):
+    """Fit both loading kinds on one dataset and report what each retained."""
     print(
-        f"{N_TRUE} true latents, {N_FIT} fitted latents; "
+        f"\n{observation}: {N_TRUE} true latents, {N_FIT} fitted; "
         f"data {tuple(y.shape)} (sequences, time, features)"
     )
-
-    fits = {name: fit(y, name, dt) for name in ("ridge", "ard")}
-
     results = {}
-    for name, model in fits.items():
+    for loading in ("ridge", "ard"):
+        config_ = loading_config if loading == "ard" else None
+        model = fit(y, loading, dt, observation, loading_config=config_, cvi_iter=cvi_iter)
         norms = np.linalg.norm(np.asarray(model.params.C), axis=0)
+        precision = np.asarray(model.params.alpha)
         r2, keep = latent_recovery(model, truth)
-        results[name] = (norms, r2, keep)
-        print(f"\n{name}: {model.n_iter_} iterations, converged={model.converged_}")
-        print("  loading norm per latent :", np.array2string(norms, precision=3))
-        print("  precision per latent    :", np.array2string(np.asarray(model.params.alpha), precision=3))
-        print(f"  true-latent R² on the {N_TRUE} strongest fitted latents:",
-              np.array2string(r2, precision=3))
+        results[loading] = {
+            "model": model,
+            "norms": norms,
+            "precision": precision,
+            "r2": r2,
+            "keep": keep,
+        }
+        print(f"  {loading}: {model.n_iter_} iterations, converged={model.converged_}")
+        print("    loading norm per latent :", np.array2string(norms, precision=3))
+        print("    precision per latent    :", np.array2string(precision, precision=3))
+        print(
+            f"    true-latent R² on the {N_TRUE} strongest fitted latents:",
+            np.array2string(r2, precision=3),
+        )
 
-    ard = fits["ard"]
-    precision = np.asarray(ard.params.alpha)
-    order = np.argsort(precision)
+    ard = results["ard"]
+    order = np.argsort(ard["precision"])
+    ranked = ard["precision"][order]
     print(
-        "\nARD ranking (smallest precision first): "
-        + ", ".join(f"latent {k}: {precision[k]:.3g}" for k in order)
+        "  ARD ranking (smallest precision first): "
+        + ", ".join(f"latent {k}: {ard['precision'][k]:.3g}" for k in order)
     )
     print(
-        f"Precision gap between the {N_TRUE}nd and {N_TRUE + 1}rd ranked latent: "
-        f"{precision[order[N_TRUE]] / precision[order[N_TRUE - 1]]:.3g}x"
+        f"  precision gap between rank {N_TRUE} and {N_TRUE + 1}: "
+        f"{ranked[N_TRUE] / ranked[N_TRUE - 1]:.3g}x"
     )
+    return results
 
-    # --- Figure ---
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+def plot_case(axes, results, truth, observation, dt):
+    """One row: fitted precisions, surplus loadings, recovered latents."""
+    ard = results["ard"]
+    model = ard["model"]
     index = np.arange(N_FIT)
 
-    axes[0].bar(index, np.log10(precision), color="tab:blue")
+    axes[0].bar(index, np.log10(ard["precision"]), color="tab:blue")
     axes[0].set_xticks(index)
     axes[0].set_xlabel("fitted latent")
     axes[0].set_ylabel(r"$\log_{10}$ fitted precision $\alpha_k$")
-    axes[0].set_title("ARD precisions")
+    axes[0].set_title(f"{observation}: ARD precisions")
 
     width = 0.38
-    axes[1].bar(
-        index - width / 2, results["ridge"][0], width, label="ridge", color="tab:gray"
-    )
-    axes[1].bar(
-        index + width / 2, results["ard"][0], width, label="ARD", color="tab:blue"
-    )
+    axes[1].bar(index - width / 2, results["ridge"]["norms"], width,
+                label="ridge", color="tab:gray")
+    axes[1].bar(index + width / 2, ard["norms"], width, label="ARD", color="tab:blue")
     axes[1].set_yscale("symlog", linthresh=1e-3)
     axes[1].set_xticks(index)
     axes[1].set_xlabel("fitted latent")
     axes[1].set_ylabel(r"loading norm $\|C_{:,k}\|$ (symlog)")
-    axes[1].set_title("Surplus loadings: shrunk vs. removed")
+    axes[1].set_title(f"{observation}: surplus loadings")
     axes[1].legend()
 
-    keep = results["ard"][2]
-    means = np.asarray(ard.posterior[0])[0][:, keep]
+    keep = ard["keep"]
+    means = np.asarray(model.posterior[0])[0][:, keep]
     design = np.column_stack([means, np.ones(len(means))])
-    fitted, *_ = np.linalg.lstsq(design, truth[0], rcond=None)
-    recovered = design @ fitted
-    time = np.arange(n_time) * dt
+    coefficients, *_ = np.linalg.lstsq(design, truth[0], rcond=None)
+    recovered = design @ coefficients
+    time = np.arange(len(recovered)) * dt
     for k, label in enumerate(("position", "velocity")):
         axes[2].plot(time, truth[0][:, k], color=f"C{k}", lw=1.2, label=f"true {label}")
-        axes[2].plot(time, recovered[:, k], color=f"C{k}", lw=1.2, ls="--", label=f"ARD {label}")
+        axes[2].plot(time, recovered[:, k], color=f"C{k}", lw=1.2, ls="--",
+                     label=f"ARD {label}")
     axes[2].set_xlabel("time")
-    axes[2].set_title("Latents recovered by ARD (sequence 0)")
+    axes[2].set_title(f"{observation}: latents recovered by ARD (sequence 0)")
     axes[2].legend(fontsize=8, ncol=2)
 
+
+def main():
+    rng = np.random.default_rng(2024)
+    dt = 0.02
+
+    # --- Gaussian: 2 true latents, 5 fitted ---
+    n_sequences, n_time, n_features = 4, 500, 30
+    truth = simulate_vdp(n_sequences, n_time, dt, rng)
+    loadings = rng.standard_normal((n_features, N_TRUE))
+    loadings /= np.linalg.norm(loadings, axis=0, keepdims=True)
+    y_gaussian = jnp.asarray(
+        truth @ loadings.T + 0.4 * rng.standard_normal((n_sequences, n_time, n_features))
+    )
+    gaussian = run_case(y_gaussian, truth, dt, "Gaussian")
+
+    # --- Poisson: the same question on count data, with a smaller dataset ---
+    n_sequences, n_time, n_features = 2, 200, 8
+    truth_counts = simulate_vdp(n_sequences, n_time, dt, rng)
+    loadings_counts = rng.standard_normal((n_features, N_TRUE))
+    loadings_counts /= np.linalg.norm(loadings_counts, axis=0, keepdims=True)
+    rates = np.exp(1.5 + 0.8 * truth_counts @ loadings_counts.T)
+    y_poisson = jnp.asarray(rng.poisson(rates).astype(float))
+    poisson = run_case(
+        y_poisson, truth_counts, dt, "Poisson",
+        loading_config={"iterations": 5}, cvi_iter=10,
+    )
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+    plot_case(axes[0], gaussian, truth, "Gaussian", dt)
+    plot_case(axes[1], poisson, truth_counts, "Poisson", dt)
     fig.suptitle(f"ARD with {N_FIT} fitted latents, {N_TRUE} in the data")
     fig.tight_layout()
     fig.savefig("examples/demo_ard.pdf")
