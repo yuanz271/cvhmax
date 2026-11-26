@@ -311,7 +311,7 @@ Where it appears:
 
 - `filtering.py` — predict/update steps, `bifilter` smoother
 - `cvhm.py` — initial conditions (`z0 = 0`, `Z0 = inv(Q0)`), `sde2gp` (`solve(Z, z)`, `inv(Z)`)
-- `cvi.py` — CVI loop inputs/outputs, pseudo-observation updates
+- `cvi.py`, `gaussian.py`, `poisson.py` — CVI loop inputs/outputs, pseudo-observation updates
 
 Key property: the filter update is additive.
 

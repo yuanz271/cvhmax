@@ -110,7 +110,7 @@ explicitly and compares the loading Gram `C C^T`, `d`, and `R` for convergence;
 the Gram is invariant to latent rotation, so the same criterion serves every
 loading kind. `Params.alpha` is reported, not compared.
 
-Source: `src/cvhmax/cvi.py`
+Source: `src/cvhmax/cvi.py` (base), `src/cvhmax/gaussian.py`, `src/cvhmax/poisson.py`, `src/cvhmax/readout.py`
 
 ## Conversion Helpers
 

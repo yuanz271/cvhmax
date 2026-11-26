@@ -28,6 +28,10 @@
 
 ### Changed
 
+- Split `cvhmax.cvi` by observation model: `Gaussian` is in `cvhmax.gaussian`, and
+  `Poisson` with `MAX_LOGRATE` and its numerics is in `cvhmax.poisson`. `CVI` and
+  the shared Factor Analysis start stay in `cvhmax.cvi`. `from cvhmax import
+  Gaussian, Poisson` is unchanged.
 - Moved `TAU = 1e-6` from `cvhmax.cvi` to `cvhmax.utils` as the one diagonal jitter for
   numerical positive-definiteness. It replaces the loading-Hessian damping of
   `1e-10` (results change by about 1e-7 or less) and is the default of

@@ -17,7 +17,7 @@ from cvhmax.hm import HidaMatern, Ks, spectral_density
 from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
 from cvhmax.utils import real_repr, symm, sequence_info_repr
 from cvhmax.filtering import predict, information_filter, bifilter
-from cvhmax.cvi import poisson_cvi_step_stats_latent
+from cvhmax.poisson import poisson_cvi_step_stats_latent
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_PARITY = 1e-10 if X64_ENABLED else 5e-6
@@ -443,7 +443,7 @@ def test_poisson_cvi_step_parity():
 
     # --- cvhmax: run Poisson.initialize_info ---
     from cvhmax.readout import Params
-    from cvhmax.cvi import Poisson
+    from cvhmax.poisson import Poisson
     from jax import vmap
 
     # Both implementations use the same loading C.

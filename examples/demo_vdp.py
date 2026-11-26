@@ -26,8 +26,9 @@ from jax import config
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import MAX_LOGRATE, Params
 from cvhmax.hm import HidaMatern
+from cvhmax.poisson import MAX_LOGRATE
+from cvhmax.readout import Params
 from cvhmax.utils import pad_sequences, unpad_sequences
 from vdp import simulate_vdp, standardize
 

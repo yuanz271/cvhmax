@@ -10,16 +10,22 @@ from jax import numpy as jnp
 from scipy.integrate import trapezoid
 from sklearn.linear_model import ARDRegression, LinearRegression
 
-from cvhmax.cvi import (
+from cvhmax.gaussian import Gaussian
+from cvhmax.poisson import (
     MAX_LOGRATE,
-    Params,
-    poisson_cvi_step_stats_latent,
-    _capped_exp,
-    poisson_readout_objective,
     Poisson,
-    Gaussian,
+    _capped_exp,
+    poisson_cvi_step_stats_latent,
+    poisson_readout_objective,
 )
-from cvhmax.readout import DEFAULTS, Loading, ard_evidence, loading_settings, resolve_alpha
+from cvhmax.readout import (
+    DEFAULTS,
+    Loading,
+    Params,
+    ard_evidence,
+    loading_settings,
+    resolve_alpha,
+)
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 

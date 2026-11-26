@@ -4,7 +4,9 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
-from cvhmax.cvi import CVI, MAX_LOGRATE, Gaussian, Poisson
+from cvhmax.cvi import CVI
+from cvhmax.gaussian import Gaussian
+from cvhmax.poisson import MAX_LOGRATE, Poisson
 from cvhmax.hm import HidaMatern, sample_matern
 from cvhmax.readout import (
     NONFINITE_EVIDENCE,

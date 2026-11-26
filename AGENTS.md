@@ -95,8 +95,8 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add new observation model | `src/cvhmax/cvi.py` | Subclass `CVI`; registry via `__init_subclass__` |
-| Add new loading estimator / prior | `src/cvhmax/estimator.py` | Subclass `Estimator`; registry via `__init_subclass__` |
+| Add new observation model | `src/cvhmax/<name>.py` | Subclass `CVI` (`cvi.py`); registry via `__init_subclass__`; see `gaussian.py`, `poisson.py` |
+| Adjust loading fits (ridge / ARD) | `src/cvhmax/readout.py` | Pure functions; observation models pick the fit per loading kind |
 | Adjust EM loop / training | `src/cvhmax/cvhm.py` | `CVHM.fit()`, `em_step` |
 | Filtering logic | `src/cvhmax/filtering.py` | `information_filter_step`, `bifilter` |
 | Kernel / dynamics blocks | `src/cvhmax/hm.py` | `Af/Qf/Ab/Qb`, `K(tau)` |
@@ -107,8 +107,8 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 
 ### Adding a New Observation Model
 
-1. Add a new `CVI` subclass in `src/cvhmax/cvi.py`.
-2. Ensure it registers via `__init_subclass__`.
+1. Add a new `CVI` subclass in its own module next to `gaussian.py` and `poisson.py`.
+2. Ensure it registers via `__init_subclass__` and is imported by `src/cvhmax/__init__.py`.
 3. Add tests under `tests/` mirroring the module layout.
 4. Update docstrings and `docs/api.md`.
 

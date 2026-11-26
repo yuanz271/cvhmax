@@ -10,7 +10,8 @@ from jax import Array, vmap
 from jax import numpy as jnp
 from jax.scipy.linalg import block_diag
 
-from .cvi import CVI, Gaussian
+from .cvi import CVI
+from .gaussian import Gaussian
 from .readout import (
     FAILURE_MESSAGES,
     READOUT_OK,

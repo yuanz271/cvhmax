@@ -1,6 +1,8 @@
 from ._version import __version__, __version_tuple__  # noqa: F401
 from .cvhm import CVHM, lift, project
-from .cvi import CVI, Gaussian, Poisson
+from .cvi import CVI
+from .gaussian import Gaussian
+from .poisson import Poisson
 from .hm import HidaMatern, Ks, make_Ks
 from .readout import Params
 from .utils import pad_sequences, unpad_sequences

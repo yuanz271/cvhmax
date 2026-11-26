@@ -10,12 +10,11 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from cvhmax.readout import loading_settings
-from cvhmax.cvi import (
+from cvhmax.readout import Params, loading_settings
+from cvhmax.gaussian import Gaussian
+from cvhmax.poisson import (
     MAX_LOGRATE,
-    Gaussian,
     Poisson,
-    Params,
     _capped_exp,
     poisson_cvi_step_stats_latent,
     poisson_readout_objective,
