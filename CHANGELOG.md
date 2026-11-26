@@ -2,18 +2,23 @@
 
 ## Unreleased
 
+## 0.6.1
+
 ### Added
 
 - float32 support. The kernel compute dtype follows the session's precision
-  instead of requesting float64, which JAX only truncated in a 32-bit session;
-  mixed precision (float64 blocks, float32 outputs) is unchanged when x64 is
-  enabled and `JAX_ENABLE_X64=0` no longer warns on every kernel call. The test
-  suite passes in both precisions on CPU. Kernel dynamics are always computed at
-  full matmul precision, so process noise stays positive definite on a GPU; the
-  rest of a float32 GPU pipeline inherits TF32 rounding unless
-  `JAX_DEFAULT_MATMUL_PRECISION=highest` is set. Run float32 with a non-zero
-  `HidaMatern(s=...)`: the process noise loses positive definiteness at small
-  `dt` without it.
+  instead of requesting float64, which JAX only truncated in a 32-bit session,
+  so `JAX_ENABLE_X64=0` no longer warns on every kernel call. Mixed precision
+  (float64 blocks, float32 outputs) is unchanged when x64 is enabled. The test
+  suite passes in float32 on CPU, and on a GPU at full matmul precision.
+- Kernel dynamics are computed at full matmul precision. The process noise
+  `K(0) - K(t) K(0)^{-1} K(t)^H` subtracts nearly equal covariances, and TF32
+  matmuls turned it indefinite on a GPU even with the default jitter. The rest
+  of a float32 GPU pipeline still inherits TF32 rounding, so set
+  `JAX_DEFAULT_MATMUL_PRECISION=highest` there to match float64 within the
+  documented accuracies.
+- float32 requires a non-zero `HidaMatern(s=...)`, the default `1e-5`: with
+  `s=0` the process noise loses positive definiteness at small `dt`.
 
 ## 0.6.0
 
