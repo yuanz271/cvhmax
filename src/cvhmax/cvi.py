@@ -155,7 +155,7 @@ class CVI:
     def solve_readout(
         cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
         m: Array, V: Array,
-    ) -> tuple[Params, Array]:
+    ) -> tuple[Params, float | Array]:
         """Fit the readout at the given loading kind.
 
         ``"ridge"`` and ``"fixed"`` are handled here for every readout. ``"ard"``
@@ -172,7 +172,7 @@ class CVI:
     @classmethod
     def solve_ard(
         cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
-    ) -> tuple[Params, Array]:
+    ) -> tuple[Params, float | Array]:
         """ARD readout M-step; overridden by readouts that declare ``"ard"``."""
         raise NotImplementedError(
             f"{cls.__name__} declares ARD but does not implement solve_ard"
@@ -400,7 +400,7 @@ class Gaussian(CVI):
     @override
     def solve_ard(
         cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
-    ) -> tuple[Params, Array]:
+    ) -> tuple[Params, float | Array]:
         """Fit Gaussian loadings against the exact conditional evidence."""
         y, valid_y, m, V = flattened(y, valid_y, m, V)
         terms = cls.loading_terms(y, valid_y, m, V)
@@ -763,7 +763,7 @@ class Poisson(CVI):
     @override
     def solve_ard(
         cls, settings: dict, params: Params, y: Array, valid_y: Array, m: Array, V: Array
-    ) -> tuple[Params, Array]:
+    ) -> tuple[Params, float | Array]:
         """Fit Poisson loadings against a Laplace approximation of the evidence."""
         y, valid_y, m, V = flattened(y, valid_y, m, V)
         return ard_fit_laplace(

@@ -118,9 +118,14 @@ def readout_change(params_new: Params, params_old: Params, *, ard: bool = False)
         _relative_change(params_new.R, params_old.R),
     )
     if ard:
+        alpha_new, alpha_old = params_new.alpha, params_old.alpha
+        if alpha_new is None or alpha_old is None:
+            raise ValueError(
+                "ARD convergence needs fitted loading precisions in both states"
+            )
         change = jnp.maximum(change, _relative_change(new, old))
         change = jnp.maximum(
-            change, jnp.max(jnp.abs(jnp.log(params_new.alpha) - jnp.log(params_old.alpha)))
+            change, jnp.max(jnp.abs(jnp.log(alpha_new) - jnp.log(alpha_old)))
         )
     return change
 
@@ -445,11 +450,11 @@ class CVHM:
         # warm start.
         if fits_ard and params.alpha is not None:
             configured = jnp.broadcast_to(jnp.asarray(params.alpha), (self.n_components,))
-        params = Params(C=params.C, d=params.d, R=params.R, alpha=configured)
         if fits_ard and not bool(
-            jnp.all(jnp.isfinite(params.alpha) & (params.alpha > 0))
+            jnp.all(jnp.isfinite(configured) & (configured > 0))
         ):
             raise ValueError("params.alpha must be finite and strictly positive")
+        params = Params(C=params.C, d=params.d, R=params.R, alpha=configured)
         context = self._inference_context(y.shape[0])
         gaussian = issubclass(self.cvi, Gaussian)
 
