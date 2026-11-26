@@ -23,6 +23,11 @@
 - If float64 is disabled, expect larger roundoff at small lags. For custom
   higher-order kernels, validate numerical conditioning separately rather than
   silently increasing jitter indefinitely.
+- Poisson rates are capped at `exp(MAX_LOGRATE)`, about 1100 counts per time
+  step, as a guard against overflow. It should never be active at a solution.
+  If a fit needs it, check the units of `y` (counts per bin, not per second) and
+  the scale of the data; the posterior covariance is not meaningful at the
+  affected time steps.
 - Start with smaller `max_iter`/`cvi_iter` and gradually increase. Convergence
   detection is mandatory; adjust the positive `tol`, `min_iter`, and
   `convergence_patience` settings and inspect `model.converged_` and

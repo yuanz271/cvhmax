@@ -7,6 +7,12 @@ from .cvi import CVI, fa_init, initialization_data
 from .readout import Params, ard_fit_laplace
 from .utils import lbfgs_solve
 
+# Largest log-rate before the exponential is continued along its tangent line,
+# i.e. a rate of exp(7) ~ 1100 counts per time step. A numerical guard against
+# overflow, not part of the model: it should be inactive at a solution, and a
+# fit that converges with it active points at a units problem (for example
+# counts per second instead of per bin). Where it is active the posterior
+# covariance is not meaningful.
 MAX_LOGRATE = 7.0
 
 
