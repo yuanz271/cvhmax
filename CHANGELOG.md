@@ -6,7 +6,7 @@
 
 - Removed the loading-estimator classes. `CVHM(estimator=..., estimator_config=...)`
   becomes `CVHM(loading="ridge" | "ard" | "fixed", loading_config=...)`, and
-  `Estimator`, `RidgeEstimator`, `ARDEstimator` and `FixedEstimator` are no
+  `Estimator`, `RidgeEstimator`, `ARDEstimator` and `FrozenEstimator` are no
   longer exported. The observation model now owns its readout M-step, because
   the conditional loading distribution depends on the data term; `Gaussian` and
   `Poisson` implement the three loading kinds, and `CVI.supported_loadings`
@@ -32,10 +32,10 @@
   `Poisson` with `MAX_LOGRATE` and its numerics is in `cvhmax.poisson`. `CVI` and
   the shared Factor Analysis start stay in `cvhmax.cvi`. `from cvhmax import
   Gaussian, Poisson` is unchanged.
-- Moved `TAU = 1e-6` from `cvhmax.cvi` to `cvhmax.utils` as the one diagonal jitter for
-  numerical positive-definiteness. It replaces the loading-Hessian damping of
-  `1e-10` (results change by about 1e-7 or less) and is the default of
-  `sample_matern`, which already used `1e-6`.
+- Moved `TAU = 1e-6` from `cvhmax.cvi` to `cvhmax.utils` as the single diagonal
+  jitter for numerical positive-definiteness. It damps the loading Hessian in the
+  new Laplace ARD path and is the default of `sample_matern`, which already used
+  `1e-6`.
 - Raised the default number of inner CVI iterations from 5 to 20. Poisson
   inference may be more accurate at additional computational cost; set
   `cvi_iter` explicitly to choose a different count.

@@ -549,6 +549,13 @@ def test_loading_kind_is_rejected_when_the_readout_lacks_it():
         with pytest.raises(ValueError, match="not supported by observation"):
             CVHM(1, 1.0, [HidaMatern(1.0, 1.0, 0.0, 0)],
                  observation="RidgeOnlyReadout", loading="ard")
+        # ``fit`` reads the live loading kind, so it rejects the same pair rather
+        # than failing later inside the solver.
+        model = CVHM(1, 1.0, [HidaMatern(1.0, 1.0, 0.0, 0)],
+                     observation="RidgeOnlyReadout")
+        model.loading = "ard"
+        with pytest.raises(ValueError, match="not supported by observation"):
+            model.fit(jnp.zeros((1, 10, 1)), random_state=0)
     finally:
         CVI.registry.pop("RidgeOnlyReadout", None)
 

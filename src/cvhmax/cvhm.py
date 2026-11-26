@@ -213,11 +213,6 @@ class CVHM:
     def __post_init__(self):
         """Resolve the selected CVI subclass and validate fit settings."""
         self.cvi = CVI.registry[self.observation]
-        if self.loading not in self.cvi.supported_loadings:
-            raise ValueError(
-                f"loading {self.loading!r} is not supported by observation "
-                f"model {self.observation!r}"
-            )
         self._loading_settings()  # fail at construction, not at the first fit
         tol = float(self.tol)
         if not math.isfinite(tol) or tol <= 0:
@@ -237,7 +232,17 @@ class CVHM:
             self.cvi.check_params(self.params, self.params.C.shape[0])
 
     def _loading_settings(self) -> dict:
-        """Settings of the current loading kind, read from the live configuration."""
+        """Settings of the current loading kind, read from the live configuration.
+
+        Also checks that the observation model implements the kind, because
+        ``fit`` reads ``loading`` from the live instance rather than from the
+        value validated at construction.
+        """
+        if self.loading not in self.cvi.supported_loadings:
+            raise ValueError(
+                f"loading {self.loading!r} is not supported by observation "
+                f"model {self.observation!r}"
+            )
         return loading_settings(self.loading, self.loading_config, self.n_components)
 
     def _scaled_kernel_dynamics(self, tau):
@@ -427,10 +432,10 @@ class CVHM:
         y, valid_y = _prepare_observations(y, valid_y)
         if not bool(jnp.all(jnp.any(valid_y, axis=(0, 1)))):
             raise ValueError("Every feature must be observed at least once during fitting")
+        settings = self._loading_settings()
         fits_ard = self.loading == "ard"
         if fits_ard:
             self.cvi.check_ard_fit(y, valid_y, self.n_components)
-        settings = self._loading_settings()
         if random_state is None:
             random_state = secrets.randbits(32)
         if self.params is not None:

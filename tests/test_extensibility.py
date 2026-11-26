@@ -133,7 +133,7 @@ def _data(seed=0):
     return kernel, y, n_latents
 
 
-def _fit(kernel, y, n_latents, loading, **config):
+def _fit(kernel, y, loading, **config):
     return CVHM(
         n_components=4,
         dt=0.1,
@@ -155,8 +155,8 @@ def test_new_readout_is_registered_by_name():
 
 @pytest.mark.parametrize("loading", ["ridge", "fixed"])
 def test_new_readout_supports_generic_loading_kinds(loading):
-    kernel, y, n_latents = _data()
-    model = _fit(kernel, y, n_latents, loading)
+    kernel, y, _ = _data()
+    model = _fit(kernel, y, loading)
     assert np.isfinite(np.asarray(model.params.C)).all()
     assert np.isfinite(np.asarray(model.posterior[0])).all()
     assert np.asarray(model.params.alpha).shape == (4,)
@@ -170,8 +170,8 @@ def test_new_readout_supports_ard_without_touching_the_package():
     the latent scale trade off, so relevance on count data is a modelling
     question rather than a plumbing one.
     """
-    kernel, y, n_latents = _data()
-    model = _fit(kernel, y, n_latents, "ard", iterations=5)
+    kernel, y, _ = _data()
+    model = _fit(kernel, y, "ard", iterations=5)
     alpha = np.asarray(model.params.alpha)
     assert alpha.shape == (4,)
     assert np.isfinite(alpha).all() and np.all(alpha > 0)
