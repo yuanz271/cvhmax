@@ -20,7 +20,7 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.cvi import Params
+from cvhmax.readout import Params
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences, unpad_sequences
 
@@ -39,6 +39,9 @@ N_LATENTS = 2
 BASELINE_RATE = 5.0
 
 
+# This generator deliberately duplicates the one in ``examples/demo_vdp.py``. The
+# R² floor below is a regression guard, so its data must not move when someone
+# edits a demo.
 def _vdp_rhs(state, mu):
     x, v = state
     return np.array([v, mu * (1 - x**2) * v - x])
@@ -111,7 +114,7 @@ def test_benchmark_jitter_regression(s):
         dt=DT,
         kernels=_kernels(s),
         observation="Poisson",
-        estimator="FrozenEstimator",
+        loading="fixed",
         max_iter=50,
         cvi_iter=5,
     )
@@ -139,7 +142,7 @@ def test_benchmark_frozen_readout():
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
         observation="Poisson",
-        estimator="FrozenEstimator", max_iter=50, cvi_iter=5,
+        loading="fixed", max_iter=50,
     )
     model.params = true_params
     model.fit(y, random_state=42)
@@ -156,7 +159,7 @@ def test_benchmark_estimated_readout():
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
-        observation="Poisson", max_iter=50, cvi_iter=5,
+        observation="Poisson", max_iter=50,
     )
     model.fit(y, random_state=42)
 
@@ -181,7 +184,7 @@ def test_benchmark_variable_length():
 
     model = CVHM(
         n_components=N_LATENTS, dt=DT, kernels=kernels,
-        observation="Poisson", max_iter=50, cvi_iter=5,
+        observation="Poisson", max_iter=50,
     )
     model.fit(y_padded, valid_y=valid_y, random_state=42)
 

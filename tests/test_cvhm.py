@@ -4,9 +4,20 @@ import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
-from cvhmax.cvi import Params
+from cvhmax.cvi import CVI
+from cvhmax.gaussian import Gaussian
+from cvhmax.poisson import MAX_LOGRATE, Poisson
 from cvhmax.hm import HidaMatern, sample_matern
+from cvhmax.readout import (
+    NONFINITE_EVIDENCE,
+    NONFINITE_PRECISION,
+    NONFINITE_VARIANCE,
+    READOUT_OK,
+    Params,
+)
 from cvhmax.utils import real_repr
+
+from .helpers import sample_gp_latents
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_TIGHT = 1e-10 if X64_ENABLED else 1e-6
@@ -183,6 +194,54 @@ def test_project_matches_sde2gp():
     np.testing.assert_allclose(np.asarray(V1), np.asarray(V2), atol=ATOL_MED)
 
 
+def test_default_poisson_cvi_refines_posterior():
+    """The default resolves a nonlinear Poisson posterior better than five steps."""
+    rng = np.random.default_rng(7)
+    n_time, n_features, n_latents, dt = 80, 8, 2, 0.2
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
+    latent = sample_gp_latents(kernel, n_time, dt, n_latents, rng)[0]
+    C = 0.9 * rng.standard_normal((n_features, n_latents))
+    d = np.full(n_features, 1.5)
+    y = jnp.asarray(rng.poisson(np.exp(latent @ C.T + d)).astype(float)[None])
+    mask = jnp.ones(y.shape, dtype=bool)
+    params = Params(C=jnp.asarray(C), d=jnp.asarray(d), R=jnp.asarray(0.0))
+
+    def model(**kwargs):
+        return CVHM(
+            n_components=n_latents, dt=dt, kernels=[kernel] * n_latents,
+            observation="Poisson", **kwargs,
+        )
+
+    default = model()
+    assert default.cvi_iter == 20
+    context = default._inference_context(1)
+    means = [
+        np.asarray(m._infer_state(params, y, mask, context)[2])
+        for m in (model(cvi_iter=5), default, model(cvi_iter=80))
+    ]
+    reference = means[-1]
+    old_error, default_error = [
+        np.linalg.norm(mean - reference) / np.linalg.norm(reference)
+        for mean in means[:2]
+    ]
+    assert old_error > 0.1
+    assert default_error < 0.05
+
+
+def test_gaussian_inference_does_not_require_cvi_iterations():
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1)
+    y = jnp.asarray(np.random.default_rng(4).normal(size=(1, 20, 2)))
+    mask = jnp.ones(y.shape, dtype=bool)
+    params = Params(C=jnp.asarray([[0.4], [-0.7]]), d=jnp.zeros(2), R=jnp.eye(2))
+    default = CVHM(n_components=1, dt=0.2, kernels=[kernel])
+    no_iterations = CVHM(n_components=1, dt=0.2, kernels=[kernel], cvi_iter=0)
+    context = default._inference_context(1)
+    default_moments = default._infer_state(params, y, mask, context)[2:]
+    direct_moments = no_iterations._infer_state(params, y, mask, context)[2:]
+    for actual, expected in zip(default_moments, direct_moments):
+        np.testing.assert_allclose(actual, expected, rtol=ATOL_TIGHT, atol=ATOL_TIGHT)
+
+
 def test_CVHM(capsys):
     np.random.seed(1234)
     T = 2000
@@ -272,16 +331,14 @@ def test_readout_change_detects_a_change_across_features():
 
 
 def test_ard_fit_does_not_converge_while_precisions_change(monkeypatch):
-    from cvhmax.estimator import ARDEstimator
-
-    def changing_precision(self, likelihood, params, y, valid_y, m, V):
+    def changing_precision(cls, loading, settings, params, y, valid_y, m, V):
         return Params(C=params.C, d=params.d, R=params.R, alpha=2 * params.alpha), jnp.array(0.0)
 
-    monkeypatch.setattr(ARDEstimator, "estimate", changing_precision)
+    monkeypatch.setattr(Gaussian, "solve_readout", classmethod(changing_precision))
     params = Params(C=jnp.array([[0.2], [0.4]]), d=jnp.zeros(2),
                     R=jnp.eye(2), alpha=jnp.ones(1))
     kernel = HidaMatern(1.0, 1.0, 0.0, 0)
-    model = CVHM(1, 1.0, [kernel], params=params, estimator="ARDEstimator",
+    model = CVHM(1, 1.0, [kernel], params=params, loading="ard",
                  max_iter=4, min_iter=1, convergence_patience=1, cvi_iter=0)
     model.fit(jnp.asarray(np.random.default_rng(8).normal(size=(8, 2))), random_state=0)
     assert model.n_iter_ == 4
@@ -308,20 +365,17 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     rng = np.random.default_rng(0)
     n_time, n_features, n_true, n_fit = 160, 16, 2, 4
     kernel = HidaMatern(sigma=1.0, rho=8.0, omega=0.0, order=1)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
-    chol = np.linalg.cholesky(prior)
     C = rng.normal(scale=0.8, size=(n_features, n_true))
-    latents = np.stack([chol @ rng.standard_normal((n_time, n_true)) for _ in range(2)])
+    latents = sample_gp_latents(kernel, n_time, 1.0, n_true, rng, n_sequences=2)
     y = latents @ C.T + rng.normal(scale=0.3, size=(2, n_time, n_features))
 
-    def loading_norms(estimator):
+    def loading_norms(loading):
         model = CVHM(
             n_components=n_fit,
             dt=1.0,
             kernels=[kernel] * n_fit,
             observation="Gaussian",
-            estimator=estimator,
+            loading=loading,
             max_iter=200,
             tol=1e-4,
             min_iter=5,
@@ -330,8 +384,8 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
         norms = np.sort(np.linalg.norm(np.asarray(model.params.C), axis=0))[::-1]
         return norms, np.sort(np.asarray(model.params.alpha))
 
-    ard_norms, ard_alpha = loading_norms("ARDEstimator")
-    ridge_norms, _ = loading_norms("RidgeEstimator")
+    ard_norms, ard_alpha = loading_norms("ard")
+    ridge_norms, _ = loading_norms("ridge")
 
     # ARD: surplus columns are pruned to numerical zero and carry far larger precision.
     assert ard_norms[n_true:].max() < 1e-6 * ard_norms[n_true - 1]
@@ -340,7 +394,66 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     assert ridge_norms[n_true:].min() > 1e-3 * ridge_norms[n_true - 1]
 
 
-def test_frozen_estimator_leaves_the_supplied_readout_untouched():
+def test_fixed_loading_keeps_a_supplied_precision():
+    """``fixed`` leaves the whole supplied readout alone, including ``alpha``."""
+    start = Params(
+        C=jnp.asarray([[0.5], [0.2], [0.3], [0.1]]),
+        d=jnp.zeros(4),
+        R=jnp.eye(4),
+        alpha=jnp.asarray([7.0]),
+    )
+    y = jnp.asarray(np.random.default_rng(0).normal(size=(1, 30, 4)))
+    model = CVHM(
+        1, 1.0, [HidaMatern(order=0)], params=start, loading="fixed", max_iter=2, min_iter=1
+    ).fit(y, random_state=0)
+    np.testing.assert_array_equal(np.asarray(model.params.alpha), [7.0])
+
+
+def test_loading_configuration_is_read_when_fitting_not_when_constructing():
+    """Changing ``loading_config`` or ``loading`` on a built model takes effect."""
+    y = jnp.asarray(np.random.default_rng(1).normal(size=(1, 30, 4)))
+    model = CVHM(
+        1, 1.0, [HidaMatern(order=0)], loading_config={"alpha": 0.5}, max_iter=2, min_iter=1
+    )
+    model.loading_config = {"alpha": 9.0}
+    np.testing.assert_allclose(model.fit(y, random_state=0).params.alpha, [9.0])
+
+    model.loading, model.loading_config = "ard", None
+    fitted = model.fit(y, random_state=0)
+    assert np.isfinite(np.asarray(fitted.params.alpha)).all()
+
+
+def test_invalid_loading_configuration_fails_at_construction():
+    with pytest.raises(ValueError, match="alpha"):
+        CVHM(1, 1.0, [HidaMatern(order=0)], loading_config={"alpha": [-1.0]})
+
+
+@pytest.mark.parametrize(
+    "loading, variance, alpha, score, expected",
+    [
+        ("ridge", 1.0, 1.0, 0.0, READOUT_OK),
+        ("ard", 1.0, 1.0, 5.0, READOUT_OK),
+        ("ard", 1.0, 1.0, jnp.nan, NONFINITE_EVIDENCE),
+        ("ard", 1.0, -1.0, 5.0, NONFINITE_PRECISION),
+        ("ridge", 0.0, 1.0, 0.0, NONFINITE_VARIANCE),
+        ("ard", jnp.nan, -1.0, jnp.nan, NONFINITE_VARIANCE),  # reported first
+    ],
+)
+def test_gaussian_readout_failure_codes(loading, variance, alpha, score, expected):
+    params = Params(
+        C=jnp.ones((2, 1)), d=jnp.zeros(2), R=variance * jnp.eye(2), alpha=jnp.asarray([alpha])
+    )
+    assert int(Gaussian.readout_failure(loading, params, score)) == expected
+
+
+def test_poisson_ridge_cannot_fail_on_a_missing_score():
+    """A NaN score is only a failure for ARD, where it is the evidence."""
+    params = Params(C=jnp.ones((2, 1)), d=jnp.zeros(2), R=jnp.asarray(0.0), alpha=jnp.ones(1))
+    assert int(Poisson.readout_failure("ridge", params, jnp.nan)) == READOUT_OK
+    assert int(Poisson.readout_failure("ard", params, jnp.nan)) == NONFINITE_EVIDENCE
+
+
+def test_fixed_loading_leaves_the_supplied_readout_untouched():
     """A frozen fit infers latents under the given readout and never refits it."""
     rng = np.random.default_rng(0)
     kernels = [HidaMatern(1.0, 8.0, 0.0, 1)]
@@ -353,7 +466,7 @@ def test_frozen_estimator_leaves_the_supplied_readout_untouched():
 
     model = CVHM(
         n_components=1, dt=1.0, kernels=kernels, observation="Gaussian",
-        estimator="FrozenEstimator", params=start, max_iter=5,
+        loading="fixed", params=start, max_iter=5,
     ).fit(y, random_state=0)
 
     for name in ("C", "d", "R"):
@@ -363,27 +476,94 @@ def test_frozen_estimator_leaves_the_supplied_readout_untouched():
     assert np.isfinite(np.asarray(model.posterior[0])).all()
 
 
-def test_ard_estimator_rejects_a_non_conjugate_readout():
-    """ARD needs a conjugate loading block, which Poisson does not provide."""
-    kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
-    with pytest.raises(ValueError, match="conjugate loading"):
-        CVHM(
-            n_components=1,
-            dt=1.0,
-            kernels=kernels,
-            observation="Poisson",
-            estimator="ARDEstimator",
-        )
+def test_poisson_ard_recovers_relevance_in_full_fit():
+    """Poisson ARD prunes surplus latents while fitting partially observed data."""
+    rng = np.random.default_rng(3)
+    n_sequences, n_time, n_features = 2, 120, 12
+    n_true, n_fit, dt = 2, 4, 0.1
+    kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
+    latent = sample_gp_latents(kernel, n_time, dt, n_true, rng, n_sequences)
+    C = rng.normal(size=(n_features, n_true))
+    C = 0.7 * C / np.linalg.norm(C, axis=1, keepdims=True)
+    d = np.log(0.5) + rng.normal(scale=0.15, size=n_features)
+    y = jnp.asarray(rng.poisson(np.exp(latent @ C.T + d)).astype(float))
+    valid = jnp.asarray(rng.random(y.shape) > 0.2).at[0, 0, :].set(True)
+    initial = Poisson.initialize_params(y, valid, n_fit, random_state=3)
+    initial = Params(C=initial.C, d=initial.d, R=initial.R, alpha=jnp.ones(n_fit))
+
+    model = CVHM(
+        n_components=n_fit, dt=dt, kernels=[kernel] * n_fit, params=initial,
+        observation="Poisson", loading="ard", loading_config={"iterations": 10},
+        max_iter=150, min_iter=5, tol=1e-3, convergence_patience=3,
+    ).fit(y, valid, random_state=3)
+    alpha = np.sort(np.asarray(model.params.alpha))
+    assert model.converged_
+    assert alpha[n_true] > 10 * alpha[n_true - 1]
+    means, covariances = map(np.asarray, model.posterior)
+    estimated_C = np.asarray(model.params.C)
+    log_rate = means @ estimated_C.T + np.asarray(model.params.d)
+    log_rate += 0.5 * np.einsum("ni,stij,nj->stn", estimated_C, covariances, estimated_C)
+    rate = np.exp(np.minimum(log_rate, MAX_LOGRATE))
+    observations, mask = np.asarray(y), np.asarray(valid)
+    baseline = np.sum(np.where(mask, observations, 0), axis=(0, 1)) / np.sum(mask, axis=(0, 1))
+    baseline = np.broadcast_to(baseline, observations.shape)
+
+    def deviance(prediction):
+        counts, expected = observations[~mask], prediction[~mask]
+        term = np.zeros_like(counts)
+        positive = counts > 0
+        term[positive] = counts[positive] * np.log(counts[positive] / expected[positive])
+        return 2 * np.sum(term - counts + expected)
+
+    assert 1 - deviance(rate) / deviance(baseline) > 0.1
 
 
-def test_estimators_are_exported_at_top_level():
-    """The documented estimator classes are importable from the package root."""
-    import cvhmax
-    from cvhmax import estimator as estimator_module
+def test_poisson_ard_does_not_require_gaussian_residual_degrees_of_freedom():
+    """Poisson has no fitted variance, so its loading Hessian permits three steps and two latents."""
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    params = Params(C=0.3 * jnp.eye(2), d=jnp.zeros(2), R=jnp.asarray(0.0), alpha=jnp.ones(2))
+    model = CVHM(
+        2, 1.0, [kernel, kernel], params=params, observation="Poisson",
+        loading="ard", loading_config={"iterations": 5},
+        max_iter=1, min_iter=1, cvi_iter=0,
+    ).fit(jnp.array([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]), random_state=0)
+    assert np.isfinite(np.asarray(model.params.alpha)).all()
 
-    for name in ("Estimator", "RidgeEstimator", "ARDEstimator", "FrozenEstimator"):
-        assert name in cvhmax.__all__
-        assert getattr(cvhmax, name) is getattr(estimator_module, name)
+
+@pytest.mark.parametrize("count", [0.0, 1100.0])
+def test_poisson_ard_rejects_unbounded_bias_evidence(count):
+    """A flat bias prior yields a divergent integral at either count extreme."""
+    kernel = HidaMatern(1.0, 1.0, 0.0, 0)
+    model = CVHM(1, 1.0, [kernel], observation="Poisson", loading="ard")
+    with pytest.raises(ValueError, match="positive total counts and a mean count"):
+        model.fit(jnp.full((10, 1), count), random_state=0)
+
+
+def test_loading_kind_is_rejected_when_the_readout_lacks_it():
+    """A readout declares the loading kinds it implements."""
+
+    class RidgeOnlyReadout(CVI):
+        pass
+
+    try:
+        with pytest.raises(ValueError, match="not supported by observation"):
+            CVHM(1, 1.0, [HidaMatern(1.0, 1.0, 0.0, 0)],
+                 observation="RidgeOnlyReadout", loading="ard")
+        # ``fit`` reads the live loading kind, so it rejects the same pair rather
+        # than failing later inside the solver.
+        model = CVHM(1, 1.0, [HidaMatern(1.0, 1.0, 0.0, 0)],
+                     observation="RidgeOnlyReadout")
+        model.loading = "ard"
+        with pytest.raises(ValueError, match="not supported by observation"):
+            model.fit(jnp.zeros((1, 10, 1)), random_state=0)
+    finally:
+        CVI.registry.pop("RidgeOnlyReadout", None)
+
+
+def test_builtin_readouts_declare_their_loading_kinds():
+    assert CVI.supported_loadings == frozenset({"ridge", "fixed"})
+    for readout in (Gaussian, Poisson):
+        assert readout.supported_loadings == frozenset({"ridge", "ard", "fixed"})
 
 
 def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
@@ -410,26 +590,13 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     fake_pbar = FakeProgress()
 
     import cvhmax.cvhm as cvhm_mod
-    from cvhmax.cvi import Params
-    from cvhmax.estimator import Estimator
 
     monkeypatch.setattr(cvhm_mod, "training_progress", lambda: fake_pbar)
 
-    class StaticEstimator(Estimator):
-        """Fixed readout parameters and no objective, to exercise progress."""
+    class StaticReadout(Poisson):
+        """Poisson information with a no-op readout solver, to exercise progress."""
 
-        def initialize_params(
-            self, likelihood, y, valid_y, n_factors, *, random_state, params=None
-        ) -> Params:
-            obs_dim = y.shape[-1]
-            return Params(
-                C=jnp.zeros((obs_dim, n_factors), dtype=y.dtype),
-                d=jnp.zeros(obs_dim, dtype=y.dtype),
-                R=jnp.zeros((obs_dim, obs_dim), dtype=y.dtype),
-            )
-
-        def estimate(self, likelihood, params, y, valid_y, m, V):
-            return params, jnp.nan
+        supported_loadings = frozenset({"fixed"})
 
     recorded = []
     import jax.debug as jdebug
@@ -459,16 +626,18 @@ def test_progress_callback_is_ordered_and_idempotent(monkeypatch):
     valid_y = jnp.ones((sequences, T, 1), dtype=bool)
 
     kernels = [HidaMatern(1.0, 1.0, 0.0, 0)]
-    model = CVHM(
-        n_components=n_components,
-        dt=1.0,
-        kernels=kernels,
-        observation="Poisson",
-        estimator="StaticEstimator",
-        max_iter=3,
-    )
-
-    model.fit(y, valid_y=valid_y, random_state=0)
+    try:
+        model = CVHM(
+            n_components=n_components,
+            dt=1.0,
+            kernels=kernels,
+            observation="StaticReadout",
+            loading="fixed",
+            max_iter=3,
+        )
+        model.fit(y, valid_y=valid_y, random_state=0)
+    finally:
+        CVI.registry.pop("StaticReadout", None)
 
     assert any(call["ordered"] is True for call in recorded), recorded
 

@@ -20,7 +20,13 @@ The `CVHM.fit` method alternates between:
 1) CVI pseudo-observation refresh: `initialize_info` in latent space
 2) Forward-filter warm-up: lift → forward filter → project predictions → `update_pseudo`
 3) CVI iterations: lift → bifilter → project → `update_pseudo` (repeated)
-4) Readout update: `Estimator.estimate` in latent space
+4) Readout update: `CVI.solve_readout` in latent space
+
+The inner CVI loop runs a fixed `cvi_iter` count (default 20), not a
+convergence test. Increasing it can improve Poisson inference at additional
+computational cost, but does not guarantee convergence. For the built-in
+Gaussian readout, the observation information is already exact and does not
+change during these iterations, so `cvi_iter=0` gives the same posterior.
 
 ```
 CVHM loop:
@@ -34,7 +40,7 @@ CVHM loop:
         z, Z = bifilter(j_s, J_s, ...)                          # state
         m, V = project(z, Z, M)                                  # state → latent
         j, J = CVI.update_pseudo(params, y, valid_y, m, V, ...) # latent
-    params = Estimator.estimate(CVI, params, y, valid_y, m, V)   # latent
+    params = CVI.solve_readout(loading, settings, params, y, valid_y, m, V)
 ```
 
 ### Convergence detection
@@ -85,7 +91,7 @@ matrix. After the last readout update, `fit()` performs a final inference pass:
 Gaussian observation noise is diagonal. For observed feature mask `w` and
 variance vector `r = diag(R)`, Gaussian information increments are
 `J = C.T @ diag(w / r) @ C` and `j = C.T @ (w * (y - d) / r)`. The readout
-update, under the default `RidgeEstimator`, solves a ridge objective per
+update, under the default `loading="ridge"`, solves a ridge objective per
 feature from the masked first and second moments, then refreshes that feature's
 noise variance from its expected residual squares. The penalty is `alpha_k` on
 each loading and **zero on the bias**: the prior is
@@ -96,19 +102,21 @@ Initialization fills missing entries with per-feature observed means for Factor
 Analysis only; subsequent updates use the actual observation mask. For Poisson,
 FA count-space loadings are scaled to log-rate space, with a half-count per
 feature used only to initialize a finite baseline rate. The Poisson
-readout objective is the exact negative expected log-likelihood,
-`exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`; only
-the rate carries the variance correction. Masking does not change it. It
-adds the same Gaussian-prior penalty `0.5 * sum_k alpha_k * ||C[:, k]||²`,
-averaged with the data term. The rate is exact up to `MAX_LOGRATE` and continues
-along its tangent line beyond it, so the objective stays convex and bounded
-below; a flat clip would let `-y * eta` fall without limit once an optimiser step
-crossed the cap. The training progress reports the unpenalized negative expected
-log-likelihood. Ridge reports its configured precision in `Params.alpha`.
+readout objective matches the negative expected log-likelihood,
+`exp(eta + q/2) - y * eta` with `eta = C m + d` and `q = diag(C V C^T)`,
+while the rate cap is inactive. Only the rate carries the variance correction.
+Masking does not change it. It adds the same Gaussian-prior penalty
+`0.5 * sum_k alpha_k * ||C[:, k]||²`, averaged with the data term. Beyond
+`MAX_LOGRATE` the rate continues along its tangent line rather than remaining
+flat. This avoids the flat clip's runaway for mean counts below the capped rate;
+it does not keep the objective bounded for all possible counts. For ridge, training progress reports the unpenalized negative
+expected log-likelihood. For ARD, it reports the conditional loading evidence
+(Laplace-approximated for Poisson). Ridge reports its configured precision in
+`Params.alpha`.
 
 ## Gaussian ARD Loadings
 
-`ARDEstimator` fits Gaussian loadings under a per-latent automatic relevance
+ARD fits Gaussian loadings under a per-latent automatic relevance
 determination prior. It is a conditional analysis: the latent moments
 are held fixed, and it answers which latent columns the readout needs, not which
 latents the latent prior supports.
@@ -139,7 +147,7 @@ at the supplied moments.
 Precisions and observation variances are both maximised against the evidence,
 jointly, mirroring the evidence-based noise update used in the ARD literature.
 The maximisers are reached by the fixed-point iteration described under
-*Loading Estimators*, so no optimiser runs inside the EM loop.
+*Loading Kinds*, so no optimiser runs inside the EM loop.
 
 Sparsity is *not* exact. A fitted precision plateaus at a large but finite
 value and the column is shrunk towards zero rather than deleted, because the
@@ -151,12 +159,12 @@ same way: with pruning disabled its precisions plateau, and its exact zeros
 come from a hard precision threshold rather than from divergence.
 
 ARD and ridge regularise the same block of loadings, so choosing between them is
-the choice of `estimator`, not a second update step.
+the choice of `loading`, not a second update step.
 
 With `V = 0` the Jensen bound is tight: `E_q[log p]` becomes the ordinary
 Gaussian log-likelihood at the latent means, so the evidence is the exact
 marginal likelihood of an ARD linear regression on that design and the fit
-matches a standard ARD regression. With `V > 0` the estimator maximises a lower
+matches a standard ARD regression. With `V > 0` the fit maximises a lower
 bound instead, because the latents are uncertain.
 
 The bias is a parameter of this model, integrated under a flat prior, so the
@@ -176,29 +184,64 @@ producing a non-finite variance inside the fixed-point iteration. The fit also
 stops loudly if an ARD loading precision becomes non-positive or non-finite,
 or if the evidence becomes non-finite.
 
-## Loading Estimators
+## Poisson ARD Loadings
 
-The observation model and the loading estimator are separate axes. A `CVI`
-subclass is an observation model: it supplies the E-step, a conjugate loading
-representation when one exists, and a readout objective. An `Estimator` owns the
-readout M-step and the loading prior. Ridge and ARD share one prior,
-`C[:, k] ~ N(0, alpha_k^-1 I)` with a flat bias, and differ in whether `alpha` is
-fitted -- so choosing an estimator chooses a prior as well as an algorithm.
+For Poisson observations, ARD leaves the CVI latent E-step unchanged and
+approximates only the conditional loading integral. Holding the latent moments
+fixed, it finds each feature's penalized loading and bias MAP using damped
+Newton steps. The inverse Hessian at that MAP approximates the loading
+covariance, and the fixed-point update below fits one precision per latent,
+shared across features. `iterations` controls the number of precision updates;
+each uses three Newton steps, followed by nine final MAP steps. These are fixed
+counts, not a convergence guarantee.
 
-An estimator uses the closed form when the likelihood exposes conjugate loading
-terms and a generic gradient solve otherwise. `Gaussian` exposes them; `Poisson`
-does not, because `exp(eta)` breaks conjugacy in the loadings, so
-`ARDEstimator` is rejected with Poisson at construction.
+The update treats the Hessian as locally fixed. Because the Hessian also
+changes through the MAP as precisions change, this is not the exact gradient of
+the full Laplace evidence and need not increase it at every iteration. The
+reported score is conditional loading evidence with the Gamma precision prior;
+count-factorial constants are omitted. It is neither an exact marginal
+likelihood nor a guaranteed bound on it. Latent uncertainty enters the
+expected Poisson rate through the CVI posterior covariance.
 
-`RidgeEstimator` solves the penalised conjugate objective directly. Note that
+The bias has a flat prior. If an observed feature's total count is zero, its
+loading evidence integral diverges as the bias tends to negative infinity. With
+the linearly extended rate used by the readout objective, a mean count at least
+`exp(MAX_LOGRATE)` likewise makes the bias tail non-integrable. `CVHM.fit`
+rejects these cases for Poisson ARD. Sparse counts can make relevance ranking
+unreliable even when these conditions hold; evaluate the ranking and held-out
+predictions rather than assuming a fixed precision threshold recovers rank.
+
+## Loading Kinds
+
+The loading kind is a choice of prior and fit, not of observation model. Ridge
+and ARD share one prior, `C[:, k] ~ N(0, alpha_k^-1 I)` with a flat bias, and
+differ in whether `alpha` is fitted. `"fixed"` leaves the initialized readout
+untouched, including a supplied `alpha`; ridge always takes `alpha` from
+`loading_config`, and ARD warm starts from a supplied one.
+
+The readout M-step belongs to the observation model, because the conditional
+distribution of the loadings depends on the data term. `CVI.solve_readout`
+flattens the posterior and dispatches: `"fixed"` returns the parameters,
+`"ridge"` calls `solve_ridge`, which by default runs L-BFGS on
+`readout_objective`, and `"ard"` calls `solve_ard`. `Gaussian` overrides
+`solve_ridge` with its closed form and both built-in readouts override
+`solve_ard`. A new observation model therefore gets ridge and fixed for free
+from `readout_objective`, and adds ARD only if it implements the conditional
+evidence. `CVI.supported_loadings` declares what a
+readout accepts, and `CVHM` rejects any other kind at construction.
+
+Gaussian exposes conjugate loading terms. Poisson does not, because `exp(eta)`
+breaks conjugacy in the loadings: ridge uses a gradient solve and ARD uses a
+Laplace approximation restricted to the loading M-step.
+
+The ridge path solves the penalised conjugate objective directly. Note that
 solving each feature against its own noise variance brings an `R_nn` factor into
 the regulariser; that is the unit conversion for an absolute precision, not a
 different penalty strength.
 
-`ARDEstimator` maximises the evidence over the precisions and the observation
-variances jointly, with the loadings integrated out. Both stationary points have
-closed forms and are reached by a fixed-point iteration, so no optimiser is
-involved:
+For Gaussian observations, ARD maximises the evidence over the
+precisions and observation variances jointly, with the loadings integrated out.
+Both stationary points are reached by a fixed-point iteration:
 
 ```
 gamma_nk = 1 - alpha_k * Sigma_n[k, k]
@@ -235,7 +278,7 @@ data, because the evidence tends to the reduced model's evidence as a precision
 grows. The precisions are reported on `Params.alpha` and any threshold is left
 to the caller. What makes a threshold workable is the size of the gap, from one
 to several orders of magnitude; the absolute value is gauge dependent, so a
-fixed threshold does not transfer between fits. Without the ARD estimator, fixed
+fixed threshold does not transfer between fits. Without ARD, fixed
 ridge only shrinks surplus latents to a small nonzero norm.
 
 At `V = 0` the Jensen bound is tight, so the evidence is the exact marginal
@@ -268,7 +311,7 @@ Where it appears:
 
 - `filtering.py` — predict/update steps, `bifilter` smoother
 - `cvhm.py` — initial conditions (`z0 = 0`, `Z0 = inv(Q0)`), `sde2gp` (`solve(Z, z)`, `inv(Z)`)
-- `cvi.py` — CVI loop inputs/outputs, pseudo-observation updates
+- `cvi.py`, `gaussian.py`, `poisson.py` — CVI loop inputs/outputs, pseudo-observation updates
 
 Key property: the filter update is additive.
 
@@ -287,7 +330,7 @@ Z_post = Z_pred + J
 Where it appears:
 
 - `sde2gp` output — converts information form to `(m, V)` for downstream use
-- Readout updates (`Estimator.estimate`)
+- Readout updates (`CVI.solve_readout`)
 - Poisson readout objective (`poisson_readout_objective`)
 
 ### Observation information increments `(j, J)`

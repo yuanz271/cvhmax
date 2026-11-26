@@ -1,5 +1,4 @@
 from functools import partial
-from typing import NamedTuple
 
 import jax
 import optax
@@ -15,6 +14,13 @@ from rich.progress import (
     TimeElapsedColumn,
     TimeRemainingColumn,
 )
+
+#: Diagonal jitter that keeps a matrix we factor or solve positive definite when
+#: it is only semi-definite in exact arithmetic (a flat likelihood, a smooth
+#: kernel on a fine grid). Small against the matrices it is added to, so it
+#: does not change the quantity being computed beyond roundoff.
+TAU = 1e-6
+
 
 def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
     """Approximate bounded LBFGS solver mirroring SciPy defaults.
@@ -72,33 +78,6 @@ def lbfgs_solve(init_params, fun, max_iter=100, tfactor=1e12):
 # rather than diverging as a precision vanishes, so a floor keeps the
 # optimisation well posed.
 ARD_LOG_ALPHA_FLOOR = -12.0
-
-
-class LoadingTerms(NamedTuple):
-    """Conjugate representation of a readout's dependence on ``(d, C)``.
-
-    The expected readout log-likelihood is ``-0.5 beta' precision beta
-    + beta' linear`` up to terms independent of ``beta = [d, C]``, which is what
-    makes a Gaussian loading prior conjugate and lets an estimator integrate
-    the loadings out rather than profile them. The bias is index 0.
-
-    Attributes
-    ----------
-    precision : Array
-        Shape ``(features (N), K + 1, K + 1)``.
-    linear : Array
-        Shape ``(N, K + 1)``.
-    counts : Array
-        Observed count per feature, shape ``(N,)``.
-    squared : Array
-        Sum of squared observations per feature, shape ``(N,)``, needed for the
-        data-dependent Gaussian normalisation.
-    """
-
-    precision: Array
-    linear: Array
-    counts: Array
-    squared: Array
 
 
 def symm(x):
@@ -330,7 +309,7 @@ def latent_mask(latent_spec):
 
 
 def training_progress():
-    """Create a rich progress bar configured for CVI training.
+    """Create a rich progress bar displaying the readout score.
 
     Returns
     -------
@@ -348,7 +327,7 @@ def training_progress():
         "Remaining",
         TimeRemainingColumn(),
         TextColumn("•"),
-        "Negative ELL",
+        "Readout score",
         TextColumn("{task.fields[nell_display]}"),
     )
 

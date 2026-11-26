@@ -17,7 +17,7 @@ from cvhmax.hm import HidaMatern, Ks, spectral_density
 from cvhmax.hm import Af as hm_Af, Qf as hm_Qf
 from cvhmax.utils import real_repr, symm, sequence_info_repr
 from cvhmax.filtering import predict, information_filter, bifilter
-from cvhmax.cvi import TAU, poisson_cvi_step_stats
+from cvhmax.poisson import poisson_cvi_step_stats_latent
 
 X64_ENABLED = jax.config.read("jax_enable_x64")
 ATOL_PARITY = 1e-10 if X64_ENABLED else 5e-6
@@ -442,7 +442,8 @@ def test_poisson_cvi_step_parity():
     J_obs_ref_np = J_obs_ref.detach().numpy()
 
     # --- cvhmax: run Poisson.initialize_info ---
-    from cvhmax.cvi import Params, Poisson
+    from cvhmax.readout import Params
+    from cvhmax.poisson import Poisson
     from jax import vmap
 
     # Both implementations use the same loading C.
@@ -670,10 +671,11 @@ class TestDynamicsPipeline:
 @requires_ref
 @pytest.mark.parity
 def test_poisson_cvi_step_stats_convention():
-    """Verify poisson_cvi_step_stats matches reference using information form.
+    """Verify poisson_cvi_step_stats_latent matches the reference gradients.
 
-    The filter stores ``(z, Z)`` in information form where ``Z = J`` (precision)
-    and ``z = h = J mu``.  Recovering moments: ``mu = Z^{-1} z``, ``Sigma = Z^{-1}``.
+    The reference recovers moments from the information form, where ``Z = J``
+    (precision) and ``z = h = J mu``: ``mu = Z^{-1} z``, ``Sigma = Z^{-1}``. Both
+    sides then evaluate the gradients at the same moments.
     """
     import torch
 
@@ -691,21 +693,11 @@ def test_poisson_cvi_step_stats_convention():
     y_np = np.array([2.0, 3.0, 1.0])
     valid_y_np = np.ones(N)
 
-    # --- cvhmax ---
-    k_jax, K_jax = poisson_cvi_step_stats(
-        jnp.array(z_np),
-        jnp.array(Z_np),
-        jnp.array(y_np),
-        jnp.array(valid_y_np),
-        jnp.array(H_np),
-        jnp.array(d_np),
-    )
-
     # --- reference: m = J^{-1} h, V = J^{-1} ---
     J_t = torch.tensor(Z_np, dtype=torch.float64)
-    J_t = J_t + TAU * torch.eye(state_dim, dtype=torch.float64)
     J_chol = torch.linalg.cholesky(J_t)
     m_ref = torch.linalg.solve(J_t, torch.tensor(z_np, dtype=torch.float64))
+    V_ref = torch.cholesky_solve(torch.eye(state_dim, dtype=torch.float64), J_chol)
     C_t = torch.tensor(H_np, dtype=torch.float64)
     bias_t = torch.tensor(d_np, dtype=torch.float64)
     y_t = torch.tensor(y_np, dtype=torch.float64)
@@ -717,6 +709,16 @@ def test_poisson_cvi_step_stats_convention():
     g_v = -0.5 * torch.einsum("ni, n, nj -> ij", C_t, exp_term, C_t)
     K_ref = -2 * g_v
     k_ref = g_m - 2 * (g_v @ m_ref)
+
+    # --- cvhmax ---
+    k_jax, K_jax = poisson_cvi_step_stats_latent(
+        jnp.array(m_ref.numpy()),
+        jnp.array(V_ref.numpy()),
+        jnp.array(y_np),
+        jnp.array(valid_y_np),
+        jnp.array(H_np),
+        jnp.array(d_np),
+    )
 
     npt.assert_allclose(
         np.asarray(k_jax).flatten(),

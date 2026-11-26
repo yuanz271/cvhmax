@@ -51,7 +51,7 @@ observations ──→ initialize_info ──→ j_latent, J_latent
                                          (repeat)
                                            │
                                            ▼
-                              m, V ──→ Estimator.estimate ──→ params
+                              m, V ──→ CVI.solve_readout ──→ params
 ```
 
 ## Spaces and Dimensions
@@ -108,14 +108,18 @@ all operating in latent space:
 | `initialize_params` | observations, loading penalty | data-driven starting readout params |
 | `initialize_info` | params, observations | `(j, J)` in latent space |
 | `update_pseudo` | params, observations, posterior `(m, V)`, current `(j, J)` | updated `(j, J)` in latent space |
-| `loading_terms` | observations, posterior `(m, V)` | conjugate loading statistics, or `None` |
-| `readout_objective` | params, observations, posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
+| `readout_objective` | params, flattened observations and posterior `(m, V)`, penalty | penalised negative expected log-likelihood |
+| `solve_readout` | loading kind, settings, params, observations, posterior | updated params and a score; flattens, then calls `solve_ridge` or `solve_ard` |
+| `solve_ridge` | settings, params, flattened observations and posterior | ridge fit; L-BFGS on `readout_objective` unless overridden |
+| `check_ard_fit` | observations | raises when the data cannot support ARD |
+| `readout_failure` | loading kind, fitted params, score | integer failure code; 0 is healthy |
+| `check_params` | caller-supplied params, feature count | raises on an invalid readout |
 
-How the readout parameters are fitted is a separate axis. An `Estimator`
-(`RidgeEstimator`, `ARDEstimator`, `FrozenEstimator`) owns the M-step
-`estimate` and decides the loading prior. It asks the observation model for
-`initialize_params` (supplying the penalty), and for `loading_terms` or
-`readout_objective`.
+The readout M-step belongs to the observation model, because the conditional
+distribution of the loadings depends on the data term. `CVI.solve_readout`
+handles `"ridge"` and `"fixed"` generically and raises for `"ard"`;
+`Gaussian` and `Poisson` override it with their own ARD implementation.
+`CVI.supported_loadings` declares the kinds a readout accepts.
 
 ### Readout params
 
@@ -129,7 +133,7 @@ metric compares `C`, `d`, and `R`.
 1. **Clean separation**: CVI knows nothing about state space; filtering
    knows nothing about observations; CVHM bridges the two.
 2. **Easy to extend**: new observation models implement the stateless
-   methods above in latent space; new loading priors are a separate
-   `Estimator`.
+   methods above in latent space, including whichever loading kinds it
+   supports.
 3. **Smaller arrays in CVI**: latent dimension `K ≤ L`, less computation.
 4. **Testable**: each CVI method is a pure function of its inputs.

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Removed the loading-estimator classes. `CVHM(estimator=..., estimator_config=...)`
+  becomes `CVHM(loading="ridge" | "ard" | "fixed", loading_config=...)`, and
+  `Estimator`, `RidgeEstimator`, `ARDEstimator` and `FrozenEstimator` are no
+  longer exported. The observation model now owns its readout M-step, because
+  the conditional loading distribution depends on the data term; `Gaussian` and
+  `Poisson` implement the three loading kinds, and `CVI.supported_loadings`
+  declares which are available.
+- Moved `Params` and `LoadingTerms` to `cvhmax.readout`, next to the code that fills
+  them; neither is exported from `cvhmax.utils` or `cvhmax.cvi` any more.
+- Removed `poisson_cvi_step_stats`. The inference loop has used the
+  latent-space `poisson_cvi_step_stats_latent` since the move to latent space; the
+  state-space variant was only reachable from tests.
+- Bumped the archive format version to 3. Manifests record `loading` and
+  `loading_config` in place of `estimator` and `estimator_config`.
+
+### Added
+
+- Added Poisson support to ARD using a Laplace approximation for the loading
+  M-step while retaining CVI for latent inference.
+- Added `cvhmax.readout` with the shared readout fitting functions: penalty,
+  conjugate solve, ridge fit, both ARD fits, and the loading evidence.
+
+### Changed
+
+- Split `cvhmax.cvi` by observation model: `Gaussian` is in `cvhmax.gaussian`, and
+  `Poisson` with `MAX_LOGRATE` and its numerics is in `cvhmax.poisson`. `CVI` and
+  the shared Factor Analysis start stay in `cvhmax.cvi`. `from cvhmax import
+  Gaussian, Poisson` is unchanged.
+- Moved `TAU = 1e-6` from `cvhmax.cvi` to `cvhmax.utils` as the single diagonal
+  jitter for numerical positive-definiteness. It damps the loading Hessian in the
+  new Laplace ARD path and is the default of `sample_matern`, which already used
+  `1e-6`.
+- Raised the default number of inner CVI iterations from 5 to 20. Poisson
+  inference may be more accurate at additional computational cost; set
+  `cvi_iter` explicitly to choose a different count.
+- Renamed the training progress label to `Readout score`, since ARD reports
+  evidence rather than a negative expected log-likelihood.
+
 ## 0.5.1
 
 ### Fixed

@@ -62,8 +62,10 @@ calling convention.
 
 For this working-version format, no cross-version compatibility is promised.
 The archive is expected to be loaded by the same working version of cvhmax
-that wrote it. The format version is retained only to reject incompatible or
-malformed files clearly; no migration framework is required.
+that wrote it. Version 3 records a loading kind instead of an estimator class
+name, so version 2 archives cannot be loaded. The format version is retained
+only to reject incompatible or malformed files clearly; no migration framework
+is required.
 
 ## File format
 
@@ -98,19 +100,19 @@ A representative manifest is:
 ```json
 {
   "format": "cvhmax.CVHM",
-  "version": 2,
+  "version": 3,
   "model": {
     "n_components": 2,
     "dt": 1.0,
     "lr": 1.0,
     "max_iter": 200,
-    "cvi_iter": 5,
+    "cvi_iter": 20,
     "tol": 0.05,
     "min_iter": 2,
     "convergence_patience": 2,
     "observation": "Gaussian",
-    "estimator": "RidgeEstimator",
-    "estimator_config": null,
+    "loading": "ridge",
+    "loading_config": null,
     "kernels": [
       {
         "sigma": 1.0,
@@ -123,7 +125,7 @@ A representative manifest is:
   },
   "params": {
     "present": true,
-    "type": "cvhmax.cvi.Params",
+    "type": "cvhmax.readout.Params",
     "arrays": {
       "C": {"shape": [2, 1], "dtype": "float64"},
       "d": {"shape": [2], "dtype": "float64"},
@@ -143,8 +145,7 @@ The manifest must record:
 - archive format and integer version;
 - all `CVHM`-owned configuration: `n_components`, `dt`, `lr`, `max_iter`,
   `cvi_iter`, `tol`, `min_iter`, `convergence_patience`, `observation`,
-  `estimator` (an exact built-in class name), and `estimator_config`
-  (constructor keywords, or `null`);
+  `loading` (a loading kind), and `loading_config` (overrides, or `null`);
 - each HidaMatern configuration: `sigma`, `rho`, `omega`, `order`, and `s`;
 - whether fitted parameters are present;
 - parameter-tree metadata needed to create the runtime Equinox `like` PyTree,
@@ -161,7 +162,7 @@ or `"Poisson"`. The initial implementation supports the built-in names only.
 The kernel entries are assumed to be `HidaMatern`; no kernel type field is
 needed.
 
-`estimator_config` is emitted as finite JSON primitives: numpy and JAX scalars
+`loading_config` is emitted as finite JSON primitives: numpy and JAX scalars
 become Python scalars, and arrays become (possibly nested) lists that preserve
 the logical shape of a per-column `alpha`. Values that cannot be represented
 this way are rejected at save time. `CVHM.get_config()` applies the same
@@ -181,8 +182,8 @@ kernel families.
 `CVHM.save(path)` must:
 
 1. Validate all `CVHM` configuration, HidaMatern kernels, the built-in
-   observation name, the built-in estimator name, and fitted parameter
-   structure before writing anything.
+   observation name, the loading kind, and fitted parameter structure before
+   writing anything.
 2. Obtain kernel configuration through the HidaMatern serialization protocol.
 3. Serialize fitted `CVHM.params` with Equinox when present.
 4. Write one ZIP archive containing `manifest.json` and, when applicable,
@@ -209,12 +210,11 @@ explicitly covered by the working implementation.
 4. Validate the observation class name against the built-in `CVI` mapping and
    construct the corresponding stateless algorithm. Never silently substitute
    `Gaussian`.
-5. Validate the estimator class name against the built-in `Estimator` classes
-   and reject a name that resolves to a user subclass instead of the built-in.
-   Never silently substitute a same-named estimator.
+5. Validate the loading kind against the built-in set and reject any other
+   value. Never silently substitute a default.
 6. Reconstruct each `HidaMatern` kernel through its configuration protocol.
 7. Construct `CVHM` with its own saved configuration, reconstructed kernels,
-   readout algorithm, and estimator.
+   readout algorithm, and loading kind.
 8. Reconstruct a runtime Equinox `like` PyTree for CVHM-owned `params` with the
    same structure and leaf types as the saved fitted state. The `like` tree is
    not saved as a separate artifact.
@@ -238,16 +238,15 @@ The initial implementation supports:
   when they are semantically equivalent to the base class and are restored as
   base `HidaMatern` instances;
 - the stateless `Gaussian` and `Poisson` `CVI` algorithms;
-- the built-in loading estimators `RidgeEstimator`, `ARDEstimator`, and
-  `FrozenEstimator`; and
-- the Equinox `cvhmax.cvi.Params` parameter container.
+- the loading kinds `ridge`, `ard`, and `fixed`; and
+- the Equinox `cvhmax.readout.Params` parameter container.
 
 User-defined readouts are not part of the initial format. User-defined kernel
 subclasses are supported only under the HidaMatern-subclass restriction above.
-Arbitrary Python classes remain rejected. User-defined estimators are likewise
-outside the format: the archive records a built-in class name, and a name that
-resolves to a user subclass in `Estimator.registry` is rejected at both save and
-load rather than silently standing in for the built-in.
+Arbitrary Python classes remain rejected. User-defined readouts and loading
+kinds are likewise outside the format: the archive records built-in names only,
+and any other value is rejected at both save and load rather than silently
+standing in for a built-in.
 
 ## Safety
 

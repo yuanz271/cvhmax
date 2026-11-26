@@ -95,8 +95,8 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add new observation model | `src/cvhmax/cvi.py` | Subclass `CVI`; registry via `__init_subclass__` |
-| Add new loading estimator / prior | `src/cvhmax/estimator.py` | Subclass `Estimator`; registry via `__init_subclass__` |
+| Add new observation model | `src/cvhmax/<name>.py` | Subclass `CVI` (`cvi.py`); registry via `__init_subclass__`; see `gaussian.py`, `poisson.py` |
+| Adjust loading fits (ridge / ARD) | `src/cvhmax/readout.py` | Pure functions; observation models pick the fit per loading kind |
 | Adjust EM loop / training | `src/cvhmax/cvhm.py` | `CVHM.fit()`, `em_step` |
 | Filtering logic | `src/cvhmax/filtering.py` | `information_filter_step`, `bifilter` |
 | Kernel / dynamics blocks | `src/cvhmax/hm.py` | `Af/Qf/Ab/Qb`, `K(tau)` |
@@ -107,8 +107,8 @@ export XLA_FLAGS=--xla_force_host_platform_device_count=1  # CPU-only / debuggin
 
 ### Adding a New Observation Model
 
-1. Add a new `CVI` subclass in `src/cvhmax/cvi.py`.
-2. Ensure it registers via `__init_subclass__`.
+1. Add a new `CVI` subclass in its own module next to `gaussian.py` and `poisson.py`.
+2. Ensure it registers via `__init_subclass__` and is imported by `src/cvhmax/__init__.py`.
 3. Add tests under `tests/` mirroring the module layout.
 4. Update docstrings and `docs/api.md`.
 
@@ -156,7 +156,7 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 
 - Use f-strings; keep docstrings NumPy-style (`Parameters`, `Returns`, `Raises`).
 - Use explicit names over single-letter variables unless it is standard math (`z`, `Z`, `J`, `Q`).
-- Constants: `UPPER_SNAKE_CASE` near the code that uses them (e.g., `TAU`, `EPS`).
+- Constants: `UPPER_SNAKE_CASE` near the code that uses them (e.g., `MAX_LOGRATE`); a constant shared across modules is defined once in `utils.py`.
 - Prefer small, composable helpers over long monolithic functions (especially around `lax.scan`).
 
 ### Types
@@ -187,6 +187,7 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 ### JAX + Numerical Conventions
 
 - Prefer `jnp.linalg.solve(A, b)` over explicit inverses; keep `inv(...)` only when clearly justified.
+- Diagonal jitter for numerical positive-definiteness is `utils.TAU`; do not define another module-level jitter. Model parameters that happen to regularize (e.g. `HidaMatern.s`) are not jitter.
 - Keep core computations pure (no mutation except via `.at[...]`), and avoid Python side effects in jittable code.
 - Randomness: use explicit seeds/keys; tests should be reproducible.
 - Masking: use `jnp.where` with broadcastable masks; keep masks as integer/bool arrays.

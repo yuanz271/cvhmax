@@ -10,12 +10,11 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from cvhmax.estimator import ARDEstimator, RidgeEstimator
-from cvhmax.cvi import (
+from cvhmax.readout import Params, loading_settings
+from cvhmax.gaussian import Gaussian
+from cvhmax.poisson import (
     MAX_LOGRATE,
-    Gaussian,
     Poisson,
-    Params,
     _capped_exp,
     poisson_cvi_step_stats_latent,
     poisson_readout_objective,
@@ -23,6 +22,8 @@ from cvhmax.cvi import (
 from cvhmax.cvhm import CVHM, lift, project
 from cvhmax.hm import HidaMatern
 from cvhmax.utils import pad_sequences
+
+from .helpers import sample_gp_latents
 
 
 def test_masked_gaussian_information_matches_observed_rows():
@@ -208,7 +209,9 @@ def test_poisson_ridge_reports_precision_and_unpenalized_objective():
     V = jnp.full((4, 1, 1), 0.2)
     start = Params(C=jnp.array([[0.2], [0.3]]), d=jnp.zeros(2),
                    R=jnp.asarray(0.), alpha=jnp.array([9.]))
-    updated, objective = RidgeEstimator(alpha=0.7).estimate(Poisson, start, y, valid, m, V)
+    updated, objective = Poisson.solve_readout(
+        "ridge", loading_settings("ridge", {"alpha": 0.7}), start, y, valid, m, V
+    )
     expected = poisson_readout_objective((updated.C, updated.d), y, valid, m, V, jnp.zeros(2))
     npt.assert_allclose(updated.alpha, [0.7])
     npt.assert_allclose(objective, expected)
@@ -220,7 +223,7 @@ def test_ridge_fit_replaces_stale_precision_before_em():
     params = Params(C=jnp.array([[0.2], [0.3]]), d=jnp.zeros(2),
                     R=jnp.eye(2), alpha=jnp.asarray(9.0))
     kernel = HidaMatern(1.0, 1.0, 0.0, 0)
-    model = CVHM(1, 1.0, [kernel], params=params, estimator_config={"alpha": 0.7},
+    model = CVHM(1, 1.0, [kernel], params=params, loading_config={"alpha": 0.7},
                  max_iter=1, min_iter=1, cvi_iter=0).fit(y, random_state=0)
     npt.assert_allclose(model.params.alpha, [0.7])
 
@@ -232,8 +235,9 @@ def test_masked_gaussian_m_step_matches_conditional_objective():
     V = np.broadcast_to(np.array([[0.4, 0.05], [0.05, 0.3]]), (len(y), 2, 2))
     variances = np.array([0.6, 0.9])
     params = Params(C=jnp.zeros((2, 2)), d=jnp.zeros(2), R=jnp.diag(jnp.asarray(variances)), alpha=jnp.array([9., 9.]))
-    updated, _ = RidgeEstimator().estimate(
-        Gaussian, params, jnp.asarray(y[None]), jnp.asarray(mask[None]),
+    updated, _ = Gaussian.solve_readout(
+        "ridge", loading_settings("ridge", None), params,
+        jnp.asarray(y[None]), jnp.asarray(mask[None]),
         jnp.asarray(means[None]), jnp.asarray(V[None]),
     )
 
@@ -375,7 +379,7 @@ def _ard_model(**kwargs):
         dt=1.0,
         kernels=[kernel, kernel],
         observation="Gaussian",
-        estimator="ARDEstimator",
+        loading="ard",
         **kwargs,
     )
 
@@ -428,10 +432,10 @@ def test_ard_fit_rejects_invalid_alpha_or_evidence(monkeypatch, alpha, evidence)
     rng = np.random.default_rng(0)
     y = jnp.asarray(rng.standard_normal((1, n_time, n_features)))
     model = _ard_model(max_iter=1, cvi_iter=0)
-    original = ARDEstimator.estimate
+    original = Gaussian.solve_readout
 
-    def invalid_estimate(self, likelihood, params, y, valid_y, m, V):
-        updated, _ = original(self, likelihood, params, y, valid_y, m, V)
+    def invalid_solve(cls, loading, settings, params, y, valid_y, m, V):
+        updated, _ = original(loading, settings, params, y, valid_y, m, V)
         return (
             Params(
                 C=updated.C,
@@ -442,7 +446,7 @@ def test_ard_fit_rejects_invalid_alpha_or_evidence(monkeypatch, alpha, evidence)
             evidence,
         )
 
-    monkeypatch.setattr(ARDEstimator, "estimate", invalid_estimate)
+    monkeypatch.setattr(Gaussian, "solve_readout", classmethod(invalid_solve))
     with pytest.raises(FloatingPointError, match="non-positive|non-finite"):
         model.fit(y, random_state=0)
 
@@ -453,9 +457,7 @@ def test_joint_sequences_share_latent_coordinates(observation):
     rng = np.random.default_rng(42)
     n_time, n_features, n_latents = 256, 12, 2
     kernel = HidaMatern(sigma=1.0, rho=6.0, omega=0.0, order=1)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
-    latent = np.linalg.cholesky(prior) @ rng.standard_normal((n_time, n_latents))
+    latent = sample_gp_latents(kernel, n_time, 1.0, n_latents, rng)[0]
     angles = 2 * np.pi * np.arange(n_features) / n_features
     C = 0.7 * np.column_stack((np.cos(angles), np.sin(angles)))
     linear = latent @ C.T
@@ -519,7 +521,8 @@ def test_overlapping_features_vdp_example(tmp_path):
     script = """
 import sys
 import numpy as np
-from examples.demo_vdp import run_overlapping_features_case
+sys.path.insert(0, "examples")  # the demos import their shared helper as a sibling
+from demo_vdp import run_overlapping_features_case
 model, scores = run_overlapping_features_case(T=100, max_iter=3, out_path=sys.argv[1])
 assert model.posterior[0].shape == (2, 100, 2)
 assert model.params.C.shape == (60, 2)

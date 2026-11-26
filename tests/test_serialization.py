@@ -6,11 +6,11 @@ import sys
 import zipfile
 
 import numpy as np
-import pytest
 from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
-from cvhmax.estimator import Estimator
+from cvhmax.readout import loading_settings
+from cvhmax.readout import Params
 from cvhmax.hm import HidaMatern
 
 
@@ -64,24 +64,62 @@ def test_fitted_gaussian_round_trip_and_infer(tmp_path):
     assert np.isfinite(np.asarray(covariances)).all()
 
 
-def test_ard_estimator_and_precisions_round_trip(tmp_path):
+def test_fixed_loading_round_trip(tmp_path):
+    params = Params(
+        C=jnp.array([[0.4], [-0.7]]), d=jnp.array([0.1, -0.2]), R=jnp.eye(2)
+    )
+    model = _model(loading="fixed", params=params)
+    path = tmp_path / "fixed.cvhmax"
+    model.save(path)
+    with zipfile.ZipFile(path) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+    assert manifest["model"]["loading"] == "fixed"
+
+    restored = CVHM.load(path)
+    assert restored.loading == "fixed"
+    for name in ("C", "d", "R"):
+        np.testing.assert_array_equal(getattr(restored.params, name), getattr(params, name))
+    for actual, expected in zip(restored.infer(_data()), model.infer(_data())):
+        np.testing.assert_allclose(actual, expected)
+
+
+def test_ard_loading_and_precisions_round_trip(tmp_path):
     data = _data(n_features=4, n_time=24)
     model = _model(
         n_components=1,
-        estimator="ARDEstimator",
-        estimator_config={"alpha_rate": 1e-3, "iterations": 20},
+        loading="ard",
+        loading_config={"alpha_rate": 1e-3, "iterations": 20},
         max_iter=3,
     ).fit(data, random_state=0)
     path = tmp_path / "ard.cvhmax"
     model.save(path)
     restored = CVHM.load(path)
 
-    assert restored.estimator == "ARDEstimator"
-    assert restored.estimator_config == {"alpha_rate": 1e-3, "iterations": 20}
-    assert restored.estimator_impl.alpha_rate == 1e-3
-    assert restored.estimator_impl.iterations == 20
+    assert restored.loading == "ard"
+    assert restored.loading_config == {"alpha_rate": 1e-3, "iterations": 20}
+    settings = loading_settings(restored.loading, restored.loading_config, 1)
+    assert settings["alpha_rate"] == 1e-3
+    assert settings["iterations"] == 20
     np.testing.assert_array_equal(np.asarray(restored.params.alpha), np.asarray(model.params.alpha))
     np.testing.assert_array_equal(np.asarray(restored.params.C), np.asarray(model.params.C))
+
+
+def test_poisson_ard_round_trip(tmp_path):
+    data = jnp.asarray(np.random.default_rng(6).poisson(2.0, size=(1, 20, 2)))
+    model = _model(
+        "Poisson", loading="ard", loading_config={"iterations": 5}, max_iter=3
+    ).fit(data, random_state=0)
+    path = tmp_path / "poisson_ard.cvhmax"
+    model.save(path)
+    restored = CVHM.load(path)
+
+    assert restored.observation == "Poisson"
+    assert restored.loading == "ard"
+    assert restored.loading_config == {"iterations": 5}
+    for name in ("C", "d", "R", "alpha"):
+        np.testing.assert_array_equal(getattr(restored.params, name), getattr(model.params, name))
+    for actual, expected in zip(restored.infer(data), model.infer(data)):
+        np.testing.assert_allclose(actual, expected)
 
 
 def test_fitted_poisson_round_trip_with_sentinel_r(tmp_path):
@@ -192,93 +230,18 @@ def test_numpy_and_jax_alpha_config_round_trip(tmp_path):
             n_components=2,
             dt=0.5,
             kernels=kernels,
-            estimator="RidgeEstimator",
-            estimator_config={"alpha": alpha},
+            loading="ridge",
+            loading_config={"alpha": alpha},
         )
         # get_config() is the JSON-compatible configuration protocol. A scalar
         # stays a scalar and an array stays an array, with the same values.
-        assert model.get_config()["estimator_config"] == {"alpha": portable}
+        assert model.get_config()["loading_config"] == {"alpha": portable}
         json.dumps(model.get_config())
 
         path = tmp_path / f"alpha_{index}.cvhmax"
         model.save(path)
         restored = CVHM.load(path)
-        assert restored.estimator_config == {"alpha": portable}
+        assert restored.loading_config == {"alpha": portable}
         np.testing.assert_allclose(
-            np.asarray(restored.estimator_impl.alpha), stored
+            np.asarray(loading_settings("ridge", restored.loading_config, 2)["alpha"]), stored
         )
-
-
-def test_custom_estimator_is_rejected_on_save(tmp_path):
-    """A registered user estimator is not part of the serialization format."""
-
-    class ProbeEstimator(Estimator):
-        def estimate(self, likelihood, params, y, valid_y, m, V):
-            return params, jnp.nan
-
-    try:
-        model = _model(estimator="ProbeEstimator")
-        assert type(model.estimator_impl) is ProbeEstimator
-        with pytest.raises(ValueError, match="Unsupported loading estimator"):
-            model.save(tmp_path / "probe.cvhmax")
-    finally:
-        Estimator.registry.pop("ProbeEstimator", None)
-
-
-def test_same_named_custom_estimator_is_rejected_on_save(tmp_path):
-    """A user subclass registered under a built-in name must not be saved."""
-    script = """
-import sys
-import jax.numpy as jnp
-from cvhmax.cvhm import CVHM
-from cvhmax.estimator import Estimator
-from cvhmax.hm import HidaMatern
-
-class RidgeEstimator(Estimator):
-    def estimate(self, likelihood, params, y, valid_y, m, V):
-        return params, jnp.nan
-
-model = CVHM(n_components=1, dt=1.0, kernels=[HidaMatern(order=0)],
-             estimator="RidgeEstimator")
-assert Estimator.registry["RidgeEstimator"] is RidgeEstimator
-try:
-    model.save(sys.argv[1])
-except ValueError:
-    sys.exit(0)
-sys.exit(1)
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(tmp_path / "shadow.cvhmax")],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_shadowed_builtin_estimator_cannot_be_loaded(tmp_path):
-    """Loading must not silently substitute a same-named user estimator."""
-    path = tmp_path / "model.cvhmax"
-    _model().save(path)
-    script = """
-import sys
-import jax.numpy as jnp
-from cvhmax.estimator import Estimator
-
-class RidgeEstimator(Estimator):
-    def estimate(self, likelihood, params, y, valid_y, m, V):
-        return params, jnp.nan
-
-from cvhmax.cvhm import CVHM
-
-try:
-    CVHM.load(sys.argv[1])
-except ValueError:
-    sys.exit(0)
-sys.exit(1)
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(path)],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr

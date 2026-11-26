@@ -1,35 +1,48 @@
+from typing import get_args
+
 import numpy as np
 import numpy.testing as npt
 import pytest
 
 import chex
+import jax
 from jax import numpy as jnp
 from scipy.integrate import trapezoid
 from sklearn.linear_model import ARDRegression, LinearRegression
 
-from cvhmax.cvi import (
-    Params,
-    _gaussian_loading_moments,
-    poisson_cvi_step_stats,
-    poisson_cvi_step_stats_latent,
+from cvhmax.gaussian import Gaussian
+from cvhmax.poisson import (
+    MAX_LOGRATE,
     Poisson,
-    Gaussian,
+    _capped_exp,
+    poisson_cvi_step_stats_latent,
+    poisson_readout_objective,
 )
-from cvhmax.estimator import ARDEstimator, ard_evidence
+from cvhmax.readout import (
+    DEFAULTS,
+    Loading,
+    Params,
+    ard_evidence,
+    loading_settings,
+    resolve_alpha,
+)
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 
+from .helpers import sample_gp_latents
+
 
 def _ard_fit(y, valid, m, V, **kwargs):
-    """Fit the ARD estimator from a neutral start; return params and precisions."""
+    """Fit Gaussian ARD through the readout path; return params and precisions."""
     n_obs, n_latent = y.shape[-1], m.shape[-1]
+    settings = loading_settings("ard", kwargs)
     start = Params(
         C=jnp.zeros((n_obs, n_latent)),
         d=jnp.zeros(n_obs),
         R=jnp.eye(n_obs),
-        alpha=jnp.ones(n_latent),
+        alpha=jnp.full(n_latent, settings["alpha"]),
     )
-    params, _ = ARDEstimator(**kwargs).estimate(Gaussian, start, y, valid, m, V)
+    params, _ = Gaussian.solve_readout("ard", settings, start, y, valid, m, V)
     return params, np.asarray(params.alpha)
 
 
@@ -39,23 +52,85 @@ def test_poisson_initialization_stays_bounded_on_a_problem_that_crossed_the_cap(
     The objective's rate was clipped at MAX_LOGRATE but its ``y * lin`` term was
     not, so a step across the cap found an objective with no minimum.
     """
-    from cvhmax.estimator import RidgeEstimator
-
     rng = np.random.default_rng(7)
     n_sequences, n_time, n_features, n_latents = 2, 300, 20, 2
     kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * 0.02
-    chol = np.linalg.cholesky(np.asarray(kernel.kernel(jnp.asarray(lags))) + 1e-8 * np.eye(n_time))
-    latents = np.stack([chol @ rng.standard_normal((n_time, n_latents)) for _ in range(n_sequences)])
+    latents = sample_gp_latents(kernel, n_time, 0.02, n_latents, rng, n_sequences, jitter=1e-8)
     loadings = rng.normal(size=(n_features, n_latents))
     loadings = 0.8 * loadings / np.linalg.norm(loadings, axis=1, keepdims=True)
     y = jnp.asarray(rng.poisson(np.exp(2.0 + latents @ loadings.T)).astype(float))
 
-    params = RidgeEstimator().initialize_params(
-        Poisson, y, jnp.ones(y.shape, dtype=bool), 5, random_state=0
-    )
+    params = Poisson.initialize_params(y, jnp.ones(y.shape, dtype=bool), 5, random_state=0)
     assert float(jnp.abs(params.d).max()) < 10.0, params.d
     assert float(jnp.abs(params.C).max()) < 10.0
+
+
+@pytest.mark.parametrize("alpha_shape,alpha_rate", [(1.0 + 1e-6, 1e-6), (1.2, 0.2)])
+def test_poisson_ard_laplace_evidence_matches_quadrature(alpha_shape, alpha_rate):
+    """Check the loading-block approximation against a two-dimensional integral."""
+    rng = np.random.default_rng(4)
+    n_time = 80
+    m = jnp.asarray(rng.standard_normal((n_time, 1)))
+    V = jnp.full((n_time, 1, 1), 0.1)
+    y = jnp.asarray(rng.poisson(np.exp(0.4 + 0.6 * np.asarray(m[:, 0])))[:, None])
+    valid = jnp.asarray((rng.random((n_time, 1)) > 0.2))
+    start = Params(C=jnp.zeros((1, 1)), d=jnp.zeros(1), R=jnp.asarray(0.0), alpha=jnp.ones(1))
+    params, evidence = Poisson.solve_readout(
+        "ard",
+        loading_settings("ard", {"alpha_shape": alpha_shape, "alpha_rate": alpha_rate, "iterations": 40}),
+        start, y, valid, m, V,
+    )
+
+    # Integrate the likelihood times the normalized loading prior over bias and
+    # loading. As in the fit, the flat bias prior has unit density and
+    # count-factorial terms are omitted.
+    bias = np.linspace(-1.5, 2.0, 301)
+    loading = np.linspace(-2.0, 2.0, 301)
+    d, c = np.meshgrid(bias, loading, indexing="ij")
+    alpha = float(params.alpha[0])
+    selected = np.asarray(valid[:, 0])
+    mt, yt = np.asarray(m[:, 0])[selected], np.asarray(y[:, 0])[selected]
+    linear = d[..., None] + c[..., None] * mt
+    log_rate = linear + 0.05 * c[..., None] ** 2
+    log_integrand = np.sum(yt * linear - np.exp(log_rate), axis=-1)
+    log_integrand += 0.5 * np.log(alpha / (2 * np.pi)) - 0.5 * alpha * c**2
+    maximum = log_integrand.max()
+    integral = trapezoid(trapezoid(np.exp(log_integrand - maximum), loading, axis=1), bias)
+    exact = np.log(integral) + maximum + (alpha_shape - 1) * np.log(alpha) - alpha_rate * alpha
+    npt.assert_allclose(evidence, exact, rtol=0, atol=0.02)
+
+    beta = jnp.concatenate((params.d, params.C[0]))
+    penalty = jnp.array([0.0, alpha])
+
+    def objective(value):
+        return jnp.sum(valid) * Poisson.readout_objective(
+            (value[None, 1:], value[:1]), y, valid, m, V, penalty
+        )
+
+    npt.assert_allclose(jax.grad(objective)(beta), 0.0, atol=1e-5)
+    covariance = jnp.linalg.inv(jax.hessian(objective)(beta))
+    gamma = 1.0 - alpha * covariance[1, 1]
+    next_alpha = (gamma + 2 * alpha_shape - 2) / (params.C[0, 0] ** 2 + 2 * alpha_rate)
+    npt.assert_allclose(alpha, next_alpha, rtol=1e-3)
+
+
+def test_poisson_ard_ignores_masked_counts():
+    rng = np.random.default_rng(12)
+    n_time, n_features, n_latents = 60, 3, 2
+    m = jnp.asarray(rng.standard_normal((n_time, n_latents)))
+    V = jnp.broadcast_to(0.05 * jnp.eye(n_latents), (n_time, n_latents, n_latents))
+    y = jnp.asarray(rng.poisson(2.0, size=(n_time, n_features)))
+    valid = jnp.asarray(rng.random(y.shape) > 0.25)
+    start = Params(C=jnp.zeros((n_features, n_latents)), d=jnp.zeros(n_features),
+                   R=jnp.asarray(0.0), alpha=jnp.ones(n_latents))
+    settings = loading_settings("ard", {"iterations": 10})
+    first, evidence = Poisson.solve_readout("ard", settings, start, y, valid, m, V)
+    changed, changed_evidence = Poisson.solve_readout(
+        "ard", settings, start, jnp.where(valid, y, 10000), valid, m, V
+    )
+    for actual, expected in ((changed.C, first.C), (changed.d, first.d),
+                             (changed.alpha, first.alpha), (changed_evidence, evidence)):
+        npt.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
 
 def test_gaussian_ard_evidence_matches_quadrature():
@@ -69,7 +144,7 @@ def test_gaussian_ard_evidence_matches_quadrature():
     log_alpha = jnp.log(jnp.array([0.7]))
     log_R = jnp.log(jnp.array([0.9, 1.3]))
 
-    terms = _gaussian_loading_moments(y, valid, m, V)
+    terms = Gaussian.loading_terms(y, valid, m, V)
     actual = float(ard_evidence(terms, log_alpha, log_R))
 
     # Brute force: exp(E_q[log p]) times the loading prior, integrated over the
@@ -190,8 +265,8 @@ def test_ard_estimate_warm_starts_from_params_alpha():
 
     def fit(alpha):
         params = Params(C=base.C, d=base.d, R=base.R, alpha=alpha)
-        return ARDEstimator(iterations=1).estimate(
-            Gaussian, params, y, valid, m, V
+        return Gaussian.solve_readout(
+            "ard", loading_settings("ard", {"iterations": 1}), params, y, valid, m, V
         )[0]
 
     low = fit(jnp.full(K, 0.5))
@@ -199,29 +274,29 @@ def test_ard_estimate_warm_starts_from_params_alpha():
     assert not np.allclose(np.asarray(low.alpha), np.asarray(high.alpha))
 
 
-def test_ard_estimate_falls_back_to_configured_alpha():
-    """A missing ``params.alpha`` uses the configured initial precision."""
-    T, N, K = 20, 2, 2
-    rng = np.random.default_rng(1)
-    m = jnp.asarray(rng.standard_normal((T, K)))
-    V = jnp.zeros((T, K, K))
-    y = jnp.asarray(rng.standard_normal((T, N)))
-    valid = jnp.ones((T, N), dtype=bool)
-    base = Params(C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N))
-    estimator = ARDEstimator(alpha=0.5, iterations=1)
+def test_resolve_alpha_applies_one_rule_per_loading_kind():
+    """Ridge is a hyperparameter; ARD warm starts and fixed keeps what was supplied."""
+    settings = {"alpha": 0.5}
+    supplied = jnp.asarray([7.0, 8.0])
 
-    absent = estimator.estimate(
-        Gaussian, Params(C=base.C, d=base.d, R=base.R, alpha=None), y, valid, m, V
-    )[0]
-    present = estimator.estimate(
-        Gaussian,
-        Params(C=base.C, d=base.d, R=base.R, alpha=jnp.full(K, 0.5)),
-        y,
-        valid,
-        m,
-        V,
-    )[0]
-    npt.assert_allclose(np.asarray(absent.alpha), np.asarray(present.alpha))
+    npt.assert_allclose(resolve_alpha("ridge", settings, supplied, 2), [0.5, 0.5])
+    npt.assert_allclose(resolve_alpha("ard", settings, supplied, 2), [7.0, 8.0])
+    npt.assert_allclose(resolve_alpha("fixed", settings, supplied, 2), [7.0, 8.0])
+    for kind in ("ridge", "ard", "fixed"):
+        npt.assert_allclose(resolve_alpha(kind, settings, None, 2), [0.5, 0.5])
+    with pytest.raises(ValueError, match="params.alpha"):
+        resolve_alpha("ard", settings, jnp.asarray([1.0, -1.0]), 2)
+
+
+def test_ard_solver_requires_the_precision_that_fit_supplies():
+    """There is no silent fallback inside the solver; ``fit`` owns the warm start."""
+    start = Params(C=jnp.zeros((2, 2)), d=jnp.zeros(2), R=jnp.eye(2))
+    y = jnp.ones((4, 2))
+    with pytest.raises(ValueError, match="Params.alpha"):
+        Gaussian.solve_readout(
+            "ard", loading_settings("ard", None), start, y,
+            jnp.ones_like(y, dtype=bool), jnp.zeros((4, 2)), jnp.zeros((4, 2, 2)),
+        )
 
 
 def test_ard_warm_start_continues_across_em_steps():
@@ -235,40 +310,52 @@ def test_ard_warm_start_continues_across_em_steps():
     start = Params(
         C=jnp.zeros((N, K)), d=jnp.zeros(N), R=jnp.eye(N), alpha=jnp.ones(K)
     )
-    estimator = ARDEstimator(iterations=1)
+    settings = loading_settings("ard", {"iterations": 1})
 
-    first, _ = estimator.estimate(Gaussian, start, y, valid, m, V)
-    second, _ = estimator.estimate(Gaussian, first, y, valid, m, V)
-    cold, _ = estimator.estimate(Gaussian, start, y, valid, m, V)
+    first, _ = Gaussian.solve_readout("ard", settings, start, y, valid, m, V)
+    second, _ = Gaussian.solve_readout("ard", settings, first, y, valid, m, V)
+    cold, _ = Gaussian.solve_readout("ard", settings, start, y, valid, m, V)
     assert not np.allclose(np.asarray(second.alpha), np.asarray(cold.alpha))
 
 
-@pytest.mark.parametrize("alpha", [0.0, -1.0, jnp.inf, jnp.nan])
-def test_ard_estimator_rejects_invalid_alpha(alpha):
+@pytest.mark.parametrize("alpha", [0.0, -1.0, float("inf"), float("nan")])
+def test_ard_settings_reject_invalid_alpha(alpha):
     """The loading precision must be finite and strictly positive."""
     with pytest.raises(ValueError, match="alpha"):
-        ARDEstimator(alpha=alpha)
+        loading_settings("ard", {"alpha": alpha})
 
 
-@pytest.mark.parametrize("alpha_shape", [0.0, 0.5, 1.0, -1.0, jnp.inf, jnp.nan])
-def test_ard_estimator_rejects_invalid_alpha_shape(alpha_shape):
-    """The Gamma shape must be finite and strictly positive."""
+@pytest.mark.parametrize("alpha_shape", [0.0, 0.5, 1.0, -1.0, float("inf"), float("nan")])
+def test_ard_settings_reject_invalid_alpha_shape(alpha_shape):
+    """The Gamma shape must be finite and greater than one."""
     with pytest.raises(ValueError, match="alpha_shape"):
-        ARDEstimator(alpha_shape=alpha_shape)
+        loading_settings("ard", {"alpha_shape": alpha_shape})
 
 
-@pytest.mark.parametrize("alpha_rate", [0.0, -1.0, jnp.inf, jnp.nan])
-def test_ard_estimator_rejects_invalid_alpha_rate(alpha_rate):
+@pytest.mark.parametrize("alpha_rate", [0.0, -1.0, float("inf"), float("nan")])
+def test_ard_settings_reject_invalid_alpha_rate(alpha_rate):
     """The Gamma rate must be finite and strictly positive."""
     with pytest.raises(ValueError, match="alpha_rate"):
-        ARDEstimator(alpha_rate=alpha_rate)
+        loading_settings("ard", {"alpha_rate": alpha_rate})
 
 
 @pytest.mark.parametrize("iterations", [0, -1])
-def test_ard_estimator_rejects_invalid_iterations(iterations):
+def test_ard_settings_reject_invalid_iterations(iterations):
     """The fixed-point iteration count must be at least one."""
     with pytest.raises(ValueError, match="iterations"):
-        ARDEstimator(iterations=iterations)
+        loading_settings("ard", {"iterations": iterations})
+
+
+def test_loading_settings_reject_an_unknown_kind():
+    """A kind with no defaults is a named error, not a bare KeyError."""
+    with pytest.raises(ValueError, match="unknown loading kind"):
+        loading_settings("lasso", None)
+
+
+def test_loading_settings_reject_unknown_keys():
+    """A misspelled key fails instead of being silently ignored."""
+    with pytest.raises(ValueError, match="unknown loading_config keys"):
+        loading_settings("ard", {"iteration": 3})
 
 
 def test_gaussian_initialize_info_values(rng):
@@ -391,26 +478,6 @@ def test_gaussian_update_pseudo_noop():
     npt.assert_array_equal(np.asarray(J_out), np.asarray(J))
 
 
-def test_poisson_cvi_masked_zero():
-    """Masked time steps contribute zero CVI gradients (k=0, K=0)."""
-    N, L = 5, 3
-    z = jnp.ones(L)
-    Z = jnp.eye(L) * 2.0
-    y = jnp.ones(N) * 10.0
-    H = jnp.ones((N, L)) * 0.3
-    d = jnp.zeros(N)
-
-    # Unmasked: normal computation
-    k_on, K_on = poisson_cvi_step_stats(z, Z, y, jnp.ones(N, dtype=bool), H, d)
-    assert jnp.any(k_on != 0)
-    assert jnp.any(K_on != 0)
-
-    # Masked: zero gradients
-    k_off, K_off = poisson_cvi_step_stats(z, Z, y, jnp.zeros(N, dtype=bool), H, d)
-    npt.assert_array_equal(np.asarray(k_off), 0.0)
-    npt.assert_array_equal(np.asarray(K_off), 0.0)
-
-
 def test_poisson_cvi_gradient_direction(rng):
     """One Poisson CVI step should not increase the negative ELL."""
     T, N, K = 30, 5, 2
@@ -439,36 +506,59 @@ def test_poisson_cvi_gradient_direction(rng):
     assert not jnp.allclose(j_new, j), "CVI update produced no change"
 
 
-def test_poisson_cvi_step_stats_latent_equivalence(rng):
-    """Latent-space Poisson CVI stats match state-space version when M = I.
+def test_poisson_step_stats_track_the_objective_derivatives():
+    """The E-step's gradient and information follow the readout objective.
 
-    Temporary equivalence test for the refactor.  Remove after migration.
+    Below ``MAX_LOGRATE`` the information equals the objective's curvature.
+    Above it the rate follows a tangent line, so the objective is linear and its
+    curvature is zero, while the E-step keeps ``C^T diag(cap) C``. That
+    difference cannot move the fixed point: ``K`` appears on both sides of the
+    normal equations ``(I + J) m = j`` with ``j = grad + K m`` and ``J = K``,
+    so it cancels. Using the rate's value instead of its derivative in ``grad``
+    would move it, which is what the gradient assertion pins down.
     """
+    rng = np.random.default_rng(3)
     N, K = 5, 3
-    C = jnp.array(rng.standard_normal((N, K)) * 0.3)
-    d = jnp.array(rng.standard_normal(N))
-    y = jnp.array(rng.poisson(5.0, size=N).astype(float))
+    C = jnp.asarray(rng.standard_normal((N, K)) * 0.5)
+    m = jnp.asarray(rng.standard_normal(K))
+    V = jnp.eye(K) * 0.3
+    y = jnp.asarray(rng.poisson(3.0, size=N) + 1.0)
+    valid_y = jnp.ones(N, dtype=bool)
+    penalty = jnp.zeros(K + 1)
 
-    # Build state-space info for M = I (K = L)
-    V_latent = jnp.eye(K) * 2.0
-    Z_state = jnp.linalg.inv(V_latent)
-    m_latent = jnp.array(rng.standard_normal(K))
-    z_state = Z_state @ m_latent
+    for offset, capped in ((0.5, False), (MAX_LOGRATE + 4.0, True)):
+        d = jnp.full(N, offset)
 
-    # State-space version with H = C @ I = C
-    H = C  # since M = I
-    k_state, K_state = poisson_cvi_step_stats(z_state, Z_state, y, jnp.ones(N, dtype=bool), H, d)
+        def objective(m_):
+            return poisson_readout_objective(
+                (C, d), y[None], valid_y[None], m_[None], V[None], penalty
+            )
 
-    # Latent-space version
-    k_latent, K_latent = poisson_cvi_step_stats_latent(
-        m_latent, V_latent, y, jnp.ones(N, dtype=bool), C, d
-    )
+        grad = jax.grad(objective)(m)
+        hess = jax.hessian(objective)(m)
+        k, K_stats = poisson_cvi_step_stats_latent(m, V, y, valid_y, C, d)
+        eta = C @ m + d + 0.5 * jnp.einsum("nk,kl,nl->n", C, V, C)
+        rate_deriv = jax.vmap(jax.grad(_capped_exp))(eta)
 
-    # Tolerance is relaxed because the state-space version applies SVD
-    # regularisation (TAU) before converting to moments, introducing small
-    # numerical differences.
-    npt.assert_allclose(np.asarray(k_latent), np.asarray(k_state), atol=1e-4)
-    npt.assert_allclose(np.asarray(K_latent), np.asarray(K_state), atol=1e-4)
+        if capped:
+            assert jnp.all(eta > MAX_LOGRATE), "fixture must exercise the cap"
+            npt.assert_allclose(np.asarray(hess), 0.0, atol=1e-10)
+        else:
+            assert jnp.all(eta < MAX_LOGRATE), "fixture must stay below the cap"
+            npt.assert_allclose(np.asarray(hess), np.asarray(K_stats), rtol=1e-10, atol=1e-10)
+
+        npt.assert_allclose(
+            np.asarray(grad), np.asarray(C.T @ (rate_deriv - y)), rtol=1e-10, atol=1e-10
+        )
+        npt.assert_allclose(
+            np.asarray(K_stats),
+            np.asarray(C.T @ jnp.diag(rate_deriv) @ C),
+            rtol=1e-10,
+            atol=1e-10,
+        )
+        npt.assert_allclose(
+            np.asarray(k), np.asarray(K_stats @ m - grad), rtol=1e-10, atol=1e-10
+        )
 
 
 def test_poisson_cvi_step_stats_latent_masked(rng):
@@ -479,6 +569,10 @@ def test_poisson_cvi_step_stats_latent_masked(rng):
     m = jnp.ones(K)
     V = jnp.eye(K)
     y = jnp.ones(N) * 10.0
+
+    k_on, K_on = poisson_cvi_step_stats_latent(m, V, y, jnp.ones(N, dtype=bool), C, d)
+    assert jnp.any(k_on != 0)
+    assert jnp.any(K_on != 0)
 
     k_off, K_off = poisson_cvi_step_stats_latent(m, V, y, jnp.zeros(N, dtype=bool), C, d)
     npt.assert_array_equal(np.asarray(k_off), 0.0)
@@ -510,3 +604,8 @@ def test_gaussian_e2e(linear_gaussian_data):
     ss_tot = np.sum((x_true - x_true.mean()) ** 2)
     r2 = 1 - ss_res / ss_tot
     assert r2 > 0.5, f"Gaussian E2E R^2 = {r2:.3f} < 0.5"
+
+
+def test_loading_type_lists_exactly_the_kinds_with_defaults():
+    """``Loading`` is what annotations promise; ``DEFAULTS`` is what the code accepts."""
+    assert set(get_args(Loading)) == set(DEFAULTS)
