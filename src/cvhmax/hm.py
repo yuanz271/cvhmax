@@ -784,7 +784,9 @@ def sample_matern(n, dt, sigma, rho, jitter=TAU):
     rho : float
         Length scale parameter.
     jitter : float, default=TAU
-        Diagonal regularization for numerical stability.
+        Diagonal added before the Cholesky factorisation. With ``dt`` small
+        against ``rho`` neighbouring samples are nearly collinear, so the
+        covariance is numerically semi-definite without it.
 
     Returns
     -------
