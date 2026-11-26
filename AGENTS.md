@@ -156,7 +156,7 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 
 - Use f-strings; keep docstrings NumPy-style (`Parameters`, `Returns`, `Raises`).
 - Use explicit names over single-letter variables unless it is standard math (`z`, `Z`, `J`, `Q`).
-- Constants: `UPPER_SNAKE_CASE` near the code that uses them (e.g., `TAU`, `EPS`).
+- Constants: `UPPER_SNAKE_CASE` near the code that uses them (e.g., `MAX_LOGRATE`); a constant shared across modules is defined once in `utils.py`.
 - Prefer small, composable helpers over long monolithic functions (especially around `lax.scan`).
 
 ### Types
@@ -187,6 +187,7 @@ The repo is linted with Ruff (ignores `E501` and `F722`). There is no required l
 ### JAX + Numerical Conventions
 
 - Prefer `jnp.linalg.solve(A, b)` over explicit inverses; keep `inv(...)` only when clearly justified.
+- Diagonal jitter for numerical positive-definiteness is `utils.TAU`; do not define another module-level jitter. Model parameters that happen to regularize (e.g. `HidaMatern.s`) are not jitter.
 - Keep core computations pure (no mutation except via `.at[...]`), and avoid Python side effects in jittable code.
 - Randomness: use explicit seeds/keys; tests should be reproducible.
 - Masking: use `jnp.where` with broadcastable masks; keep masks as integer/bool arrays.

@@ -1,4 +1,3 @@
-from abc import abstractmethod
 from functools import partial
 from typing import ClassVar, override
 
@@ -198,7 +197,6 @@ class CVI:
         """Validate caller-supplied readout parameters; none by default."""
 
     @classmethod
-    @abstractmethod
     def update_pseudo(
         cls,
         params,
@@ -240,9 +238,9 @@ class CVI:
         tuple[Array, Array]
             Updated pseudo-observation parameters ``(j, J)`` in latent space.
         """
+        raise NotImplementedError(f"{cls.__name__} must implement update_pseudo")
 
     @classmethod
-    @abstractmethod
     def initialize_info(
         cls, params, y: Array, valid_y: Array
     ) -> tuple[Array, Array]:
@@ -264,9 +262,9 @@ class CVI:
             shapes ``(time, latent_dim (K))`` and
             ``(time, latent_dim (K), latent_dim (K))``.
         """
+        raise NotImplementedError(f"{cls.__name__} must implement initialize_info")
 
     @classmethod
-    @abstractmethod
     def initialize_params(
         cls,
         y: Array,
@@ -284,6 +282,10 @@ class CVI:
         provided, return it directly and skip initialisation. This allows
         callers to supply pre-set parameters (e.g. the true readout in a
         simulation).
+
+        An initialised readout must start with non-zero loadings. With ``C = 0`` the E-step returns
+        zero latents, so the loading gradient vanishes and EM cannot leave that
+        corner; the built-in readouts start from factor analysis for this reason.
 
         CVHM's convergence metric compares the returned state's ``C``, ``d``,
         and ``R`` fields.
@@ -310,6 +312,7 @@ class CVI:
         params
             Initial readout parameter state.
         """
+        raise NotImplementedError(f"{cls.__name__} must implement initialize_params")
 
 
 class Gaussian(CVI):

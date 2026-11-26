@@ -69,7 +69,9 @@ archive format and compatibility policy.
 - `CVI`: registry-backed base class for an observation model, with stateless
   class methods
   - `initialize_params(y, valid_y, n_factors, *, random_state, penalty=None, params=None)`
-    — data-driven starting readout, called during `fit`
+    — data-driven starting readout, called during `fit`; it must start with
+    non-zero loadings, or the E-step returns zero latents and EM cannot leave
+    that corner
   - `initialize_info(params, y, valid_y)` — pseudo-obs info in latent space
   - `update_pseudo(params, y, valid_y, m, V, j, J, lr)` — CVI update in latent space
   - `readout_objective(params, y, valid_y, m, V, penalty)` — penalised negative
