@@ -34,7 +34,8 @@ Source: `src/cvhmax/cvhm.py`
 `loading` selects how the loadings are fitted: `"ridge"` (default) holds the
 precision fixed at `alpha` (default 0.1), `"ard"` fits one precision per latent
 column against the conditional evidence, and `"fixed"` holds the readout fixed.
-`loading_config` overrides the kind's defaults. Which kinds are available
+The kinds are the type `cvhmax.readout.Loading`, so a type checker rejects a
+misspelt one. `loading_config` overrides the kind's defaults. Which kinds are available
 depends on the observation model, through `CVI.supported_loadings`. ARD's
 Poisson loading integral uses a Laplace approximation; latent inference remains
 CVI. Precisions are reported as `Params.alpha`, with any relevance threshold

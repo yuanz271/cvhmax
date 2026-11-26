@@ -14,6 +14,7 @@ from .cvi import CVI, Gaussian
 from .readout import (
     FAILURE_MESSAGES,
     READOUT_OK,
+    Loading,
     Params,
     loading_settings,
     penalty,
@@ -154,7 +155,7 @@ class CVHM:
         Initial CVI parameter state. Defaults to ``None``.
     observation : str, default="Gaussian"
         Name of the CVI observation model registered in `CVI.registry`.
-    loading : str, default="ridge"
+    loading : {"ridge", "ard", "fixed"}, default="ridge"
         How the readout loadings are fitted: ``"ridge"`` holds a fixed
         precision, ``"ard"`` fits one precision per latent from conditional
         evidence, and ``"fixed"`` leaves supplied parameters untouched. The
@@ -197,7 +198,7 @@ class CVHM:
     kernels: Sequence[Any]
     params: Any = None
     observation: str = "Gaussian"
-    loading: str = "ridge"
+    loading: Loading = "ridge"
     loading_config: dict | None = None
     lr: float = 1.0
     cvi: type[CVI] = field(init=False, default=Gaussian)

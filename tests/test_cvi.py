@@ -1,3 +1,5 @@
+from typing import get_args
+
 import numpy as np
 import numpy.testing as npt
 import pytest
@@ -17,7 +19,7 @@ from cvhmax.cvi import (
     Poisson,
     Gaussian,
 )
-from cvhmax.readout import ard_evidence, loading_settings, resolve_alpha
+from cvhmax.readout import DEFAULTS, Loading, ard_evidence, loading_settings, resolve_alpha
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
 
@@ -596,3 +598,8 @@ def test_gaussian_e2e(linear_gaussian_data):
     ss_tot = np.sum((x_true - x_true.mean()) ** 2)
     r2 = 1 - ss_res / ss_tot
     assert r2 > 0.5, f"Gaussian E2E R^2 = {r2:.3f} < 0.5"
+
+
+def test_loading_type_lists_exactly_the_kinds_with_defaults():
+    """``Loading`` is what annotations promise; ``DEFAULTS`` is what the code accepts."""
+    assert set(get_args(Loading)) == set(DEFAULTS)

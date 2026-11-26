@@ -11,7 +11,7 @@ All functions expect leading sequence and time axes already collapsed by
 
 import math
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import equinox as eqx
 import jax
@@ -43,9 +43,12 @@ FAILURE_MESSAGES = {
     NONFINITE_EVIDENCE: "ARD evidence became non-finite",
 }
 
+#: How the readout loadings are fitted. Keep in step with :data:`DEFAULTS`.
+Loading = Literal["ridge", "ard", "fixed"]
+
 # Per-kind defaults. ``alpha`` is held fixed for ridge and fixed readouts and is
 # only a starting point for ARD, so the two kinds keep their own default.
-DEFAULTS: dict[str, dict[str, Any]] = {
+DEFAULTS: dict[Loading, dict[str, Any]] = {
     "ridge": {"alpha": 0.1},
     "ard": {"alpha": 1.0, "alpha_shape": 1.0 + 1e-6, "alpha_rate": 1e-6, "iterations": 50},
     "fixed": {"alpha": 0.1},
@@ -121,7 +124,7 @@ def flattened(
 
 
 def loading_settings(
-    loading: str, config: dict | None, n_latents: int | None = None
+    loading: Loading, config: dict | None, n_latents: int | None = None
 ) -> dict[str, Any]:
     """Merge user configuration over the defaults for one loading kind.
 
@@ -175,7 +178,7 @@ def loading_settings(
 
 
 def resolve_alpha(
-    loading: str, settings: dict[str, Any], supplied: Array | None, n_latents: int
+    loading: Loading, settings: dict[str, Any], supplied: Array | None, n_latents: int
 ) -> Array:
     """Per-column loading precision a fit starts from.
 

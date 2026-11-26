@@ -9,6 +9,7 @@ from .readout import (
     NONFINITE_PRECISION,
     NONFINITE_VARIANCE,
     READOUT_OK,
+    Loading,
     LoadingTerms,
     Params,
     ard_fit_conjugate,
@@ -77,7 +78,7 @@ class CVI:
 
     #: Loading kinds this readout can fit. ``"ridge"`` and ``"fixed"`` are
     #: generic; a readout adds ``"ard"`` only when it implements the evidence.
-    supported_loadings: ClassVar[frozenset[str]] = frozenset({"ridge", "fixed"})
+    supported_loadings: ClassVar[frozenset[Loading]] = frozenset({"ridge", "fixed"})
 
     registry: ClassVar[dict] = dict()
 
@@ -125,7 +126,7 @@ class CVI:
 
     @classmethod
     def solve_readout(
-        cls, loading: str, settings: dict, params: Params, y: Array, valid_y: Array,
+        cls, loading: Loading, settings: dict, params: Params, y: Array, valid_y: Array,
         m: Array, V: Array,
     ) -> tuple[Params, float | Array]:
         """Fit the readout at the given loading kind.
@@ -174,7 +175,7 @@ class CVI:
 
     @classmethod
     def readout_failure(
-        cls, loading: str, params: Params, score: float | Array
+        cls, loading: Loading, params: Params, score: float | Array
     ) -> Array:
         """Failure code for a freshly fitted readout; ``READOUT_OK`` when healthy.
 
@@ -420,7 +421,7 @@ class Gaussian(CVI):
     @classmethod
     @override
     def readout_failure(
-        cls, loading: str, params: Params, score: float | Array
+        cls, loading: Loading, params: Params, score: float | Array
     ) -> Array:
         """Add the check on the fitted observation variances."""
         variance = jnp.diag(params.R)
