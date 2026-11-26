@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.6.0
+
 ### Breaking changes
 
 - Removed the loading-estimator classes. `CVHM(estimator=..., estimator_config=...)`
