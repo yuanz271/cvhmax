@@ -13,6 +13,9 @@
   declares which are available.
 - Moved `Params` and `LoadingTerms` to `cvhmax.readout`, next to the code that fills
   them; neither is exported from `cvhmax.utils` or `cvhmax.cvi` any more.
+- Removed `poisson_cvi_step_stats` and `cvi.TAU`. The inference loop has used the
+  latent-space `poisson_cvi_step_stats_latent` since the move to latent space; the
+  state-space variant was only reachable from tests.
 - Bumped the archive format version to 3. Manifests record `loading` and
   `loading_config` in place of `estimator` and `estimator_config`.
 

@@ -5,8 +5,6 @@ from typing import ClassVar, override
 from sklearn.decomposition import FactorAnalysis
 
 from jax import Array, grad, numpy as jnp, vmap
-from jax.numpy.linalg import multi_dot
-from jax.scipy.linalg import cho_factor, cho_solve
 from .readout import (
     NONFINITE_EVIDENCE,
     NONFINITE_PRECISION,
@@ -25,7 +23,6 @@ from .readout import (
 from .utils import lbfgs_solve, sequence_info_repr
 
 
-TAU = 1e-6
 MAX_LOGRATE = 7.0
 
 
@@ -576,56 +573,6 @@ def poisson_readout_objective(
     return total / n_valid_steps
 
 
-def poisson_cvi_step_stats(
-    z: Array,
-    Z: Array,
-    y: Array,
-    valid_y: Array,
-    H: Array,
-    d: Array,
-) -> tuple[Array, Array]:
-    """Poisson CVI gradients for a single time step from information form.
-
-    Parameters
-    ----------
-    z : Array
-        Information vector.
-    Z : Array
-        Information matrix.
-    y : Array
-        Observed counts for the time step.
-    valid_y : Array
-        Observation mask for one time step, shape ``(obs_dim,)``.
-    H : Array
-        Effective observation matrix.
-    d : Array
-        Bias term for the exponential link.
-
-    Returns
-    -------
-    tuple[Array, Array]
-        Gradients of the first and second natural parameters.
-
-    Notes
-    -----
-    The information parameters `(z, Z)` correspond to Gaussian statistics via
-    `m = Z^{-1} z` and `V = Z^{-1}` where `Z = Σ⁻¹` and `z = Σ⁻¹ μ`. `Z` is
-    regularised by ``TAU`` before inversion, then the moments are handed to
-    :func:`poisson_cvi_step_stats_latent`.
-    """
-    U, s, _ = jnp.linalg.svd(Z)
-    Z = multi_dot((U, jnp.diag(s + TAU), U.T))
-    Zcho = cho_factor(Z)
-    return poisson_cvi_step_stats_latent(
-        cho_solve(Zcho, z),
-        cho_solve(Zcho, jnp.eye(Z.shape[0])),
-        y,
-        valid_y,
-        H,
-        d,
-    )
-
-
 def poisson_cvi_step_stats_latent(
     m: Array,
     V: Array,
@@ -636,8 +583,7 @@ def poisson_cvi_step_stats_latent(
 ) -> tuple[Array, Array]:
     """Poisson CVI gradients for a single time step in latent space.
 
-    Works directly with latent-space moments ``(m, V)`` and loading ``C``;
-    :func:`poisson_cvi_step_stats` is the information-form wrapper around it.
+    Works directly with latent-space moments ``(m, V)`` and loading ``C``.
 
     Parameters
     ----------

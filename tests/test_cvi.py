@@ -11,7 +11,6 @@ from sklearn.linear_model import ARDRegression, LinearRegression
 from cvhmax.cvi import (
     MAX_LOGRATE,
     Params,
-    poisson_cvi_step_stats,
     poisson_cvi_step_stats_latent,
     _capped_exp,
     poisson_readout_objective,
@@ -471,26 +470,6 @@ def test_gaussian_update_pseudo_noop():
     npt.assert_array_equal(np.asarray(J_out), np.asarray(J))
 
 
-def test_poisson_cvi_masked_zero():
-    """Masked time steps contribute zero CVI gradients (k=0, K=0)."""
-    N, L = 5, 3
-    z = jnp.ones(L)
-    Z = jnp.eye(L) * 2.0
-    y = jnp.ones(N) * 10.0
-    H = jnp.ones((N, L)) * 0.3
-    d = jnp.zeros(N)
-
-    # Unmasked: normal computation
-    k_on, K_on = poisson_cvi_step_stats(z, Z, y, jnp.ones(N, dtype=bool), H, d)
-    assert jnp.any(k_on != 0)
-    assert jnp.any(K_on != 0)
-
-    # Masked: zero gradients
-    k_off, K_off = poisson_cvi_step_stats(z, Z, y, jnp.zeros(N, dtype=bool), H, d)
-    npt.assert_array_equal(np.asarray(k_off), 0.0)
-    npt.assert_array_equal(np.asarray(K_off), 0.0)
-
-
 def test_poisson_cvi_gradient_direction(rng):
     """One Poisson CVI step should not increase the negative ELL."""
     T, N, K = 30, 5, 2
@@ -582,6 +561,10 @@ def test_poisson_cvi_step_stats_latent_masked(rng):
     m = jnp.ones(K)
     V = jnp.eye(K)
     y = jnp.ones(N) * 10.0
+
+    k_on, K_on = poisson_cvi_step_stats_latent(m, V, y, jnp.ones(N, dtype=bool), C, d)
+    assert jnp.any(k_on != 0)
+    assert jnp.any(K_on != 0)
 
     k_off, K_off = poisson_cvi_step_stats_latent(m, V, y, jnp.zeros(N, dtype=bool), C, d)
     npt.assert_array_equal(np.asarray(k_off), 0.0)
