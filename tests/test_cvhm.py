@@ -6,6 +6,7 @@ from jax import numpy as jnp
 from cvhmax.cvhm import CVHM, lift, project, readout_change, sde2gp
 from cvhmax.cvi import CVI, MAX_LOGRATE, Gaussian, Poisson
 from cvhmax.hm import HidaMatern, sample_matern
+from cvhmax.simulate import sample_gp_latents
 from cvhmax.readout import (
     NONFINITE_EVIDENCE,
     NONFINITE_PRECISION,
@@ -195,9 +196,7 @@ def test_default_poisson_cvi_refines_posterior():
     rng = np.random.default_rng(7)
     n_time, n_features, n_latents, dt = 80, 8, 2, 0.2
     kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * dt
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + 1e-5 * np.eye(n_time)
-    latent = np.linalg.cholesky(prior) @ rng.standard_normal((n_time, n_latents))
+    latent = sample_gp_latents(kernel, n_time, dt, n_latents, rng)[0]
     C = 0.9 * rng.standard_normal((n_features, n_latents))
     d = np.full(n_features, 1.5)
     y = jnp.asarray(rng.poisson(np.exp(latent @ C.T + d)).astype(float)[None])
@@ -363,11 +362,8 @@ def test_ard_recovers_latent_dimensionality_in_the_full_fit():
     rng = np.random.default_rng(0)
     n_time, n_features, n_true, n_fit = 160, 16, 2, 4
     kernel = HidaMatern(sigma=1.0, rho=8.0, omega=0.0, order=1)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
-    chol = np.linalg.cholesky(prior)
     C = rng.normal(scale=0.8, size=(n_features, n_true))
-    latents = np.stack([chol @ rng.standard_normal((n_time, n_true)) for _ in range(2)])
+    latents = sample_gp_latents(kernel, n_time, 1.0, n_true, rng, n_sequences=2)
     y = latents @ C.T + rng.normal(scale=0.3, size=(2, n_time, n_features))
 
     def loading_norms(loading):
@@ -483,10 +479,7 @@ def test_poisson_ard_recovers_relevance_in_full_fit():
     n_sequences, n_time, n_features = 2, 120, 12
     n_true, n_fit, dt = 2, 4, 0.1
     kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * dt
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
-    chol = np.linalg.cholesky(prior)
-    latent = np.stack([chol @ rng.standard_normal((n_time, n_true)) for _ in range(n_sequences)])
+    latent = sample_gp_latents(kernel, n_time, dt, n_true, rng, n_sequences)
     C = rng.normal(size=(n_features, n_true))
     C = 0.7 * C / np.linalg.norm(C, axis=1, keepdims=True)
     d = np.log(0.5) + rng.normal(scale=0.15, size=n_features)

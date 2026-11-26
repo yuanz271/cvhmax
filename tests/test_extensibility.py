@@ -17,6 +17,7 @@ from cvhmax.cvi import CVI
 from cvhmax.hm import HidaMatern
 from cvhmax.readout import ard_fit_laplace, loading_settings
 from cvhmax.readout import Params
+from cvhmax.simulate import sample_gp_latents
 
 
 def _binomial_nll(eta, y):
@@ -133,10 +134,7 @@ def _data(seed=0):
     rng = np.random.default_rng(seed)
     n_sequences, n_time, n_features, n_latents, dt = 2, 120, 12, 2, 0.1
     kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * dt
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
-    chol = np.linalg.cholesky(prior)
-    latent = np.stack([chol @ rng.standard_normal((n_time, n_latents)) for _ in range(n_sequences)])
+    latent = sample_gp_latents(kernel, n_time, dt, n_latents, rng, n_sequences)
     loadings = rng.normal(size=(n_features, n_latents))
     loadings = 0.8 * loadings / np.linalg.norm(loadings, axis=1, keepdims=True)
     probability = 1.0 / (1.0 + np.exp(-0.8 * latent @ loadings.T))

@@ -36,31 +36,12 @@ from jax import numpy as jnp
 
 from cvhmax.cvhm import CVHM
 from cvhmax.hm import HidaMatern
+from cvhmax.simulate import simulate_vdp, standardize
 
 config.update("jax_enable_x64", True)
 
 N_TRUE = 2  # latents that generate the data
 N_FIT = 5  # latents in the fitted model
-
-
-def simulate_vdp(n_sequences, n_time, dt, rng, mu=1.0, noise_std=0.05):
-    """Euler-Maruyama integration of the Van der Pol oscillator.
-
-    Returns
-    -------
-    ndarray, shape (n_sequences, n_time, 2)
-        Standardised trajectories (position, velocity).
-    """
-    sqrt_dt = np.sqrt(dt)
-    x = np.empty((n_sequences, n_time, 2))
-    for sequence in range(n_sequences):
-        state = np.array([2.0, 0.0]) + rng.normal(0.0, 0.1, size=2)
-        for t in range(n_time):
-            x[sequence, t] = state
-            drift = np.array([state[1], mu * (1 - state[0] ** 2) * state[1] - state[0]])
-            state = state + drift * dt + noise_std * sqrt_dt * rng.standard_normal(2)
-    flat = x.reshape(-1, 2)
-    return (x - flat.mean(axis=0)) / flat.std(axis=0)
 
 
 def fit(y, loading, dt, observation, *, loading_config=None, cvi_iter=20):
@@ -186,7 +167,7 @@ def main():
 
     # --- Gaussian: 2 true latents, 5 fitted ---
     n_sequences, n_time, n_features = 4, 500, 30
-    truth = simulate_vdp(n_sequences, n_time, dt, rng)
+    truth = standardize(simulate_vdp(n_sequences, n_time, dt, rng))[0]
     loadings = rng.standard_normal((n_features, N_TRUE))
     loadings /= np.linalg.norm(loadings, axis=0, keepdims=True)
     y_gaussian = jnp.asarray(
@@ -196,7 +177,7 @@ def main():
 
     # --- Poisson: the same question on count data, with a smaller dataset ---
     n_sequences, n_time, n_features = 2, 200, 8
-    truth_counts = simulate_vdp(n_sequences, n_time, dt, rng)
+    truth_counts = standardize(simulate_vdp(n_sequences, n_time, dt, rng))[0]
     loadings_counts = rng.standard_normal((n_features, N_TRUE))
     loadings_counts /= np.linalg.norm(loadings_counts, axis=0, keepdims=True)
     rates = np.exp(1.5 + 0.8 * truth_counts @ loadings_counts.T)

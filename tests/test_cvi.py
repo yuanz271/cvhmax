@@ -19,6 +19,7 @@ from cvhmax.cvi import (
 from cvhmax.readout import ard_evidence, loading_settings, resolve_alpha
 from cvhmax.cvhm import CVHM, lift
 from cvhmax.hm import HidaMatern
+from cvhmax.simulate import sample_gp_latents
 
 
 def _ard_fit(y, valid, m, V, **kwargs):
@@ -44,9 +45,7 @@ def test_poisson_initialization_stays_bounded_on_a_problem_that_crossed_the_cap(
     rng = np.random.default_rng(7)
     n_sequences, n_time, n_features, n_latents = 2, 300, 20, 2
     kernel = HidaMatern(sigma=1.0, rho=1.0, omega=0.0, order=1, s=1e-5)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :]) * 0.02
-    chol = np.linalg.cholesky(np.asarray(kernel.kernel(jnp.asarray(lags))) + 1e-8 * np.eye(n_time))
-    latents = np.stack([chol @ rng.standard_normal((n_time, n_latents)) for _ in range(n_sequences)])
+    latents = sample_gp_latents(kernel, n_time, 0.02, n_latents, rng, n_sequences, jitter=1e-8)
     loadings = rng.normal(size=(n_features, n_latents))
     loadings = 0.8 * loadings / np.linalg.norm(loadings, axis=1, keepdims=True)
     y = jnp.asarray(rng.poisson(np.exp(2.0 + latents @ loadings.T)).astype(float))

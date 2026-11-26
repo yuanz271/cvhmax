@@ -22,6 +22,7 @@ from cvhmax.cvi import (
 )
 from cvhmax.cvhm import CVHM, lift, project
 from cvhmax.hm import HidaMatern
+from cvhmax.simulate import sample_gp_latents
 from cvhmax.utils import pad_sequences
 
 
@@ -456,9 +457,7 @@ def test_joint_sequences_share_latent_coordinates(observation):
     rng = np.random.default_rng(42)
     n_time, n_features, n_latents = 256, 12, 2
     kernel = HidaMatern(sigma=1.0, rho=6.0, omega=0.0, order=1)
-    lags = np.abs(np.arange(n_time)[:, None] - np.arange(n_time)[None, :])
-    prior = np.asarray(kernel.kernel(jnp.asarray(lags))) + kernel.s * np.eye(n_time)
-    latent = np.linalg.cholesky(prior) @ rng.standard_normal((n_time, n_latents))
+    latent = sample_gp_latents(kernel, n_time, 1.0, n_latents, rng)[0]
     angles = 2 * np.pi * np.arange(n_features) / n_features
     C = 0.7 * np.column_stack((np.cos(angles), np.sin(angles)))
     linear = latent @ C.T

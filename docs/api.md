@@ -160,4 +160,20 @@ Source: `src/cvhmax/hm.py`
 
 Source: `src/cvhmax/utils.py`
 
+## Synthetic data
+
+Seeded generators used by the demos and the test suite. They take an explicit
+`numpy.random.Generator`, so a seed fixes the data, and are imported from
+`cvhmax.simulate` rather than the package root.
+
+- `sample_gp_latents(kernel, n_time, dt, n_latents, rng, n_sequences=1, jitter=None)`
+  — independent draws from a kernel's prior, shaped `(n_sequences, n_time, n_latents)`.
+  `jitter` defaults to the kernel's own `s`.
+- `simulate_vdp(n_sequences, n_time, dt, rng, mu=1.0, noise_std=0.05)` — Van der
+  Pol oscillator by Euler-Maruyama, shaped `(n_sequences, n_time, 2)`.
+- `standardize(x)` → `(x_std, mean, std)` — zero mean and unit variance over
+  sequences and time.
+
+Source: `src/cvhmax/simulate.py`
+
 See `data-model.md` for a full usage example.
